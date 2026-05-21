@@ -1,0 +1,53 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --primary: #0066cc;
+  --primary-light: #e6f0ff;
+  --success: #10b981;
+  --success-light: #ecfdf5;
+  --text-primary: #1a1a1a;
+  --text-secondary: #6b7280;
+  --border: #e5e7eb;
+  --bg-light: #f9fafb;
+  --bg-white: #ffffff;
+}
+
+* {
+  @apply box-border;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  @apply bg-white text-[--text-primary] font-sans;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+}
+
+/* Inputs minimalistas */
+input, textarea, select {
+  @apply bg-[--bg-light] border border-[--border] rounded-lg px-4 py-2.5 text-[--text-primary] placeholder-[--text-secondary] transition-all;
+  @apply focus:outline-none focus:ring-2 focus:ring-[--primary] focus:ring-opacity-20 focus:border-[--primary];
+}
+
+/* Botones elegantes */
+button {
+  @apply transition-all duration-200;
+}
+
+.btn-primary {
+  @apply bg-[--primary] text-white font-medium py-2.5 px-6 rounded-lg hover:bg-opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[--primary] disabled:opacity-50;
+}
+
+.btn-secondary {
+  @apply bg-[--bg-light] text-[--text-primary] font-medium py-2.5 px-6 rounded-lg border border-[--border] hover:bg-white hover:border-[--text-secondary] focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[--primary];
+}
+
+.btn-ghost {
+  @apply text-[--text-secondary] font-medium py-2 px-4 rounded-lg hover:text-[--text-primary] hover:bg-[--bg-light] transition-all;
+}
