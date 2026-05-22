@@ -3,23 +3,23 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../../lib/supabase';
-import { Plus, Filter, Soup, ShoppingCart, Truck, FileCheck, Search, Sun, Moon, FileText, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Plus, Filter, Soup, ShoppingCart, Truck, FileCheck, Search, Sun, Moon, FileText, ChevronLeft, ChevronRight, Users, LayoutDashboard } from 'lucide-react';
 
 // --- ESTADOS INICIALES (Optimizados fuera del componente para no recrearlos en cada render) ---
-const PEDIDO_INICIAL = { 
-  cliente_id: '', cliente_nombre: '', cliente_telefono: '', 
+const PEDIDO_INICIAL = {
+  cliente_id: '', cliente_nombre: '', cliente_telefono: '',
   fecha_produccion: '', fecha_entrega: '', entregado_por: '', costo_envio: 0, comentarios_generales: '',
-  items: [{ variante_id: '', cantidad: 0, comentarios: '' }] 
+  items: [{ variante_id: '', cantidad: 0, comentarios: '' }]
 };
 
 export default function AdminMonitor() {
   const router = useRouter();
-  
+
   // Datos principales
   const [pedidos, setPedidos] = useState<any[]>([]);
   const [productos, setProductos] = useState<any[]>([]);
   const [clientes, setClientes] = useState<any[]>([]);
-  
+
   // Paginación y Filtros
   const [page, setPage] = useState(0);
   const pageSize = 10;
@@ -33,7 +33,7 @@ export default function AdminMonitor() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [liquidarModal, setLiquidarModal] = useState({ open: false, pedido: null as any, fecha: '', costo_envio: 0, entregado_por: '' });
   const [facturaModal, setFacturaModal] = useState({ open: false, pedido: null as any, folio: '' });
-  
+
   // Formulario
   const [nuevoPedido, setNuevoPedido] = useState(PEDIDO_INICIAL);
 
@@ -46,9 +46,9 @@ export default function AdminMonitor() {
       .from('pedidos')
       .select('*, pedido_detalles(*, producto_variantes(gramaje, precio_base, productos(nombre))), clientes(nombre_local)')
       // CORRECCIÓN: Ordenar por created_at (fecha y HORA exacta) para garantizar que el más nuevo esté arriba
-      .order('created_at', { ascending: false }) 
+      .order('created_at', { ascending: false })
       .range(from, to);
-      
+
     setPedidos(data || []);
   };
 
@@ -61,13 +61,13 @@ export default function AdminMonitor() {
       // Verificación de sesión optimizada
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) return router.push('/login');
-      
+
       // Carga paralela de catálogos para mayor velocidad
       const [prodsRes, clisRes] = await Promise.all([
         supabase.from('producto_variantes').select('id, gramaje, precio_base, productos(nombre)'),
         supabase.from('clientes').select('id, nombre_local')
       ]);
-      
+
       if (prodsRes.data) setProductos(prodsRes.data);
       if (clisRes.data) setClientes(clisRes.data);
     };
@@ -75,9 +75,9 @@ export default function AdminMonitor() {
   }, [router]);
 
   // --- LÓGICA DE FILTRADO OPTIMIZADA ---
-  const clientesFiltrados = useMemo(() => 
+  const clientesFiltrados = useMemo(() =>
     clientes.filter(c => c.nombre_local?.toLowerCase().includes(filtroCliente.toLowerCase())),
-  [clientes, filtroCliente]);
+    [clientes, filtroCliente]);
 
   const pedidosFiltrados = useMemo(() => {
     let filtrados = [...pedidos];
@@ -95,7 +95,7 @@ export default function AdminMonitor() {
         return d >= new Date(fechaInicio) && d <= new Date(fechaFin);
       });
     }
-    
+
     // Doble garantía de ordenamiento en el frontend usando created_at
     return filtrados.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
   }, [pedidos, filtroRango, fechaInicio, fechaFin]);
@@ -103,7 +103,7 @@ export default function AdminMonitor() {
   // --- FUNCIONES DE ACCIÓN ---
   const capturarPedidoDetallado = async () => {
     let totalCalculado = Number(nuevoPedido.costo_envio) || 0;
-    
+
     const itemsProcesados = nuevoPedido.items.filter(i => i.variante_id).map(item => {
       const pDb = productos.find(p => p.id === item.variante_id);
       const precioUnitario = pDb ? Number(pDb.precio_base) : 0;
@@ -112,20 +112,20 @@ export default function AdminMonitor() {
       return { variante_id: item.variante_id, cantidad: item.cantidad, comentarios: item.comentarios, precio_aplicado: precioUnitario, subtotal: subtotalItem };
     });
 
-    const { data: pedido, error } = await supabase.from('pedidos').insert([{ 
-        cliente_id: nuevoPedido.cliente_id || null, 
-        cliente_nombre: nuevoPedido.cliente_nombre, 
-        cliente_telefono: nuevoPedido.cliente_telefono,
-        estatus_pedido: 'Pendiente', 
-        estatus_pago: 'Pendiente', 
-        precio_total: totalCalculado,
-        fecha_pedido: new Date().toISOString().split('T')[0], // La fecha sin hora para logística
-        fecha_produccion: nuevoPedido.fecha_produccion || null, 
-        fecha_entrega: nuevoPedido.fecha_entrega || null,
-        entregado_por: nuevoPedido.entregado_por, 
-        costo_envio: nuevoPedido.costo_envio, 
-        comentarios: nuevoPedido.comentarios_generales
-      }]).select().single();
+    const { data: pedido, error } = await supabase.from('pedidos').insert([{
+      cliente_id: nuevoPedido.cliente_id || null,
+      cliente_nombre: nuevoPedido.cliente_nombre,
+      cliente_telefono: nuevoPedido.cliente_telefono,
+      estatus_pedido: 'Pendiente',
+      estatus_pago: 'Pendiente',
+      precio_total: totalCalculado,
+      fecha_pedido: new Date().toISOString().split('T')[0], // La fecha sin hora para logística
+      fecha_produccion: nuevoPedido.fecha_produccion || null,
+      fecha_entrega: nuevoPedido.fecha_entrega || null,
+      entregado_por: nuevoPedido.entregado_por,
+      costo_envio: nuevoPedido.costo_envio,
+      comentarios: nuevoPedido.comentarios_generales
+    }]).select().single();
 
     if (pedido && !error && itemsProcesados.length > 0) {
       const detalles = itemsProcesados.map(item => ({ pedido_id: pedido.id, ...item }));
@@ -140,7 +140,7 @@ export default function AdminMonitor() {
     const p = liquidarModal.pedido;
     const nuevoTotal = Number(p.precio_total) - Number(p.costo_envio || 0) + Number(liquidarModal.costo_envio || 0);
 
-    const { error } = await supabase.from('pedidos').update({ 
+    const { error } = await supabase.from('pedidos').update({
       estatus_pago: 'Liquidado',
       fecha_produccion: liquidarModal.fecha,
       fecha_entrega: liquidarModal.fecha,
@@ -156,8 +156,8 @@ export default function AdminMonitor() {
   };
 
   const confirmarFactura = async () => {
-    const { error } = await supabase.from('pedidos').update({ 
-      folio_factura: facturaModal.folio 
+    const { error } = await supabase.from('pedidos').update({
+      folio_factura: facturaModal.folio
     }).eq('id', facturaModal.pedido.id);
 
     if (!error) {
@@ -169,29 +169,12 @@ export default function AdminMonitor() {
   return (
     <div className={`${isDarkMode ? 'dark' : ''}`}>
       <div className="bg-gray-50 dark:bg-gray-900 min-h-screen text-gray-900 dark:text-gray-100 transition-colors flex">
-        
-        {/* SIDEBAR */}
-        <aside className="w-64 bg-white dark:bg-gray-950 border-r border-gray-200 dark:border-gray-800 flex-col justify-between hidden md:flex">
-          <div>
-            <div className="p-6 border-b border-gray-200 dark:border-gray-800 flex items-center gap-3">
-              <Soup className="text-amber-500 w-8 h-8" />
-              <div>
-                <h1 className="font-bold text-lg leading-tight">SEIMENJO</h1>
-                <span className="text-xs text-gray-500 font-medium">Fábrica de Fideos</span>
-              </div>
-            </div>
-            <nav className="p-4 space-y-2">
-              <button className="w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-sm font-semibold bg-amber-600 text-white shadow-lg">
-                <div className="flex items-center gap-3"><ShoppingCart className="w-5 h-5" /><span>Ventana 1: Ventas</span></div>
-                <span className="w-2 h-2 rounded-full bg-red-400 animate-pulse"></span>
-              </button>
-            </nav>
-          </div>
-        </aside>
+
+     
 
         {/* ÁREA PRINCIPAL */}
         <main className="flex-1 flex flex-col p-8 w-full max-w-[100vw] md:max-w-[calc(100vw-16rem)]">
-          
+
           {/* HEADER */}
           <div className="mb-6 flex justify-between items-start md:items-center flex-col md:flex-row gap-4">
             <h2 className="text-2xl font-bold flex items-center gap-2">Monitor Maestro de Pedidos</h2>
@@ -257,7 +240,7 @@ export default function AdminMonitor() {
                       </td>
                       <td className="p-4 space-y-1">
                         <div>🚚 Envío: <span className="font-semibold">${Number(p.costo_envio).toFixed(2)}</span></div>
-                        <div className="text-gray-500 dark:text-gray-400 flex items-center gap-1"><Truck className="w-3 h-3"/> <span className="font-medium">{p.entregado_por || 'N/A'}</span></div>
+                        <div className="text-gray-500 dark:text-gray-400 flex items-center gap-1"><Truck className="w-3 h-3" /> <span className="font-medium">{p.entregado_por || 'N/A'}</span></div>
                       </td>
                       <td className="p-4 text-right space-y-1">
                         <div className="font-bold text-sm">${Number(p.precio_total).toFixed(2)}</div>
@@ -298,15 +281,15 @@ export default function AdminMonitor() {
         {isModalOpen && (
           <div className="fixed inset-0 bg-black/60 dark:bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
             <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-6 rounded-2xl w-full max-w-3xl shadow-2xl max-h-[90vh] overflow-y-auto">
-              <h3 className="text-xl font-extrabold mb-6 flex items-center gap-2"><Plus className="text-amber-500"/> Nueva Orden de Producción</h3>
-              
+              <h3 className="text-xl font-extrabold mb-6 flex items-center gap-2"><Plus className="text-amber-500" /> Nueva Orden de Producción</h3>
+
               <div className="mb-6 p-4 bg-gray-50 dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800">
                 <h4 className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase mb-3">1. Información del Cliente</h4>
                 <div className="relative mb-3">
-                  <Search className="absolute left-3 top-2.5 text-gray-400" size={16}/>
+                  <Search className="absolute left-3 top-2.5 text-gray-400" size={16} />
                   <input placeholder="Buscar cliente..." className="w-full bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 p-2 pl-10 rounded-lg text-sm" onChange={(e) => setFiltroCliente(e.target.value)} />
                 </div>
-                <select className="w-full bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 p-2.5 rounded-lg text-sm" onChange={e => setNuevoPedido({...nuevoPedido, cliente_id: e.target.value})}>
+                <select className="w-full bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 p-2.5 rounded-lg text-sm" onChange={e => setNuevoPedido({ ...nuevoPedido, cliente_id: e.target.value })}>
                   <option value="">Seleccionar cliente registrado o dejar en blanco...</option>
                   {clientesFiltrados.map(c => <option key={c.id} value={c.id}>{c.nombre_local}</option>)}
                 </select>
@@ -315,13 +298,13 @@ export default function AdminMonitor() {
               <div className="mb-6 p-4 bg-gray-50 dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800">
                 <h4 className="text-xs font-bold text-amber-600 dark:text-amber-500 uppercase mb-3">2. Fechas Operativas y Logística</h4>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <input type="date" className="w-full bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-sm" onChange={e => setNuevoPedido({...nuevoPedido, fecha_produccion: e.target.value})} />
-                  <input type="date" className="w-full bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-sm" onChange={e => setNuevoPedido({...nuevoPedido, fecha_entrega: e.target.value})} />
-                  <select className="w-full bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-sm" onChange={e => setNuevoPedido({...nuevoPedido, entregado_por: e.target.value})}>
+                  <input type="date" className="w-full bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-sm" onChange={e => setNuevoPedido({ ...nuevoPedido, fecha_produccion: e.target.value })} />
+                  <input type="date" className="w-full bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-sm" onChange={e => setNuevoPedido({ ...nuevoPedido, fecha_entrega: e.target.value })} />
+                  <select className="w-full bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-sm" onChange={e => setNuevoPedido({ ...nuevoPedido, entregado_por: e.target.value })}>
                     <option value="">Sin asignar repartidor</option>
                     <option value="SR. PEPE">SR. PEPE</option><option value="PLAYITA">PLAYITA</option><option value="FELIPE">FELIPE</option>
                   </select>
-                  <input type="number" placeholder="Costo Envío ($)" className="w-full bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-sm" onChange={e => setNuevoPedido({...nuevoPedido, costo_envio: parseFloat(e.target.value) || 0})} />
+                  <input type="number" placeholder="Costo Envío ($)" className="w-full bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-sm" onChange={e => setNuevoPedido({ ...nuevoPedido, costo_envio: parseFloat(e.target.value) || 0 })} />
                 </div>
               </div>
 
@@ -331,18 +314,18 @@ export default function AdminMonitor() {
                   <div key={idx} className="mb-3 p-4 bg-gray-50 dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800">
                     <div className="flex gap-3 mb-3">
                       <select className="bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 p-2 flex-1 rounded-lg text-sm" onChange={e => {
-                        const items = [...nuevoPedido.items]; items[idx].variante_id = e.target.value; setNuevoPedido({...nuevoPedido, items});
+                        const items = [...nuevoPedido.items]; items[idx].variante_id = e.target.value; setNuevoPedido({ ...nuevoPedido, items });
                       }}>
                         <option value="">Seleccionar producto...</option>
                         {productos.map(p => <option key={p.id} value={p.id}>{p.productos.nombre} ({p.gramaje}) - ${p.precio_base}</option>)}
                       </select>
                       <input type="number" placeholder="Pz" className="bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 p-2 w-24 rounded-lg text-sm" onChange={e => {
-                        const items = [...nuevoPedido.items]; items[idx].cantidad = parseInt(e.target.value); setNuevoPedido({...nuevoPedido, items});
+                        const items = [...nuevoPedido.items]; items[idx].cantidad = parseInt(e.target.value); setNuevoPedido({ ...nuevoPedido, items });
                       }} />
                     </div>
                   </div>
                 ))}
-                <button onClick={() => setNuevoPedido({...nuevoPedido, items: [...nuevoPedido.items, { variante_id: '', cantidad: 0, comentarios: '' }]})} className="text-amber-600 dark:text-amber-500 font-semibold text-sm hover:underline">+ Agregar otro producto</button>
+                <button onClick={() => setNuevoPedido({ ...nuevoPedido, items: [...nuevoPedido.items, { variante_id: '', cantidad: 0, comentarios: '' }] })} className="text-amber-600 dark:text-amber-500 font-semibold text-sm hover:underline">+ Agregar otro producto</button>
               </div>
 
               <div className="flex gap-3 pt-6 border-t border-gray-200 dark:border-gray-800">
@@ -359,15 +342,15 @@ export default function AdminMonitor() {
             <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 p-6 rounded-2xl w-full max-w-md shadow-2xl">
               <h3 className="text-lg font-bold mb-4">Confirmar Liquidación</h3>
               <div className="space-y-4">
-                <input type="date" value={liquidarModal.fecha} className="w-full bg-gray-50 dark:bg-gray-950 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-sm" onChange={e => setLiquidarModal({...liquidarModal, fecha: e.target.value})} />
-                <select value={liquidarModal.entregado_por} className="w-full bg-gray-50 dark:bg-gray-950 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-sm" onChange={e => setLiquidarModal({...liquidarModal, entregado_por: e.target.value})}>
+                <input type="date" value={liquidarModal.fecha} className="w-full bg-gray-50 dark:bg-gray-950 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-sm" onChange={e => setLiquidarModal({ ...liquidarModal, fecha: e.target.value })} />
+                <select value={liquidarModal.entregado_por} className="w-full bg-gray-50 dark:bg-gray-950 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-sm" onChange={e => setLiquidarModal({ ...liquidarModal, entregado_por: e.target.value })}>
                   <option value="">Sin asignar</option>
                   <option value="SR. PEPE">SR. PEPE</option><option value="PLAYITA">PLAYITA</option><option value="FELIPE">FELIPE</option>
                 </select>
-                <input type="number" value={liquidarModal.costo_envio} placeholder="Costo Envío" className="w-full bg-gray-50 dark:bg-gray-950 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-sm" onChange={e => setLiquidarModal({...liquidarModal, costo_envio: parseFloat(e.target.value) || 0})} />
+                <input type="number" value={liquidarModal.costo_envio} placeholder="Costo Envío" className="w-full bg-gray-50 dark:bg-gray-950 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-sm" onChange={e => setLiquidarModal({ ...liquidarModal, costo_envio: parseFloat(e.target.value) || 0 })} />
               </div>
               <div className="flex gap-3 pt-6 mt-4 border-t border-gray-200 dark:border-gray-800">
-                <button onClick={() => setLiquidarModal({...liquidarModal, open: false})} className="flex-1 py-2 font-semibold border border-gray-300 dark:border-gray-700 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">Cancelar</button>
+                <button onClick={() => setLiquidarModal({ ...liquidarModal, open: false })} className="flex-1 py-2 font-semibold border border-gray-300 dark:border-gray-700 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">Cancelar</button>
                 <button onClick={confirmarLiquidacion} className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded-lg shadow-lg transition-colors">Liquidar Orden</button>
               </div>
             </div>
@@ -378,10 +361,10 @@ export default function AdminMonitor() {
         {facturaModal.open && (
           <div className="fixed inset-0 bg-black/60 dark:bg-black/80 backdrop-blur-sm flex items-center justify-center z-[60] p-4">
             <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 p-6 rounded-2xl w-full max-w-sm shadow-2xl">
-              <h3 className="text-lg font-bold mb-4 flex items-center gap-2"><FileText size={20} className="text-blue-500"/> Solicitar Factura</h3>
-              <input type="text" placeholder="Ej. SAT-82931" value={facturaModal.folio} className="w-full bg-gray-50 dark:bg-gray-950 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-sm uppercase" onChange={e => setFacturaModal({...facturaModal, folio: e.target.value})} />
+              <h3 className="text-lg font-bold mb-4 flex items-center gap-2"><FileText size={20} className="text-blue-500" /> Solicitar Factura</h3>
+              <input type="text" placeholder="Ej. SAT-82931" value={facturaModal.folio} className="w-full bg-gray-50 dark:bg-gray-950 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-sm uppercase" onChange={e => setFacturaModal({ ...facturaModal, folio: e.target.value })} />
               <div className="flex gap-3 pt-6 mt-4 border-t border-gray-200 dark:border-gray-800">
-                <button onClick={() => setFacturaModal({...facturaModal, open: false})} className="flex-1 py-2 font-semibold border border-gray-300 dark:border-gray-700 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">Cancelar</button>
+                <button onClick={() => setFacturaModal({ ...facturaModal, open: false })} className="flex-1 py-2 font-semibold border border-gray-300 dark:border-gray-700 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">Cancelar</button>
                 <button onClick={confirmarFactura} className="flex-1 py-2 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-lg shadow-lg transition-colors">Guardar Folio</button>
               </div>
             </div>
