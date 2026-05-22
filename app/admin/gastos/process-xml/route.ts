@@ -2,28 +2,40 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { XMLParser } from 'fast-xml-parser';
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
-
 export async function POST(req: Request) {
+  // 1. SOLUCIÓN A VERCEL: Inicializamos a Supabase DENTRO de la función.
+  // Así evitamos que Next.js intente leer variables faltantes durante el "build".
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+  
+  // 2. FALLBACK INTELIGENTE: Si no tienes el Service Role en Vercel, usará tu llave pública (Anon Key).
+  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+  const supabase = createClient(supabaseUrl, supabaseKey);
+
   try {
     const formData = await req.formData();
     const file = formData.get('file') as File;
     if (!file) return NextResponse.json({ error: 'Archivo no encontrado' }, { status: 400 });
 
     const text = await file.text();
-    const parser = new XMLParser();
+    
+    // 3. SOLUCIÓN CRÍTICA PARA CFDI: 'ignoreAttributes: false' es obligatorio
+    // para poder leer correctamente los campos que empiezan con "@_"
+    const parser = new XMLParser({ ignoreAttributes: false });
     const jsonObj = parser.parse(text);
 
-    // Nota: La estructura del XML depende de la versión CFDI (3.3 o 4.0)
-    // Ajusta estas rutas según el esquema del SAT
-    const rfcEmisor = jsonObj['cfdi:Comprobante']?.['cfdi:Emisor']?.['@_Rfc'];
-    const nombreEmisor = jsonObj['cfdi:Comprobante']?.['cfdi:Emisor']?.['@_Nombre'];
-    const total = parseFloat(jsonObj['cfdi:Comprobante']?.['@_Total']);
+    const cfdi = jsonObj['cfdi:Comprobante'];
+    if (!cfdi) throw new Error("El archivo XML no es un CFDI válido");
 
-    // 1. UPSERT del Proveedor 
+    const emisor = cfdi['cfdi:Emisor'];
+    
+    // Manejamos variaciones de mayúsculas entre CFDI 3.3 y 4.0
+    const rfcEmisor = emisor?.['@_Rfc'] || emisor?.['@_rfc'];
+    const nombreEmisor = emisor?.['@_Nombre'] || emisor?.['@_nombre'];
+    const total = parseFloat(cfdi['@_Total'] || cfdi['@_total']);
+
+    if (!rfcEmisor) throw new Error("No se pudo extraer el RFC del archivo XML");
+
+    // 4. UPSERT del Proveedor 
     const { data: proveedor, error: provError } = await supabase
       .from('proveedores')
       .upsert({ rfc: rfcEmisor, nombre_comercial: nombreEmisor }, { onConflict: 'rfc' })
@@ -32,20 +44,21 @@ export async function POST(req: Request) {
 
     if (provError) throw provError;
 
-    // 2. Registro del Gasto [cite: 106, 148]
+    // 5. Registro del Gasto
     const { error: gastoError } = await supabase
       .from('gastos')
       .insert({
         proveedor_id: proveedor.id,
         monto: total,
-        fecha_gasto: new Date().toISOString(), // O extraído del XML
-        concepto: 'Gasto automatizado vía XML'
+        fecha_gasto: new Date().toISOString(), // Se puede mejorar para leer la fecha del CFDI
+        concepto: 'Gasto automatizado vía XML CFDI'
       });
 
     if (gastoError) throw gastoError;
 
     return NextResponse.json({ message: 'Gasto registrado correctamente' });
-  } catch (error) {
-    return NextResponse.json({ error: 'Error en el procesamiento' }, { status: 500 });
+  } catch (error: any) {
+    console.error("Error procesando XML:", error);
+    return NextResponse.json({ error: error.message || 'Error en el procesamiento' }, { status: 500 });
   }
 }
