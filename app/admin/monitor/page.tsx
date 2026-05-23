@@ -12,7 +12,7 @@ const PEDIDO_INICIAL = {
   fecha_produccion: '', fecha_entrega: '', entregado_por: '', costo_envio: 0, comentarios_generales: '',
   items: [{ variante_id: '', cantidad: 0, comentarios: '' }]
 };
-
+export const dynamic = 'force-dynamic';
 export default function AdminMonitor() {
   const router = useRouter();
 

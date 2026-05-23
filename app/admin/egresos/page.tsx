@@ -7,7 +7,7 @@ import { useThemeMode } from '../../../lib/useThemeMode';
 import { 
   Plus, Users, Sun, Moon, Eye, ChevronLeft, ChevronRight, FileText, Save, X, Receipt
 } from 'lucide-react';
-
+export const dynamic = 'force-dynamic';
 export default function AdminGastos() {
   const router = useRouter();
 
