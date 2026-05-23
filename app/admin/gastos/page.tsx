@@ -4,6 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 // Asumimos que supabase exporta la misma instancia
 import { supabase } from '../../../lib/supabase';
+import { useThemeMode } from '../../../lib/useThemeMode';
 import { 
   UploadCloud, Soup, ShoppingCart, Users, LayoutDashboard, 
   Sun, Moon, Filter, Eye, ChevronLeft, ChevronRight, FileText, FileDown
@@ -14,7 +15,7 @@ export default function AdminGastos() {
 
   // Estados
   const [gastos, setGastos] = useState<any[]>([]);
-  const [isDarkMode, setIsDarkMode] = useState(true);
+  const { isDarkMode, toggleDarkMode } = useThemeMode();
   const [page, setPage] = useState(0);
   const pageSize = 10;
   
@@ -47,7 +48,7 @@ export default function AdminGastos() {
   useEffect(() => {
     const init = async () => {
       const { data: { session } } = await supabase.auth.getSession();
-      if (!session) return router.push('/login');
+      if (!session) return router.push('/admin/login');
     };
     init();
   }, [router]);
@@ -117,7 +118,7 @@ export default function AdminGastos() {
           <div className="mb-6 flex justify-between items-start md:items-center flex-col md:flex-row gap-4">
             <h2 className="text-2xl font-bold flex items-center gap-2">Registro e Historial de Gastos</h2>
             <div className="flex items-center gap-3">
-              <button onClick={() => setIsDarkMode(!isDarkMode)} className="p-2 rounded-lg bg-gray-200 dark:bg-gray-800 text-gray-600 dark:text-blue-400 hover:bg-gray-300 dark:hover:bg-gray-700 transition-colors">
+              <button onClick={toggleDarkMode} className="p-2 rounded-lg bg-gray-200 dark:bg-gray-800 text-gray-600 dark:text-blue-400 hover:bg-gray-300 dark:hover:bg-gray-700 transition-colors">
                 {isDarkMode ? <Sun size={20} /> : <Moon size={20} />}
               </button>
             </div>

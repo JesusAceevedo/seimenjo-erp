@@ -4,6 +4,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../../lib/supabase';
 import { Plus, Filter, Soup, ShoppingCart, Truck, FileCheck, Search, Sun, Moon, FileText, ChevronLeft, ChevronRight, Users, LayoutDashboard } from 'lucide-react';
+import { useThemeMode } from '../../../lib/useThemeMode';
 
 // --- ESTADOS INICIALES (Optimizados fuera del componente para no recrearlos en cada render) ---
 const PEDIDO_INICIAL = {
@@ -29,7 +30,7 @@ export default function AdminMonitor() {
   const [fechaFin, setFechaFin] = useState('');
 
   // Estados de UI y Modales
-  const [isDarkMode, setIsDarkMode] = useState(true);
+  const { isDarkMode, toggleDarkMode } = useThemeMode();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [liquidarModal, setLiquidarModal] = useState({ open: false, pedido: null as any, fecha: '', costo_envio: 0, entregado_por: '', metodo_pago: '' });
   const [facturaModal, setFacturaModal] = useState({ open: false, pedido: null as any, folio: '' });
@@ -58,7 +59,7 @@ export default function AdminMonitor() {
   useEffect(() => {
     const init = async () => {
       const { data: { session } } = await supabase.auth.getSession();
-      if (!session) return router.push('/login');
+      if (!session) return router.push('/admin/login');
 
       const [prodsRes, clisRes] = await Promise.all([
         supabase.from('producto_variantes').select('id, gramaje, precio_base, productos(nombre)'),
@@ -174,7 +175,7 @@ export default function AdminMonitor() {
           <div className="mb-6 flex justify-between items-start md:items-center flex-col md:flex-row gap-4">
             <h2 className="text-2xl font-bold flex items-center gap-2">Monitor Maestro de Pedidos</h2>
             <div className="flex items-center gap-3">
-              <button onClick={() => setIsDarkMode(!isDarkMode)} className="p-2 rounded-lg bg-gray-200 dark:bg-gray-800 text-gray-600 dark:text-amber-400 hover:bg-gray-300 dark:hover:bg-gray-700 transition-colors">
+              <button onClick={toggleDarkMode} className="p-2 rounded-lg bg-gray-200 dark:bg-gray-800 text-gray-600 dark:text-amber-400 hover:bg-gray-300 dark:hover:bg-gray-700 transition-colors">
                 {isDarkMode ? <Sun size={20} /> : <Moon size={20} />}
               </button>
               <button onClick={() => setIsModalOpen(true)} className="bg-amber-600 hover:bg-amber-500 text-white px-4 py-2 rounded-lg flex items-center gap-2 font-semibold shadow-lg transition-colors">

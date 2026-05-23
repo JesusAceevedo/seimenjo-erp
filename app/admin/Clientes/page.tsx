@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { supabase } from '../../../lib/supabase';
+import { useThemeMode } from '../../../lib/useThemeMode';
 import { Plus, Filter, Soup, ShoppingCart, Truck, FileCheck, Search, Sun, Moon, FileText, ChevronLeft, ChevronRight, Users, Save, Edit3, Trash2 } from 'lucide-react';
 
 // --- CATÁLOGOS MAESTROS DEL SAT (CFDI 4.0) ---
@@ -59,7 +60,7 @@ export default function AdminMonitor() {
   const [fechaFin, setFechaFin] = useState('');
 
   // Estados de UI y Modales
-  const [isDarkMode, setIsDarkMode] = useState(true);
+  const { isDarkMode, toggleDarkMode } = useThemeMode();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isClienteModalOpen, setIsClienteModalOpen] = useState(false);
   const [editarClienteModal, setEditarClienteModal] = useState({ open: false, cliente: null as any });
@@ -96,7 +97,7 @@ export default function AdminMonitor() {
   useEffect(() => {
     const init = async () => {
       const { data: { session } } = await supabase.auth.getSession();
-      if (!session) return router.push('/login');
+      if (!session) return router.push('/admin/login');
       
       const [prodsRes] = await Promise.all([
         supabase.from('producto_variantes').select('id, gramaje, precio_base, productos(nombre)')
@@ -232,7 +233,7 @@ export default function AdminMonitor() {
               {vistaActiva === 'ventas' ? 'Monitor Maestro de Pedidos' : 'Catálogo Fiscal de Clientes'}
             </h2>
             <div className="flex items-center gap-3">
-              <button onClick={() => setIsDarkMode(!isDarkMode)} className="p-2 rounded-lg bg-gray-200 dark:bg-gray-800 text-gray-600 dark:text-amber-400 hover:bg-gray-300 dark:hover:bg-gray-700 transition-colors">
+              <button onClick={toggleDarkMode} className="p-2 rounded-lg bg-gray-200 dark:bg-gray-800 text-gray-600 dark:text-amber-400 hover:bg-gray-300 dark:hover:bg-gray-700 transition-colors">
                 {isDarkMode ? <Sun size={20} /> : <Moon size={20} />}
               </button>
               {vistaActiva === 'ventas' ? (

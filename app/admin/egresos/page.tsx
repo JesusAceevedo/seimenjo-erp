@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../../lib/supabase';
+import { useThemeMode } from '../../../lib/useThemeMode';
 import { 
   Plus, Users, Sun, Moon, Eye, ChevronLeft, ChevronRight, FileText, Save, X, Receipt
 } from 'lucide-react';
@@ -17,7 +18,7 @@ export default function AdminGastos() {
   const [conceptosDisponibles, setConceptosDisponibles] = useState<string[]>([]);
   
   // Estados de UI
-  const [isDarkMode, setIsDarkMode] = useState(true);
+  const { isDarkMode, toggleDarkMode } = useThemeMode();
   const [page, setPage] = useState(0);
   const pageSize = 10;
   
@@ -87,7 +88,7 @@ export default function AdminGastos() {
   useEffect(() => {
     const init = async () => {
       const { data: { session } } = await supabase.auth.getSession();
-      if (!session) return router.push('/login');
+      if (!session) return router.push('/admin/login');
     };
     init();
   }, [router]);
@@ -159,7 +160,7 @@ export default function AdminGastos() {
               <Receipt className="text-blue-500" /> Registro de Egresos
             </h2>
             <div className="flex items-center gap-3">
-              <button onClick={() => setIsDarkMode(!isDarkMode)} className="p-2 rounded-lg bg-gray-200 dark:bg-gray-800 text-gray-600 dark:text-blue-400 hover:bg-gray-300 dark:hover:bg-gray-700 transition-colors">
+              <button onClick={toggleDarkMode} className="p-2 rounded-lg bg-gray-200 dark:bg-gray-800 text-gray-600 dark:text-blue-400 hover:bg-gray-300 dark:hover:bg-gray-700 transition-colors">
                 {isDarkMode ? <Sun size={20} /> : <Moon size={20} />}
               </button>
               <button 

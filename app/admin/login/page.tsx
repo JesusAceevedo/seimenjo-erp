@@ -3,13 +3,15 @@
 import React, { useState } from 'react';
 import { supabase } from '../../../lib/supabase';
 import { useRouter } from 'next/navigation';
-import { LogIn, AlertCircle, Loader } from 'lucide-react';
+import { LogIn, AlertCircle, Loader, Sun, Moon } from 'lucide-react';
+import { useThemeMode } from '../../../lib/useThemeMode';
 
 export default function AdminLogin() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const { isDarkMode, toggleDarkMode } = useThemeMode();
   const router = useRouter();
 
   const handleLogin = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -52,35 +54,42 @@ export default function AdminLogin() {
   };
 
   return (
-    <div className="min-h-screen w-full bg-gradient-to-br from-white via-blue-50 to-white flex flex-col justify-center items-center px-4 py-12">
+    <div className="min-h-screen w-full bg-gray-50 text-gray-900 dark:bg-gray-950 dark:text-white flex flex-col justify-center items-center px-4 py-12 transition-colors">
       <div className="w-full max-w-md">
-        {/* Header */}
-        <div className="text-center mb-12">
-          <div className="inline-block mb-4 p-3 bg-blue-100 rounded-xl">
-            <LogIn className="w-8 h-8 text-blue-600" />
+        <div className="flex justify-end mb-4">
+          <button
+            type="button"
+            onClick={toggleDarkMode}
+            className="p-2 rounded-lg bg-gray-200 dark:bg-gray-800 text-gray-700 dark:text-amber-400 hover:bg-gray-300 dark:hover:bg-gray-700 transition-colors"
+            aria-label="Cambiar modo de color"
+          >
+            {isDarkMode ? <Sun size={20} /> : <Moon size={20} />}
+          </button>
+        </div>
+
+        <div className="text-center mb-10">
+          <div className="inline-flex mb-4 p-3 bg-amber-500/10 rounded-xl border border-amber-500/20">
+            <LogIn className="w-8 h-8 text-amber-400" />
           </div>
-          <h1 className="text-4xl font-bold text-gray-900 mb-2">
+          <h1 className="text-4xl font-bold mb-2">
             SEIMENJO
           </h1>
-          <p className="text-gray-600 font-light">
+          <p className="text-gray-600 dark:text-gray-300 font-light">
             Panel de Administración
           </p>
         </div>
 
-        {/* Card Principal */}
-        <div className="bg-white border border-gray-200 rounded-2xl p-8 backdrop-blur-sm">
-          {/* Mensaje de Error */}
+        <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-2xl p-8 shadow-[0_20px_80px_rgba(15,23,42,0.2)] dark:shadow-[0_20px_80px_rgba(0,0,0,0.45)]">
           {error && (
-            <div className="mb-6 bg-red-50 border border-red-200 p-4 rounded-lg flex items-start gap-3 animate-in fade-in duration-300">
-              <AlertCircle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
-              <p className="text-sm text-red-700 font-light">{error}</p>
+            <div className="mb-6 bg-red-50 dark:bg-red-950/70 border border-red-200 dark:border-red-800 p-4 rounded-lg flex items-start gap-3">
+              <AlertCircle className="w-5 h-5 text-red-500 dark:text-red-400 flex-shrink-0 mt-0.5" />
+              <p className="text-sm text-red-700 dark:text-red-200 font-light">{error}</p>
             </div>
           )}
 
-          {/* Formulario */}
           <form onSubmit={handleLogin} className="space-y-5">
             <div>
-              <label htmlFor="email" className="block text-sm font-medium text-gray-900 mb-2">
+              <label htmlFor="email" className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-2">
                 Correo Electrónico
               </label>
               <input
@@ -89,13 +98,13 @@ export default function AdminLogin() {
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="w-full bg-gray-50 border border-gray-300 rounded-lg px-4 py-3 text-gray-900 placeholder-gray-500 transition-all focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-20 focus:border-blue-500"
+                className="w-full bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-lg px-4 py-3 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 transition-all focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
                 placeholder="admin@seimenjo.com"
               />
             </div>
 
             <div>
-              <label htmlFor="password" className="block text-sm font-medium text-gray-900 mb-2">
+              <label htmlFor="password" className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-2">
                 Contraseña
               </label>
               <input
@@ -104,7 +113,7 @@ export default function AdminLogin() {
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full bg-gray-50 border border-gray-300 rounded-lg px-4 py-3 text-gray-900 placeholder-gray-500 transition-all focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-20 focus:border-blue-500"
+                className="w-full bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-lg px-4 py-3 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 transition-all focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500"
                 placeholder="••••••••"
               />
             </div>
@@ -112,7 +121,7 @@ export default function AdminLogin() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 px-4 rounded-lg transition-all focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full flex items-center justify-center gap-2 bg-amber-500 hover:bg-amber-400 text-gray-950 font-semibold py-3 px-4 rounded-lg transition-all focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-amber-500/40 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {loading ? (
                 <>
@@ -130,8 +139,7 @@ export default function AdminLogin() {
         </div>
       </div>
 
-      {/* Footer minimalista */}
-      <p className="text-center text-gray-500 text-xs mt-8 font-light">
+      <p className="text-center text-gray-500 dark:text-gray-400 text-xs mt-8 font-light">
         © 2025 SEIMENJO Admin. Todos los derechos reservados.
       </p>
     </div>
