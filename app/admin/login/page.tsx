@@ -52,7 +52,7 @@ export default function AdminLogin() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-white via-blue-50 to-white flex flex-col justify-center items-center px-4 py-12">
+    <div className="min-h-screen w-full bg-gradient-to-br from-white via-blue-50 to-white flex flex-col justify-center items-center px-4 py-12">
       <div className="w-full max-w-md">
         {/* Header */}
         <div className="text-center mb-12">

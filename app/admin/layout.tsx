@@ -7,7 +7,19 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const router = useRouter();
   const pathname = usePathname();
 
-  // Esta función comprueba la ruta exacta o sub-ruta
+  const isLoginPage = pathname === '/admin/login' || pathname === '/login';
+
+  // Si estamos en el login, renderizamos una vista limpia y centrada
+  // sin la barra lateral ni el contenedor general del administrador.
+  if (isLoginPage) {
+    return (
+      <div className="min-h-screen bg-gray-950 flex items-center justify-center">
+        {children}
+      </div>
+    );
+  }
+
+  // Esta función comprueba la ruta exacta o sub-ruta para el resto del ERP
   const isSelected = (path: string) => pathname === path || pathname.startsWith(path);
 
   return (
@@ -39,6 +51,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           >
             <Users size={18} /> Ventana 2: Clientes
           </button>
+          
           {/* BOTÓN GASTOS */}
           <button
             onClick={() => router.push('/admin/egresos')}
@@ -47,7 +60,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           >
             <FileDown size={18} /> Ventana 3: Gastos
           </button>
-          {/* BOTÓN GASTOS */}
+          
+          {/* BOTÓN CONCILIACIÓN */}
           <button
             onClick={() => router.push('/admin/gastos')}
             className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${isSelected('/admin/gastos') ? 'bg-blue-600 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'
