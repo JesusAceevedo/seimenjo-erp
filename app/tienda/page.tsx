@@ -84,7 +84,6 @@ export default function Tienda() {
         }
         
         const datosSesion = JSON.parse(sesionGuardada);
-        setSesion(datosSesion);
 
         // 1. Cargar Productos
         const { data: dataProductos, error: errProd } = await supabase.from('productos').select('*');
@@ -94,9 +93,23 @@ export default function Tienda() {
         const { data: dataVariantes, error: errVar } = await supabase.from('producto_variantes').select('*');
         if (errVar) throw new Error(`Fallo al cargar variantes: ${errVar.message}`);
         
-        // 3. Cargar Precios Especiales
+        // 3. Cargar Precios Especiales e Información de la Sucursal (empresa_id)
         let mapaPrecios: Record<string, number> = {};
+        let clientEmpresaId = datosSesion.empresa_id || null;
+
         if (datosSesion.tipo === 'b2b' && datosSesion.id) {
+          // Si no está en la sesión guardada en localStorage, lo obtenemos de la base de datos
+          if (!clientEmpresaId) {
+            const { data: clientData } = await supabase
+              .from('clientes')
+              .select('empresa_id')
+              .eq('id', datosSesion.id)
+              .maybeSingle();
+            if (clientData) {
+              clientEmpresaId = clientData.empresa_id;
+            }
+          }
+
           const { data: dataPrecios, error: errPrecios } = await supabase
             .from('precios_especiales')
             .select('variante_id, precio_pactado')
@@ -113,6 +126,8 @@ export default function Tienda() {
           // Cargar facturas
           cargarFacturas(datosSesion.id);
         }
+
+        setSesion({ ...datosSesion, empresa_id: clientEmpresaId });
 
         setProductos(dataProductos || []);
         setVariantes(dataVariantes || []);
@@ -175,6 +190,7 @@ export default function Tienda() {
       .from('pedidos')
       .insert({
         cliente_id: sesion?.tipo === 'b2b' ? sesion.id : null,
+        empresa_id: sesion?.empresa_id || null,
         precio_total: totalCarrito,
         comentarios: comentarios || null
       })

@@ -58,11 +58,19 @@ export default function AdminLogin() {
     const clienteId = authData.user.user_metadata?.cliente_id;
 
     if (tipoUsuario === 'cliente' && clienteId) {
-      // Registrar sesión de cliente
+      // Obtener la sucursal (empresa_id) a la cual está asociado el cliente
+      const { data: clientData } = await supabase
+        .from('clientes')
+        .select('empresa_id')
+        .eq('id', clienteId)
+        .maybeSingle();
+
+      // Registrar sesión de cliente con empresa_id
       localStorage.setItem('seimenjo_session', JSON.stringify({
         id: clienteId,
         tipo: 'b2b',
-        email: authData.user.email
+        email: authData.user.email,
+        empresa_id: clientData?.empresa_id || null
       }));
       router.push('/tienda');
       setLoading(false);
