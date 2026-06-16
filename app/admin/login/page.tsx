@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { supabase } from '../../../lib/supabase';
 import { useRouter } from 'next/navigation';
 import { LogIn, AlertCircle, Loader, Sun, Moon } from 'lucide-react';
@@ -11,8 +11,27 @@ export default function AdminLogin() {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [logoUrl, setLogoUrl] = useState<string | null>(null);
   const { isDarkMode, toggleDarkMode } = useThemeMode();
   const router = useRouter();
+
+  useEffect(() => {
+    const fetchLogo = async () => {
+      try {
+        const { data } = await supabase
+          .from('configuracion_ticket')
+          .select('logo_url')
+          .limit(1)
+          .maybeSingle();
+        if (data?.logo_url) {
+          setLogoUrl(data.logo_url);
+        }
+      } catch (err) {
+        console.error('Error fetching logo for login:', err);
+      }
+    };
+    fetchLogo();
+  }, []);
 
   const handleLogin = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -34,20 +53,42 @@ export default function AdminLogin() {
     // 2. Depuración: Ver qué UUID recibimos
     console.log("UUID de Auth:", authData.user.id);
     
-    // 3. Validar si el usuario es Admin en nuestra tabla (usando rol_id = 1)
+    // 3. Validar tipo de usuario desde metadata
+    const tipoUsuario = authData.user.user_metadata?.tipo_usuario;
+    const clienteId = authData.user.user_metadata?.cliente_id;
+
+    if (tipoUsuario === 'cliente' && clienteId) {
+      // Registrar sesión de cliente
+      localStorage.setItem('seimenjo_session', JSON.stringify({
+        id: clienteId,
+        tipo: 'b2b',
+        email: authData.user.email
+      }));
+      router.push('/tienda');
+      setLoading(false);
+      return;
+    }
+    
+    // De lo contrario, validar si es Staff (cualquier staff con registro en usuarios_staff)
     const { data: staff, error: staffError } = await supabase
       .from('usuarios_staff')
-      .select('rol_id, supabase_auth_id')
+      .select('id, es_superusuario, empresa_id')
       .eq('supabase_auth_id', authData.user.id)
-      .eq('rol_id', 1) // Filtramos directamente por el rol de Admin
-      .single();
+      .maybeSingle();
 
     console.log("Resultado de búsqueda en staff:", staff);
 
     if (staff) {
+      localStorage.setItem('seimenjo_session', JSON.stringify({
+        id: authData.user.id,
+        tipo: 'staff',
+        email: authData.user.email,
+        es_superusuario: staff.es_superusuario,
+        empresa_id: staff.empresa_id
+      }));
       router.push('/admin/monitor');
     } else {
-      setError('Acceso denegado. No tienes permisos de administrador.');
+      setError('Acceso denegado. No tienes permisos asignados.');
       await supabase.auth.signOut();
     }
     setLoading(false);
@@ -68,9 +109,13 @@ export default function AdminLogin() {
         </div>
 
         <div className="text-center mb-10">
-          <div className="inline-flex mb-4 p-3 bg-amber-500/10 rounded-xl border border-amber-500/20">
-            <LogIn className="w-8 h-8 text-amber-400" />
-          </div>
+          {logoUrl ? (
+            <img src={logoUrl} alt="Logo" className="w-16 h-16 rounded-2xl object-contain border border-amber-500/20 bg-white mx-auto mb-4" />
+          ) : (
+            <div className="inline-flex mb-4 p-3 bg-amber-500/10 rounded-xl border border-amber-500/20">
+              <LogIn className="w-8 h-8 text-amber-400" />
+            </div>
+          )}
           <h1 className="text-4xl font-bold mb-2">
             SEIMENJO
           </h1>

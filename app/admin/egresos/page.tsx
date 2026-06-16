@@ -1,11 +1,11 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../../lib/supabase';
 import { useThemeMode } from '../../../lib/useThemeMode';
 import { 
-  Plus, Users, Sun, Moon, Eye, ChevronLeft, ChevronRight, FileText, Save, X, Receipt
+  Plus, Users, Sun, Moon, Eye, ChevronLeft, ChevronRight, FileText, Save, X, Receipt, Search
 } from 'lucide-react';
 export const dynamic = 'force-dynamic';
 export default function AdminGastos() {
@@ -21,10 +21,13 @@ export default function AdminGastos() {
   const { isDarkMode, toggleDarkMode } = useThemeMode();
   const [page, setPage] = useState(0);
   const pageSize = 10;
+  const [formasPagoList, setFormasPagoList] = useState<any[]>([]);
+  const [busquedaGasto, setBusquedaGasto] = useState('');
   
   // Estados del Modal Manual
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [nuevoProveedorNombre, setNuevoProveedorNombre] = useState('');
+  const [nuevoProveedorRfc, setNuevoProveedorRfc] = useState('');
   const [isConceptoOtro, setIsConceptoOtro] = useState(false);
   const [nuevoGasto, setNuevoGasto] = useState({
     fecha_gasto: new Date().toISOString().split('T')[0],
@@ -51,9 +54,10 @@ export default function AdminGastos() {
   };
 
   const fetchCatalogos = async () => {
-    const [cats, provs] = await Promise.all([
+    const [cats, provs, formas] = await Promise.all([
       supabase.from('categorias_gasto').select('*').order('nombre'),
-      supabase.from('proveedores').select('*').order('nombre_comercial')
+      supabase.from('proveedores').select('*').order('nombre_comercial'),
+      supabase.from('formas_pago').select('*').order('nombre', { ascending: true })
     ]);
     
     if (cats.error) console.error("Error cargando categorías:", cats.error);
@@ -61,6 +65,7 @@ export default function AdminGastos() {
 
     if (cats.data) setCategorias(cats.data);
     if (provs.data) setProveedores(provs.data);
+    if (formas.data) setFormasPagoList(formas.data);
   };
 
   const cargarConceptosPorCategoria = async (categoriaId: string) => {
@@ -85,6 +90,18 @@ export default function AdminGastos() {
     fetchCatalogos();
   }, [page]);
 
+  const gastosFiltrados = useMemo(() => {
+    if (!busquedaGasto.trim()) return gastos;
+    const term = busquedaGasto.toLowerCase().trim();
+    return gastos.filter(g => {
+      const concepto = (g.concepto || '').toLowerCase();
+      const proveedor = (g.proveedores?.nombre_comercial || '').toLowerCase();
+      const proveedorRfc = (g.proveedores?.rfc || '').toLowerCase();
+      const categoria = (g.categorias_gasto?.nombre || '').toLowerCase();
+      return concepto.includes(term) || proveedor.includes(term) || proveedorRfc.includes(term) || categoria.includes(term);
+    });
+  }, [gastos, busquedaGasto]);
+
   useEffect(() => {
     const init = async () => {
       const { data: { session } } = await supabase.auth.getSession();
@@ -104,9 +121,13 @@ export default function AdminGastos() {
 
     // Si es un proveedor nuevo, crearlo en la tabla proveedores
     if (proveedorFinalId === 'nuevo' && nuevoProveedorNombre.trim() !== '') {
+      const insertData: any = { nombre_comercial: nuevoProveedorNombre.trim() };
+      if (nuevoProveedorRfc.trim()) {
+        insertData.rfc = nuevoProveedorRfc.trim().toUpperCase();
+      }
       const { data: newProv, error: provError } = await supabase
         .from('proveedores')
-        .insert([{ nombre_comercial: nuevoProveedorNombre.trim() }])
+        .insert([insertData])
         .select('id')
         .single();
         
@@ -132,6 +153,7 @@ export default function AdminGastos() {
     if (!error) {
       setIsModalOpen(false);
       setNuevoProveedorNombre('');
+      setNuevoProveedorRfc('');
       setIsConceptoOtro(false);
       setConceptosDisponibles([]);
       setNuevoGasto({
@@ -172,6 +194,20 @@ export default function AdminGastos() {
             </div>
           </div>
 
+          {/* BUSCADOR DE EGRESOS */}
+          <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-4 rounded-xl shadow-md mb-6 flex gap-4 items-center flex-wrap font-sans">
+            <div className="relative flex-1 min-w-[250px]">
+              <Search className="absolute left-3 top-2.5 text-gray-400" size={16} />
+              <input
+                type="text"
+                placeholder="Buscar gastos por concepto, proveedor, RFC o categoría..."
+                value={busquedaGasto}
+                onChange={e => setBusquedaGasto(e.target.value)}
+                className="w-full pl-9 pr-4 py-2 border border-gray-200 dark:border-gray-800 rounded-lg text-sm bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-white outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all"
+              />
+            </div>
+          </div>
+
           {/* TABLA PRINCIPAL DE GASTOS */}
           <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-xl shadow-xl flex flex-col flex-1 overflow-hidden">
             <div className="overflow-x-auto flex-1">
@@ -186,7 +222,7 @@ export default function AdminGastos() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100 dark:divide-gray-800/50 text-xs">
-                  {gastos.map((g) => (
+                  {gastosFiltrados.map((g) => (
                     <tr key={g.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/20 transition-colors">
                       <td className="p-4 font-mono text-gray-600 dark:text-gray-300">
                         {new Date(g.fecha_gasto).toLocaleDateString('es-MX', { timeZone: 'UTC' })}
@@ -293,13 +329,21 @@ export default function AdminGastos() {
 
                   {/* Input condicional para proveedor nuevo */}
                   {nuevoGasto.proveedor_id === 'nuevo' && (
-                    <div className="mt-2 animate-in fade-in slide-in-from-top-2">
+                    <div className="mt-2 space-y-2 animate-in fade-in slide-in-from-top-2 font-sans">
                       <input 
                         type="text" 
-                        placeholder="Ej. Mercado Libre, Hielería, etc..." 
+                        placeholder="Nombre comercial del proveedor (ej. Mercado Libre)..." 
                         value={nuevoProveedorNombre}
                         className="w-full border-b-2 border-blue-500 bg-transparent p-2 text-sm text-gray-900 dark:text-white focus:outline-none" 
                         onChange={e => setNuevoProveedorNombre(e.target.value)} 
+                      />
+                      <input 
+                        type="text" 
+                        placeholder="RFC (Opcional, ej. XAXX010101000)..." 
+                        value={nuevoProveedorRfc}
+                        maxLength={13}
+                        className="w-full border-b border-gray-300 dark:border-gray-700 bg-transparent p-2 text-xs text-gray-900 dark:text-white uppercase focus:outline-none focus:border-blue-500" 
+                        onChange={e => setNuevoProveedorRfc(e.target.value)} 
                       />
                     </div>
                   )}
@@ -363,9 +407,10 @@ export default function AdminGastos() {
                       className="w-full mt-1 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-lg text-sm text-gray-900 dark:text-white" 
                       onChange={e => setNuevoGasto({...nuevoGasto, metodo_pago: e.target.value})}
                     >
-                      <option value="Efectivo">Efectivo (Caja Chica)</option>
-                      <option value="Transferencia">Transferencia Bancaria</option>
-                      <option value="Tarjeta">Tarjeta de Débito/Crédito</option>
+                      <option value="">Seleccionar método...</option>
+                      {formasPagoList.map(f => (
+                        <option key={f.id} value={f.nombre}>{f.nombre}</option>
+                      ))}
                     </select>
                   </div>
                 </div>
