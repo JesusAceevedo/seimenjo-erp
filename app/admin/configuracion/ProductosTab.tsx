@@ -47,6 +47,19 @@ export default function ProductosTab() {
   const [selectedVar, setSelectedVar] = useState<Variante | null>(null);
   const [preciosEspeciales, setPreciosEspeciales] = useState<PrecioEspecial[]>([]);
 
+  // --- CATALOGOS DE BASE DE DATOS ---
+  interface CatalogItem {
+    id: string;
+    nombre: string;
+  }
+  const [categoriasCatalog, setCategoriasCatalog] = useState<CatalogItem[]>([]);
+  const [unidadesCatalog, setUnidadesCatalog] = useState<CatalogItem[]>([]);
+  const [showCatalogModal, setShowCatalogModal] = useState<null | 'categorias' | 'unidades'>(null);
+  const [catalogInput, setCatalogInput] = useState('');
+  const [editingCatalogItem, setEditingCatalogItem] = useState<CatalogItem | null>(null);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [catalogSaving, setCatalogSaving] = useState(false);
+
   // --- FORMULARIO DE PRODUCTO ---
   const [prodId, setProdId] = useState<string | null>(null);
   const [prodNombre, setProdNombre] = useState('');
@@ -109,9 +122,37 @@ export default function ProductosTab() {
     }
   };
 
+  const loadCatalogos = async () => {
+    try {
+      const { data: cats } = await supabase
+        .from('cat_categorias_producto')
+        .select('id, nombre')
+        .order('nombre');
+      const activeCats = cats || [];
+      setCategoriasCatalog(activeCats);
+
+      const { data: unis } = await supabase
+        .from('cat_unidades_medida')
+        .select('id, nombre')
+        .order('nombre');
+      const activeUnis = unis || [];
+      setUnidadesCatalog(activeUnis);
+
+      if (activeCats.length > 0 && !prodId) {
+        setProdCategoria(prev => prev || activeCats[0].nombre);
+      }
+      if (activeUnis.length > 0 && !prodId) {
+        setProdUnidadMedida(prev => prev || activeUnis[0].nombre);
+      }
+    } catch (err) {
+      console.error('Error al cargar catálogos:', err);
+    }
+  };
+
   useEffect(() => {
     loadProductos();
     loadClientes();
+    loadCatalogos();
   }, []);
 
   // --- CARGA DE VARIANTES AL SELECCIONAR PRODUCTO ---
@@ -292,13 +333,77 @@ export default function ProductosTab() {
   const resetProductoForm = () => {
     setProdId(null);
     setProdNombre('');
-    setProdCategoria('Fideos');
+    setProdCategoria(categoriasCatalog[0]?.nombre || 'Fideos');
     setProdImagenFile(null);
     setProdImagenPreview(null);
     setProdImagenUrl('');
     setProdPrecioBase('');
-    setProdUnidadMedida('Pieza');
+    setProdUnidadMedida(unidadesCatalog[0]?.nombre || 'Pieza');
     if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const getCatalogTable = () => {
+    return showCatalogModal === 'categorias' 
+      ? 'cat_categorias_producto' 
+      : 'cat_unidades_medida';
+  };
+
+  const handleSaveCatalogItem = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!catalogInput.trim() || !showCatalogModal) return;
+
+    setCatalogSaving(true);
+    setCatalogError(null);
+
+    const tableName = getCatalogTable();
+    const payload: any = { nombre: catalogInput.trim() };
+    
+    if (editingCatalogItem) {
+      payload.id = editingCatalogItem.id;
+    }
+
+    try {
+      const { error } = await supabase
+        .from(tableName)
+        .upsert(payload);
+
+      if (error) throw error;
+
+      setCatalogInput('');
+      setEditingCatalogItem(null);
+      await loadCatalogos();
+    } catch (err: any) {
+      console.error(err);
+      setCatalogError('Error al guardar: ' + err.message);
+    } finally {
+      setCatalogSaving(false);
+    }
+  };
+
+  const handleDeleteCatalogItem = async (item: CatalogItem) => {
+    if (!showCatalogModal) return;
+    if (!confirm(`¿Estás seguro de eliminar "${item.nombre}"?`)) return;
+
+    setCatalogSaving(true);
+    setCatalogError(null);
+
+    const tableName = getCatalogTable();
+
+    try {
+      const { error } = await supabase
+        .from(tableName)
+        .delete()
+        .eq('id', item.id);
+
+      if (error) throw error;
+
+      await loadCatalogos();
+    } catch (err: any) {
+      console.error(err);
+      setCatalogError('Error al eliminar: ' + err.message);
+    } finally {
+      setCatalogSaving(false);
+    }
   };
 
   const handleEditProducto = (prod: Producto) => {
@@ -495,34 +600,78 @@ export default function ProductosTab() {
 
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="text-[10px] font-bold text-gray-500 uppercase">Categoría</label>
+                <div className="flex justify-between items-center">
+                  <label className="text-[10px] font-bold text-gray-500 uppercase">Categoría</label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowCatalogModal('categorias');
+                      setCatalogInput('');
+                      setEditingCatalogItem(null);
+                      setCatalogError(null);
+                    }}
+                    className="text-[10px] text-amber-600 hover:text-amber-500 font-bold"
+                  >
+                    Gestionar
+                  </button>
+                </div>
                 <select
                   value={prodCategoria}
                   className="w-full mt-1 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-xl text-sm text-gray-900 dark:text-white focus:ring-1 focus:ring-amber-500 outline-none"
                   onChange={e => setProdCategoria(e.target.value)}
                 >
-                  <option value="Fideos">Fideos</option>
-                  <option value="Tortillas">Tortillas</option>
-                  <option value="Salsas">Salsas</option>
-                  <option value="Caldo">Caldo</option>
-                  <option value="Toppings">Toppings</option>
-                  <option value="Otros">Otros</option>
+                  {categoriasCatalog.length > 0 ? (
+                    categoriasCatalog.map(c => (
+                      <option key={c.id} value={c.nombre}>{c.nombre}</option>
+                    ))
+                  ) : (
+                    <>
+                      <option value="Fideos">Fideos</option>
+                      <option value="Tortillas">Tortillas</option>
+                      <option value="Salsas">Salsas</option>
+                      <option value="Caldo">Caldo</option>
+                      <option value="Toppings">Toppings</option>
+                      <option value="Otros">Otros</option>
+                    </>
+                  )}
                 </select>
               </div>
 
               <div>
-                <label className="text-[10px] font-bold text-gray-500 uppercase">Unidad de Medida</label>
+                <div className="flex justify-between items-center">
+                  <label className="text-[10px] font-bold text-gray-500 uppercase">Unidad de Medida</label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowCatalogModal('unidades');
+                      setCatalogInput('');
+                      setEditingCatalogItem(null);
+                      setCatalogError(null);
+                    }}
+                    className="text-[10px] text-amber-600 hover:text-amber-500 font-bold"
+                  >
+                    Gestionar
+                  </button>
+                </div>
                 <select
                   value={prodUnidadMedida}
                   className="w-full mt-1 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-xl text-sm text-gray-900 dark:text-white focus:ring-1 focus:ring-amber-500 outline-none"
                   onChange={e => setProdUnidadMedida(e.target.value)}
                 >
-                  <option value="Pieza">Pieza</option>
-                  <option value="Kg">Kg</option>
-                  <option value="Litro">Litro</option>
-                  <option value="Caja">Caja</option>
-                  <option value="Paquete">Paquete</option>
-                  <option value="Gramo">Gramo</option>
+                  {unidadesCatalog.length > 0 ? (
+                    unidadesCatalog.map(u => (
+                      <option key={u.id} value={u.nombre}>{u.nombre}</option>
+                    ))
+                  ) : (
+                    <>
+                      <option value="Pieza">Pieza</option>
+                      <option value="Kg">Kg</option>
+                      <option value="Litro">Litro</option>
+                      <option value="Caja">Caja</option>
+                      <option value="Paquete">Paquete</option>
+                      <option value="Gramo">Gramo</option>
+                    </>
+                  )}
                 </select>
               </div>
             </div>
@@ -921,6 +1070,110 @@ export default function ProductosTab() {
         )}
       </div>
 
+      {/* MODAL DE GESTIÓN DE CATÁLOGOS */}
+      {showCatalogModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
+          <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 w-full max-w-md rounded-2xl shadow-2xl p-6 space-y-4">
+            <div className="flex justify-between items-center pb-2 border-b border-gray-100 dark:border-gray-850">
+              <h3 className="font-bold text-lg text-gray-900 dark:text-white">
+                Gestionar {showCatalogModal === 'categorias' ? 'Categorías' : 'Unidades de Medida'}
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowCatalogModal(null)}
+                className="p-1 rounded-lg text-gray-400 hover:text-gray-650 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-900"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            {catalogError && (
+              <div className="p-3 bg-red-50 dark:bg-red-950/40 text-red-800 dark:text-red-400 border border-red-200 dark:border-red-900/50 rounded-xl text-xs flex gap-2">
+                <AlertTriangle className="shrink-0 w-4 h-4 mt-0.5" />
+                <span>{catalogError}</span>
+              </div>
+            )}
+
+            {/* Formulario de registro/edición */}
+            <form onSubmit={handleSaveCatalogItem} className="flex gap-2 items-end">
+              <div className="flex-1 col-span-2">
+                <label className="text-[10px] font-bold text-gray-500 uppercase">
+                  {editingCatalogItem ? 'Editar Nombre' : 'Nuevo Elemento'}
+                </label>
+                <input
+                  type="text"
+                  placeholder={showCatalogModal === 'categorias' ? 'Ej. Postres, Bebidas' : 'Ej. Metro, Docena'}
+                  value={catalogInput}
+                  className="w-full mt-1 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs text-gray-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-amber-500"
+                  onChange={e => setCatalogInput(e.target.value)}
+                  required
+                  autoFocus
+                />
+              </div>
+              <div className="flex gap-1">
+                {editingCatalogItem && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditingCatalogItem(null);
+                      setCatalogInput('');
+                    }}
+                    className="h-8 px-3 rounded-lg border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-350 text-xs font-bold hover:bg-gray-100 dark:hover:bg-gray-800"
+                  >
+                    Cancelar
+                  </button>
+                )}
+                <button
+                  type="submit"
+                  disabled={catalogSaving}
+                  className="h-8 px-4 bg-amber-600 hover:bg-amber-500 text-white font-bold rounded-lg text-xs flex items-center gap-1 disabled:opacity-50"
+                >
+                  <Save size={13} />
+                  {editingCatalogItem ? 'Actualizar' : 'Agregar'}
+                </button>
+              </div>
+            </form>
+
+            {/* Lista de elementos del catálogo */}
+            <div className="space-y-1.5 max-h-60 overflow-y-auto pr-1">
+              {(showCatalogModal === 'categorias' ? categoriasCatalog : unidadesCatalog).map(item => (
+                <div
+                  key={item.id}
+                  className="p-2.5 rounded-lg border border-gray-100 dark:border-gray-900 flex items-center justify-between hover:bg-gray-50 dark:hover:bg-gray-900/50"
+                >
+                  <span className="text-xs text-gray-900 dark:text-white font-medium">{item.nombre}</span>
+                  <div className="flex gap-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingCatalogItem(item);
+                        setCatalogInput(item.nombre);
+                      }}
+                      className="p-1 text-gray-400 hover:text-amber-500 rounded hover:bg-gray-100 dark:hover:bg-gray-850"
+                      title="Editar"
+                    >
+                      <Edit2 size={12} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteCatalogItem(item)}
+                      className="p-1 text-gray-400 hover:text-red-500 rounded hover:bg-gray-100 dark:hover:bg-gray-850"
+                      title="Eliminar"
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+              {(showCatalogModal === 'categorias' ? categoriasCatalog : unidadesCatalog).length === 0 && (
+                <div className="text-center py-6 text-gray-400 italic text-xs">
+                  No hay elementos registrados en este catálogo.
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

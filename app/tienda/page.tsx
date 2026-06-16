@@ -22,6 +22,8 @@ export default function Tienda() {
   const [productos, setProductos] = useState<Producto[]>([]);
   const [variantes, setVariantes] = useState<Variante[]>([]);
   const [preciosEspeciales, setPreciosEspeciales] = useState<Record<string, number>>({});
+  const [empresaNombre, setEmpresaNombre] = useState('Portal SEIMENJO');
+  const [empresaLogoUrl, setEmpresaLogoUrl] = useState<string | null>(null);
   
   const [carrito, setCarrito] = useState<ItemCarrito[]>([]);
   const [comentarios, setComentarios] = useState('');
@@ -107,6 +109,18 @@ export default function Tienda() {
               .maybeSingle();
             if (clientData) {
               clientEmpresaId = clientData.empresa_id;
+            }
+          }
+
+          if (clientEmpresaId) {
+            const { data: empData } = await supabase
+              .from('empresas')
+              .select('nombre, logo_url')
+              .eq('id', clientEmpresaId)
+              .maybeSingle();
+            if (empData) {
+              setEmpresaNombre(empData.nombre);
+              setEmpresaLogoUrl(empData.logo_url);
             }
           }
 
@@ -265,8 +279,12 @@ export default function Tienda() {
           <div className="flex justify-between h-16 items-center">
             <div className="flex items-center space-x-8">
               <div className="flex items-center">
-                <Sparkles className="h-6 w-6 text-indigo-600 mr-2 animate-pulse" />
-                <span className="text-xl font-bold text-gray-900 tracking-tight">Portal SEIMENJO</span>
+                {empresaLogoUrl ? (
+                  <img src={empresaLogoUrl} alt="Logo" className="h-8 w-8 rounded-lg object-contain mr-2 border border-indigo-100 bg-white shadow-sm" />
+                ) : (
+                  <Sparkles className="h-6 w-6 text-indigo-600 mr-2 animate-pulse" />
+                )}
+                <span className="text-xl font-bold text-gray-900 tracking-tight">{empresaNombre}</span>
               </div>
               <nav className="flex space-x-1" aria-label="Tabs">
                 <button

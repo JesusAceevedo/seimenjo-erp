@@ -58,12 +58,16 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             // Consultar si la empresa ya tiene RFC o Razón Social registrada
             const { data: empresaData, error: empresaError } = await supabase
               .from('empresas')
-              .select('nombre, rfc, razon_social')
+              .select('nombre, rfc, razon_social, logo_url')
               .eq('id', datosSesion.empresa_id)
               .maybeSingle();
 
             if (empresaData?.nombre) {
               setEmpresaNombre(empresaData.nombre);
+            }
+
+            if (empresaData?.logo_url) {
+              setLogoUrl(empresaData.logo_url);
             }
 
             if (!empresaError && (!empresaData?.rfc || !empresaData?.razon_social)) {
