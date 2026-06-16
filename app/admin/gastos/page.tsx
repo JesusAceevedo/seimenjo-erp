@@ -18,6 +18,16 @@ export const dynamic = 'force-dynamic';
 
 export default function AdvancedBillingModule() {
   const router = useRouter();
+
+  // Helper de Formato Contable
+  const formatCurrency = (val: any) => {
+    const num = Number(val) || 0;
+    return new Intl.NumberFormat('es-MX', {
+      style: 'currency',
+      currency: 'MXN'
+    }).format(num);
+  };
+
   const { isDarkMode, toggleDarkMode } = useThemeMode();
 
   // --- TAB ACTIVAS EN LA VISUALIZACIÓN ---
@@ -360,7 +370,7 @@ export default function AdvancedBillingModule() {
         const selectedPedido = pedidosPendientes.find(p => p.id === asociarRegistroId);
         if (selectedPedido && Math.abs(Number(selectedPedido.precio_total) - Number(parsedXmlData.total)) > 0.01) {
           setMessage({
-            text: `El importe de la venta ($${Number(selectedPedido.precio_total).toFixed(2)}) no coincide con el importe de la factura ($${Number(parsedXmlData.total).toFixed(2)}).`,
+            text: `El importe de la venta (${formatCurrency(selectedPedido.precio_total)}) no coincide con el importe de la factura (${formatCurrency(parsedXmlData.total)}).`,
             type: 'error'
           });
           return;
@@ -369,7 +379,7 @@ export default function AdvancedBillingModule() {
         const selectedGasto = gastosPendientes.find(g => g.id === asociarRegistroId);
         if (selectedGasto && Math.abs(Number(selectedGasto.monto) - Number(parsedXmlData.total)) > 0.01) {
           setMessage({
-            text: `El importe del gasto ($${Number(selectedGasto.monto).toFixed(2)}) no coincide con el importe de la factura ($${Number(parsedXmlData.total).toFixed(2)}).`,
+            text: `El importe del gasto (${formatCurrency(selectedGasto.monto)}) no coincide con el importe de la factura (${formatCurrency(parsedXmlData.total)}).`,
             type: 'error'
           });
           return;
@@ -621,15 +631,15 @@ export default function AdvancedBillingModule() {
                     <div className="col-span-2 border-t border-dashed border-gray-200 dark:border-gray-800 pt-1.5 mt-1"></div>
                     <div>
                       <span className="text-[10px] text-gray-400 uppercase">Subtotal</span>
-                      <p className="font-bold text-gray-800 dark:text-gray-200">${Number(parsedXmlData.subtotal).toFixed(2)}</p>
+                      <p className="font-bold text-gray-800 dark:text-gray-200">{formatCurrency(parsedXmlData.subtotal)}</p>
                     </div>
                     <div>
                       <span className="text-[10px] text-gray-400 uppercase">IVA (002)</span>
-                      <p className="font-bold text-gray-800 dark:text-gray-200">${Number(parsedXmlData.iva).toFixed(2)}</p>
+                      <p className="font-bold text-gray-800 dark:text-gray-200">{formatCurrency(parsedXmlData.iva)}</p>
                     </div>
                     <div className="col-span-2">
                       <span className="text-[10px] text-gray-400 uppercase">Total XML</span>
-                      <p className="text-base font-extrabold text-blue-500">${Number(parsedXmlData.total).toFixed(2)}</p>
+                      <p className="text-base font-extrabold text-blue-500">{formatCurrency(parsedXmlData.total)}</p>
                     </div>
                   </div>
                 </div>
@@ -772,8 +782,8 @@ export default function AdvancedBillingModule() {
                           <div className="font-mono text-[10px] text-gray-400">{g.proveedores?.rfc}</div>
                         </td>
                         <td className="p-4 text-right font-mono">
-                          <div className="font-bold text-red-500">-${Number(g.monto).toFixed(2)}</div>
-                          <div className="text-[10px] text-gray-400">IVA: ${Number(g.iva_acreditable || 0).toFixed(2)}</div>
+                          <div className="font-bold text-red-500">-{formatCurrency(g.monto)}</div>
+                          <div className="text-[10px] text-gray-400">IVA: {formatCurrency(g.iva_acreditable || 0)}</div>
                         </td>
                         <td className="p-4 text-center">
                           <div className="flex gap-1 justify-center">
@@ -888,8 +898,8 @@ export default function AdvancedBillingModule() {
                             <div className="font-mono text-[10px] text-gray-400">{clientRfc}</div>
                           </td>
                           <td className="p-4 text-right font-mono">
-                            <div className="font-bold text-emerald-500">+${Number(totalAmount).toFixed(2)}</div>
-                            <div className="text-[10px] text-gray-400">IVA: ${Number(ivaAmount).toFixed(2)}</div>
+                            <div className="font-bold text-emerald-500">+{formatCurrency(totalAmount)}</div>
+                            <div className="text-[10px] text-gray-400">IVA: {formatCurrency(ivaAmount)}</div>
                           </td>
                           <td className="p-4 text-center">
                             {invoice ? (
@@ -969,7 +979,7 @@ export default function AdvancedBillingModule() {
               <div className="p-4 bg-gray-50 dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 space-y-2">
                 <p>Estimado/a <strong>{emailModal.details.cliente}</strong>,</p>
                 <p className="text-xs text-gray-600 dark:text-gray-300">
-                  Le hacemos llegar la factura correspondiente a su pedido con número <strong>#{emailModal.details.numero_pedido}</strong> por un total de <strong>${Number(emailModal.details.total).toFixed(2)} MXN</strong>.
+                  Le hacemos llegar la factura correspondiente a su pedido con número <strong>#{emailModal.details.numero_pedido}</strong> por un total de <strong>{formatCurrency(emailModal.details.total)} MXN</strong>.
                 </p>
                 <p className="text-xs text-gray-400 font-mono">
                   UUID Fiscal: {emailModal.details.uuid_fiscal}
@@ -1143,7 +1153,7 @@ export default function AdvancedBillingModule() {
                                 {p.fecha_pedido ? new Date(p.fecha_pedido).toLocaleDateString() : 'N/A'}
                               </td>
                               <td className="p-3 text-right font-mono font-bold text-gray-800 dark:text-gray-200">
-                                ${Number(p.precio_total).toFixed(2)}
+                                {formatCurrency(p.precio_total)}
                               </td>
                             </tr>
                           ))}
@@ -1162,11 +1172,11 @@ export default function AdvancedBillingModule() {
                       <div className="text-right">
                         <span className="text-xs text-gray-500 dark:text-gray-400">Monto total acumulado:</span>
                         <p className="text-lg font-mono font-extrabold text-emerald-600 dark:text-emerald-400">
-                          $
-                          {facturacionAcumuladaModal.pedidos
-                            .filter(p => facturacionAcumuladaModal.seleccionados.includes(p.id))
-                            .reduce((sum, p) => sum + Number(p.precio_total || 0), 0)
-                            .toFixed(2)}
+                          {formatCurrency(
+                            facturacionAcumuladaModal.pedidos
+                              .filter(p => facturacionAcumuladaModal.seleccionados.includes(p.id))
+                              .reduce((sum, p) => sum + Number(p.precio_total || 0), 0)
+                          )}
                         </p>
                       </div>
                     </div>

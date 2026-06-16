@@ -5,11 +5,23 @@ import { useRouter } from 'next/navigation';
 import { supabase } from '../../../lib/supabase';
 import { useThemeMode } from '../../../lib/useThemeMode';
 import { 
-  Plus, Users, Sun, Moon, Eye, ChevronLeft, ChevronRight, FileText, Save, X, Receipt, Search
+  Plus, Users, Sun, Moon, Eye, ChevronLeft, ChevronRight, FileText, Save, X, Receipt, Search,
+  TrendingUp, TrendingDown, Scale, CreditCard, Calendar, Filter
 } from 'lucide-react';
+
 export const dynamic = 'force-dynamic';
+
 export default function AdminGastos() {
   const router = useRouter();
+
+  // Helper de Formato Contable
+  const formatCurrency = (val: any) => {
+    const num = Number(val) || 0;
+    return new Intl.NumberFormat('es-MX', {
+      style: 'currency',
+      currency: 'MXN'
+    }).format(num);
+  };
 
   // Estados de Datos
   const [gastos, setGastos] = useState<any[]>([]);
@@ -17,13 +29,21 @@ export default function AdminGastos() {
   const [proveedores, setProveedores] = useState<any[]>([]);
   const [conceptosDisponibles, setConceptosDisponibles] = useState<string[]>([]);
   
-  // Estados de UI
+  // Estados de UI y Filtros
   const { isDarkMode, toggleDarkMode } = useThemeMode();
   const [page, setPage] = useState(0);
   const pageSize = 10;
   const [formasPagoList, setFormasPagoList] = useState<any[]>([]);
   const [busquedaGasto, setBusquedaGasto] = useState('');
   
+  // Filtros de fecha y método de pago
+  const [filtroRango, setFiltroRango] = useState<string>('todo');
+  const [fechaInicio, setFechaInicio] = useState<string>('');
+  const [fechaFin, setFechaFin] = useState<string>('');
+  const [filtroMetodoPago, setFiltroMetodoPago] = useState<string>('');
+  const [totalVentasPeriodo, setTotalVentasPeriodo] = useState<number>(0);
+  const [isLoading, setIsLoading] = useState<boolean>(false);
+
   // Estados del Modal Manual
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [nuevoProveedorNombre, setNuevoProveedorNombre] = useState('');
@@ -39,18 +59,71 @@ export default function AdminGastos() {
   });
 
   // --- CONSULTAS A BASE DE DATOS ---
-  const fetchGastos = async () => {
-    const from = page * pageSize;
-    const to = from + pageSize - 1;
+  const fetchPeriodData = async () => {
+    setIsLoading(true);
+    try {
+      let startDateStr: string | null = null;
+      let endDateStr: string | null = null;
 
-    const { data, error } = await supabase
-      .from('gastos')
-      .select(`*, proveedores(nombre_comercial, rfc), categorias_gasto(nombre)`)
-      .order('fecha_gasto', { ascending: false })
-      .range(from, to);
+      const hoy = new Date();
+      if (filtroRango === 'semana') {
+        const haceUnaSemana = new Date();
+        haceUnaSemana.setDate(hoy.getDate() - 7);
+        startDateStr = haceUnaSemana.toISOString().split('T')[0];
+      } else if (filtroRango === 'mes') {
+        const haceUnMes = new Date();
+        haceUnMes.setMonth(hoy.getMonth() - 1);
+        startDateStr = haceUnMes.toISOString().split('T')[0];
+      } else if (filtroRango === 'rango' && fechaInicio) {
+        startDateStr = fechaInicio;
+        if (fechaFin) {
+          endDateStr = fechaFin;
+        }
+      }
 
-    if (error) console.error("Error cargando gastos:", error);
-    if (data) setGastos(data);
+      // 1. Consultar ventas del período
+      let salesQuery = supabase
+        .from('pedidos')
+        .select('precio_total, created_at, estatus_pago');
+
+      if (startDateStr) {
+        salesQuery = salesQuery.gte('created_at', `${startDateStr}T00:00:00.000Z`);
+      }
+      if (endDateStr) {
+        salesQuery = salesQuery.lte('created_at', `${endDateStr}T23:59:59.999Z`);
+      }
+
+      const { data: salesData, error: salesError } = await salesQuery;
+      if (salesError) throw salesError;
+
+      const totalSales = (salesData || [])
+        .filter(p => p.estatus_pago !== 'Cancelado')
+        .reduce((sum, p) => sum + Number(p.precio_total || 0), 0);
+      setTotalVentasPeriodo(totalSales);
+
+      // 2. Consultar egresos del período
+      let gastosQuery = supabase
+        .from('gastos')
+        .select(`*, proveedores(nombre_comercial, rfc), categorias_gasto(nombre)`)
+        .order('fecha_gasto', { ascending: false });
+
+      if (startDateStr) {
+        gastosQuery = gastosQuery.gte('fecha_gasto', startDateStr);
+      }
+      if (endDateStr) {
+        gastosQuery = gastosQuery.lte('fecha_gasto', endDateStr);
+      }
+
+      const { data: gastosData, error: gastosError } = await gastosQuery;
+      if (gastosError) throw gastosError;
+
+      setGastos(gastosData || []);
+      setPage(0); // Reiniciar a la primera página al cambiar filtros
+    } catch (err) {
+      console.error("Error al cargar datos del período:", err);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const fetchCatalogos = async () => {
@@ -85,30 +158,66 @@ export default function AdminGastos() {
     }
   };
 
-  useEffect(() => {
-    fetchGastos();
-    fetchCatalogos();
-  }, [page]);
-
-  const gastosFiltrados = useMemo(() => {
-    if (!busquedaGasto.trim()) return gastos;
-    const term = busquedaGasto.toLowerCase().trim();
-    return gastos.filter(g => {
-      const concepto = (g.concepto || '').toLowerCase();
-      const proveedor = (g.proveedores?.nombre_comercial || '').toLowerCase();
-      const proveedorRfc = (g.proveedores?.rfc || '').toLowerCase();
-      const categoria = (g.categorias_gasto?.nombre || '').toLowerCase();
-      return concepto.includes(term) || proveedor.includes(term) || proveedorRfc.includes(term) || categoria.includes(term);
-    });
-  }, [gastos, busquedaGasto]);
-
+  // Carga inicial y autenticación
   useEffect(() => {
     const init = async () => {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) return router.push('/admin/login');
+      fetchCatalogos();
     };
     init();
   }, [router]);
+
+  // Cargar datos al cambiar filtros
+  useEffect(() => {
+    fetchPeriodData();
+  }, [filtroRango, fechaInicio, fechaFin]);
+
+  // Métricas de Gastos
+  const kpiGastos = useMemo(() => {
+    let total = 0;
+    const breakdown: Record<string, number> = {};
+
+    gastos.forEach(g => {
+      const monto = Number(g.monto || 0);
+      total += monto;
+      const metodo = g.metodo_pago || 'Efectivo';
+      breakdown[metodo] = (breakdown[metodo] || 0) + monto;
+    });
+
+    const balance = totalVentasPeriodo - total;
+
+    return { total, breakdown, balance };
+  }, [gastos, totalVentasPeriodo]);
+
+  // Gastos filtrados por método de pago y búsqueda
+  const gastosFiltrados = useMemo(() => {
+    let filtrados = [...gastos];
+
+    if (filtroMetodoPago) {
+      filtrados = filtrados.filter(g => g.metodo_pago === filtroMetodoPago);
+    }
+
+    if (busquedaGasto.trim()) {
+      const term = busquedaGasto.toLowerCase().trim();
+      filtrados = filtrados.filter(g => {
+        const concepto = (g.concepto || '').toLowerCase();
+        const proveedor = (g.proveedores?.nombre_comercial || '').toLowerCase();
+        const proveedorRfc = (g.proveedores?.rfc || '').toLowerCase();
+        const categoria = (g.categorias_gasto?.nombre || '').toLowerCase();
+        return concepto.includes(term) || proveedor.includes(term) || proveedorRfc.includes(term) || categoria.includes(term);
+      });
+    }
+
+    return filtrados;
+  }, [gastos, filtroMetodoPago, busquedaGasto]);
+
+  // Paginación en memoria
+  const paginatedGastos = useMemo(() => {
+    const from = page * pageSize;
+    const to = from + pageSize;
+    return gastosFiltrados.slice(from, to);
+  }, [gastosFiltrados, page]);
 
   // --- LÓGICA DE GUARDADO MANUAL ---
   const handleGuardarGasto = async () => {
@@ -160,7 +269,7 @@ export default function AdminGastos() {
         fecha_gasto: new Date().toISOString().split('T')[0],
         proveedor_id: '', categoria_id: '', concepto: '', monto: '', metodo_pago: 'Efectivo'
       });
-      fetchGastos();
+      fetchPeriodData();
       fetchCatalogos();
     } else {
       // Ahora si hay un error, el sistema te lo notificará claramente en pantalla
@@ -194,8 +303,124 @@ export default function AdminGastos() {
             </div>
           </div>
 
-          {/* BUSCADOR DE EGRESOS */}
+          {/* DASHBOARD KPIS */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-6 font-sans">
+            {/* Ventas */}
+            <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-5 rounded-2xl shadow-lg flex items-center gap-4 hover:border-blue-500/30 transition-all">
+              <div className="p-3 bg-emerald-500/10 text-emerald-500 rounded-xl animate-pulse">
+                <TrendingUp size={24} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <span className="text-xs text-gray-500 dark:text-gray-400 font-semibold uppercase tracking-wider block">Total Ventas (Ingresos)</span>
+                <span className="text-2xl font-black text-gray-900 dark:text-white block truncate">
+                  {isLoading ? '...' : formatCurrency(totalVentasPeriodo)}
+                </span>
+              </div>
+            </div>
+
+            {/* Gastos */}
+            <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-5 rounded-2xl shadow-lg flex items-center gap-4 hover:border-blue-500/30 transition-all">
+              <div className="p-3 bg-red-500/10 text-red-500 rounded-xl">
+                <TrendingDown size={24} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <span className="text-xs text-gray-500 dark:text-gray-400 font-semibold uppercase tracking-wider block">Total Gastos (Egresos)</span>
+                <span className="text-2xl font-black text-gray-900 dark:text-white block truncate">
+                  {isLoading ? '...' : formatCurrency(kpiGastos.total)}
+                </span>
+              </div>
+            </div>
+
+            {/* Balance Neto */}
+            <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-5 rounded-2xl shadow-lg flex items-center gap-4 hover:border-blue-500/30 transition-all">
+              <div className={`p-3 rounded-xl ${kpiGastos.balance >= 0 ? 'bg-emerald-500/10 text-emerald-500' : 'bg-red-500/10 text-red-500'}`}>
+                <Scale size={24} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <span className="text-xs text-gray-500 dark:text-gray-400 font-semibold uppercase tracking-wider block">Balance Neto</span>
+                <span className={`text-2xl font-black block truncate ${kpiGastos.balance >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
+                  {isLoading ? '...' : formatCurrency(kpiGastos.balance)}
+                </span>
+              </div>
+            </div>
+
+            {/* Desglose por Método de Pago */}
+            <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-5 rounded-2xl shadow-lg flex flex-col justify-between hover:border-blue-500/30 transition-all min-h-[110px]">
+              <div className="flex items-center gap-2 border-b border-gray-150 dark:border-gray-850 pb-1.5 mb-1.5">
+                <CreditCard size={16} className="text-blue-500" />
+                <span className="text-xs text-gray-500 dark:text-gray-400 font-bold uppercase tracking-wider">Egresos por Método</span>
+              </div>
+              <div className="flex-1 overflow-y-auto max-h-[70px] space-y-1 pr-1 font-mono text-[10px]">
+                {isLoading ? (
+                  <div className="text-gray-400 italic">Cargando...</div>
+                ) : Object.entries(kpiGastos.breakdown).length > 0 ? (
+                  Object.entries(kpiGastos.breakdown).map(([metodo, monto]) => (
+                    <div key={metodo} className="flex justify-between items-center text-gray-700 dark:text-gray-300">
+                      <span className="truncate max-w-[100px]">{metodo}:</span>
+                      <span className="font-bold">{formatCurrency(monto)}</span>
+                    </div>
+                  ))
+                ) : (
+                  <div className="text-gray-400 italic">Sin egresos en el período</div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* BUSCADOR Y FILTROS DE EGRESOS */}
           <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-4 rounded-xl shadow-md mb-6 flex gap-4 items-center flex-wrap font-sans">
+            {/* Filtro Rango de Fechas */}
+            <div className="flex items-center gap-2">
+              <Calendar size={18} className="text-gray-400" />
+              <select 
+                value={filtroRango}
+                onChange={(e) => setFiltroRango(e.target.value)}
+                className="border border-gray-200 dark:border-gray-800 p-2 rounded-lg text-sm bg-gray-50 dark:bg-gray-900 outline-none text-gray-900 dark:text-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+              >
+                <option value="todo">Todos los egresos</option>
+                <option value="semana">Última semana</option>
+                <option value="mes">Último mes</option>
+                <option value="rango">Rango personalizado</option>
+              </select>
+            </div>
+
+            {/* Inputs de Rango Personalizado */}
+            {filtroRango === 'rango' && (
+              <div className="flex gap-2 items-center animate-in fade-in duration-200">
+                <input 
+                  type="date" 
+                  value={fechaInicio}
+                  onChange={e => setFechaInicio(e.target.value)}
+                  style={{ colorScheme: isDarkMode ? 'dark' : 'light' }}
+                  className="border border-gray-200 dark:border-gray-800 p-2 rounded-lg text-sm bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-white focus:border-blue-500 outline-none focus:ring-1 focus:ring-blue-500" 
+                />
+                <span className="text-xs text-gray-400 font-bold">a</span>
+                <input 
+                  type="date" 
+                  value={fechaFin}
+                  onChange={e => setFechaFin(e.target.value)}
+                  style={{ colorScheme: isDarkMode ? 'dark' : 'light' }}
+                  className="border border-gray-200 dark:border-gray-800 p-2 rounded-lg text-sm bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-white focus:border-blue-500 outline-none focus:ring-1 focus:ring-blue-500" 
+                />
+              </div>
+            )}
+
+            {/* Filtro de Método de Pago */}
+            <div className="flex items-center gap-2">
+              <Filter size={18} className="text-gray-400" />
+              <select 
+                value={filtroMetodoPago}
+                onChange={(e) => setFiltroMetodoPago(e.target.value)}
+                className="border border-gray-200 dark:border-gray-800 p-2 rounded-lg text-sm bg-gray-50 dark:bg-gray-900 outline-none text-gray-900 dark:text-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+              >
+                <option value="">Todos los métodos</option>
+                {formasPagoList.map(f => (
+                  <option key={f.id} value={f.nombre}>{f.nombre}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Buscador de Texto */}
             <div className="relative flex-1 min-w-[250px]">
               <Search className="absolute left-3 top-2.5 text-gray-400" size={16} />
               <input
@@ -222,7 +447,7 @@ export default function AdminGastos() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100 dark:divide-gray-800/50 text-xs">
-                  {gastosFiltrados.map((g) => (
+                  {paginatedGastos.map((g) => (
                     <tr key={g.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/20 transition-colors">
                       <td className="p-4 font-mono text-gray-600 dark:text-gray-300">
                         {new Date(g.fecha_gasto).toLocaleDateString('es-MX', { timeZone: 'UTC' })}
@@ -243,14 +468,14 @@ export default function AdminGastos() {
                         </span>
                       </td>
                       <td className="p-4 text-right font-bold text-sm text-red-600 dark:text-red-400">
-                        - ${Number(g.monto).toFixed(2)}
+                        - {formatCurrency(g.monto)}
                       </td>
                     </tr>
                   ))}
-                  {gastos.length === 0 && (
+                  {gastosFiltrados.length === 0 && (
                     <tr>
                       <td colSpan={5} className="p-8 text-center text-gray-500 dark:text-gray-400">
-                        No hay gastos registrados aún.
+                        {isLoading ? 'Cargando egresos...' : gastos.length === 0 ? 'No hay gastos registrados en este período.' : 'Ningún gasto coincide con los filtros aplicados.'}
                       </td>
                     </tr>
                   )}
@@ -260,9 +485,23 @@ export default function AdminGastos() {
 
             {/* CONTROLES DE PAGINACIÓN */}
             <div className="flex items-center justify-between p-4 border-t border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-950">
-              <button disabled={page === 0} onClick={() => setPage(page - 1)} className="flex items-center gap-2 px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-900 disabled:opacity-50 text-sm font-medium transition-colors"><ChevronLeft size={16} /> Anterior</button>
-              <span className="text-sm font-medium text-gray-600 dark:text-gray-400">Página {page + 1}</span>
-              <button disabled={gastos.length < pageSize} onClick={() => setPage(page + 1)} className="flex items-center gap-2 px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-900 disabled:opacity-50 text-sm font-medium transition-colors">Siguiente <ChevronRight size={16} /></button>
+              <button 
+                disabled={page === 0} 
+                onClick={() => setPage(page - 1)} 
+                className="flex items-center gap-2 px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-900 disabled:opacity-50 text-sm font-medium transition-colors"
+              >
+                <ChevronLeft size={16} /> Anterior
+              </button>
+              <span className="text-sm font-medium text-gray-600 dark:text-gray-400">
+                Página {page + 1} de {Math.max(1, Math.ceil(gastosFiltrados.length / pageSize))}
+              </span>
+              <button 
+                disabled={(page + 1) * pageSize >= gastosFiltrados.length} 
+                onClick={() => setPage(page + 1)} 
+                className="flex items-center gap-2 px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-900 disabled:opacity-50 text-sm font-medium transition-colors"
+              >
+                Siguiente <ChevronRight size={16} />
+              </button>
             </div>
           </div>
 

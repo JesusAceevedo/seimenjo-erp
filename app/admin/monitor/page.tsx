@@ -18,6 +18,15 @@ export const dynamic = 'force-dynamic';
 export default function AdminMonitor() {
   const router = useRouter();
 
+  // Helper de Formato Contable
+  const formatCurrency = (val: any) => {
+    const num = Number(val) || 0;
+    return new Intl.NumberFormat('es-MX', {
+      style: 'currency',
+      currency: 'MXN'
+    }).format(num);
+  };
+
   // Datos principales
   const [pedidos, setPedidos] = useState<any[]>([]);
   const [productos, setProductos] = useState<any[]>([]);
@@ -323,7 +332,7 @@ export default function AdminMonitor() {
               ${d.cantidad}x ${prodNombre} ${gramaje ? `(${gramaje})` : ''}
             </td>
             <td style="text-align: right; vertical-align: top; padding: 4px 0;">
-              $${Number(d.subtotal).toFixed(2)}
+              ${formatCurrency(d.subtotal)}
             </td>
           </tr>
         `;
@@ -405,15 +414,15 @@ export default function AdminMonitor() {
             <table class="totals-table">
               <tr>
                 <td>Subtotal:</td>
-                <td style="text-align: right;">$${(Number(pedido.precio_total) - Number(pedido.costo_envio || 0)).toFixed(2)}</td>
+                <td style="text-align: right;">${formatCurrency(Number(pedido.precio_total) - Number(pedido.costo_envio || 0))}</td>
               </tr>
               <tr>
                 <td>Envío:</td>
-                <td style="text-align: right;">$${Number(pedido.costo_envio || 0).toFixed(2)}</td>
+                <td style="text-align: right;">${formatCurrency(pedido.costo_envio)}</td>
               </tr>
               <tr class="total-row">
                 <td>TOTAL:</td>
-                <td style="text-align: right;">$${Number(pedido.precio_total).toFixed(2)}</td>
+                <td style="text-align: right;">${formatCurrency(pedido.precio_total)}</td>
               </tr>
             </table>
 
@@ -588,11 +597,11 @@ export default function AdminMonitor() {
                         </div>
                       </td>
                       <td className="p-4 space-y-1 text-gray-900 dark:text-white">
-                        <div>🚚 Envío: <span className="font-semibold">${Number(p.costo_envio).toFixed(2)}</span></div>
+                        <div>🚚 Envío: <span className="font-semibold">{formatCurrency(p.costo_envio)}</span></div>
                         <div className="text-gray-500 dark:text-gray-400 flex items-center gap-1"><Truck className="w-3 h-3" /> <span className="font-medium">{p.entregado_por || 'N/A'}</span></div>
                       </td>
                       <td className="p-4 text-right space-y-1">
-                        <div className="font-bold text-sm text-gray-900 dark:text-white">${Number(p.precio_total).toFixed(2)}</div>
+                        <div className="font-bold text-sm text-gray-900 dark:text-white">{formatCurrency(p.precio_total)}</div>
                         <div className="text-gray-500 text-[10px] uppercase font-semibold">{p.metodo_pago || ''}</div>
                         <div className="space-y-1 mt-1">
                           <div>
@@ -792,7 +801,7 @@ export default function AdminMonitor() {
                 <div className="p-4 bg-gray-50 dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 space-y-2">
                   <p>Estimado/a <strong>{emailModal.details.cliente}</strong>,</p>
                   <p className="text-xs text-gray-600 dark:text-gray-300">
-                    Le hacemos llegar la factura correspondiente a su pedido con número <strong>#{emailModal.details.numero_pedido}</strong> por un total de <strong>${Number(emailModal.details.total).toFixed(2)} MXN</strong>.
+                    Le hacemos llegar la factura correspondiente a su pedido con número <strong>#{emailModal.details.numero_pedido}</strong> por un total de <strong>{formatCurrency(emailModal.details.total)} MXN</strong>.
                   </p>
                   <p className="text-xs text-gray-400 font-mono">
                     UUID Fiscal: {emailModal.details.uuid_fiscal}
