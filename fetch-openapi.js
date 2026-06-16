@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-require-imports */
 const fs = require('fs');
 const path = require('path');
 
@@ -25,37 +26,37 @@ fetch(url, {
     'Authorization': `Bearer ${apiKey}`
   }
 })
-.then(res => {
-  if (!res.ok) {
-    throw new Error(`HTTP error! status: ${res.status}`);
-  }
-  return res.json();
-})
-.then(swagger => {
-  console.log("OpenAPI Spec fetched successfully!");
-  const paths = Object.keys(swagger.paths || {});
-  console.log("Exposed Tables/Views:");
-  const tables = new Set();
-  paths.forEach(p => {
-    const table = p.split('/')[1];
-    if (table && table !== '') {
-      tables.add(table);
+  .then(res => {
+    if (!res.ok) {
+      throw new Error(`HTTP error! status: ${res.status}`);
     }
-  });
-  console.log(Array.from(tables).join('\n'));
-
-  console.log("\nTable Details (Definitions):");
-  const definitions = swagger.definitions || {};
-  Object.keys(definitions).forEach(tableName => {
-    console.log(`\nTable: ${tableName}`);
-    const properties = definitions[tableName].properties || {};
-    const cols = Object.keys(properties).map(colName => {
-      const prop = properties[colName];
-      return `${colName} (${prop.type}${prop.format ? ', ' + prop.format : ''}${prop.description ? ', ' + prop.description : ''})`;
+    return res.json();
+  })
+  .then(swagger => {
+    console.log("OpenAPI Spec fetched successfully!");
+    const paths = Object.keys(swagger.paths || {});
+    console.log("Exposed Tables/Views:");
+    const tables = new Set();
+    paths.forEach(p => {
+      const table = p.split('/')[1];
+      if (table && table !== '') {
+        tables.add(table);
+      }
     });
-    console.log("  Columns:\n    " + cols.join('\n    '));
+    console.log(Array.from(tables).join('\n'));
+
+    console.log("\nTable Details (Definitions):");
+    const definitions = swagger.definitions || {};
+    Object.keys(definitions).forEach(tableName => {
+      console.log(`\nTable: ${tableName}`);
+      const properties = definitions[tableName].properties || {};
+      const cols = Object.keys(properties).map(colName => {
+        const prop = properties[colName];
+        return `${colName} (${prop.type}${prop.format ? ', ' + prop.format : ''}${prop.description ? ', ' + prop.description : ''})`;
+      });
+      console.log("  Columns:\n    " + cols.join('\n    '));
+    });
+  })
+  .catch(err => {
+    console.error("Error fetching OpenAPI spec:", err);
   });
-})
-.catch(err => {
-  console.error("Error fetching OpenAPI spec:", err);
-});

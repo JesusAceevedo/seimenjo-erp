@@ -2,8 +2,8 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from '../../../lib/supabase';
-import { 
-  FileText, UploadCloud, Eye, RefreshCw, AlertTriangle, 
+import {
+  FileText, UploadCloud, Eye, RefreshCw, AlertTriangle,
   CheckCircle, Trash2, Link as LinkIcon, QrCode, Sliders, X
 } from 'lucide-react';
 
@@ -97,9 +97,9 @@ export default function TicketConfigTab() {
 
   // --- VALIDADOR DE IMAGEN (JPG, Tamaño, Dimensiones) ---
   const validateImage = (
-    file: File, 
-    maxSizeKB: number, 
-    minDim: number, 
+    file: File,
+    maxSizeKB: number,
+    minDim: number,
     maxDim: number
   ): Promise<{ valid: boolean; error: string | null }> => {
     return new Promise((resolve) => {
@@ -124,9 +124,9 @@ export default function TicketConfigTab() {
           const width = img.naturalWidth;
           const height = img.naturalHeight;
           if (width < minDim || width > maxDim || height < minDim || height > maxDim) {
-            resolve({ 
-              valid: false, 
-              error: `Dimensiones inválidas: ${width}x${height}px. Debe tener dimensiones cuadradas mínimas de ${minDim}px y máximas de ${maxDim}px.` 
+            resolve({
+              valid: false,
+              error: `Dimensiones inválidas: ${width}x${height}px. Debe tener dimensiones cuadradas mínimas de ${minDim}px y máximas de ${maxDim}px.`
             });
           } else {
             resolve({ valid: true, error: null });
@@ -176,17 +176,17 @@ export default function TicketConfigTab() {
   const uploadAsset = async (file: File, prefix: string): Promise<string> => {
     const fileExt = file.name.split('.').pop();
     const fileName = `tickets/${prefix}_${Date.now()}.${fileExt}`;
-    
+
     const { data, error } = await supabase.storage
       .from('ticket-assets')
       .upload(fileName, file);
-    
+
     if (error) throw new Error(`Fallo al cargar ${prefix} al storage: ${error.message}`);
-    
+
     const { data: publicUrlData } = supabase.storage
       .from('ticket-assets')
       .getPublicUrl(fileName);
-    
+
     return publicUrlData.publicUrl;
   };
 
@@ -271,7 +271,7 @@ export default function TicketConfigTab() {
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-      
+
       {/* FORMULARIO DE CONFIGURACIÓN */}
       <div className="lg:col-span-2 bg-white dark:bg-gray-950 p-6 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-sm space-y-6">
         <div>
@@ -339,10 +339,10 @@ export default function TicketConfigTab() {
             <div className="flex gap-4 items-center">
               {logoPreview ? (
                 <div className="relative w-24 h-24 bg-white dark:bg-gray-950 rounded-xl border border-gray-200 dark:border-gray-800 overflow-hidden flex items-center justify-center shadow-inner">
-                  <img 
-                    src={logoPreview} 
-                    alt="Logo" 
-                    className="w-full h-full object-contain filter grayscale" 
+                  <img
+                    src={logoPreview}
+                    alt="Logo"
+                    className="w-full h-full object-contain filter grayscale"
                   />
                   <button
                     type="button"
@@ -389,11 +389,10 @@ export default function TicketConfigTab() {
                   key={tipo}
                   type="button"
                   onClick={() => setConfig({ ...config, promo_tipo: tipo })}
-                  className={`px-4 py-2 rounded-xl text-xs font-bold border capitalize transition-all ${
-                    config.promo_tipo === tipo
+                  className={`px-4 py-2 rounded-xl text-xs font-bold border capitalize transition-all ${config.promo_tipo === tipo
                       ? 'bg-amber-600/10 text-amber-600 border-amber-500/40'
                       : 'bg-white dark:bg-gray-950 text-gray-500 border-gray-200 dark:border-gray-800'
-                  }`}
+                    }`}
                 >
                   {tipo === 'qr' ? 'Código QR' : tipo === 'imagen' ? 'Imagen Promocional' : 'Ninguno'}
                 </button>
@@ -405,10 +404,10 @@ export default function TicketConfigTab() {
               <div className="flex gap-4 items-center animate-in fade-in slide-in-from-top-1.5 duration-200">
                 {promoPreview ? (
                   <div className="relative w-24 h-24 bg-white dark:bg-gray-950 rounded-xl border border-gray-200 dark:border-gray-800 overflow-hidden flex items-center justify-center">
-                    <img 
-                      src={promoPreview} 
-                      alt="Promo" 
-                      className="w-full h-full object-contain filter grayscale" 
+                    <img
+                      src={promoPreview}
+                      alt="Promo"
+                      className="w-full h-full object-contain filter grayscale"
                     />
                     <button
                       type="button"
@@ -475,9 +474,9 @@ export default function TicketConfigTab() {
                 <div className="flex flex-col items-center justify-center bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-3 shadow-inner">
                   {qrPreviewUrl ? (
                     <>
-                      <img 
-                        src={qrPreviewUrl} 
-                        alt="QR Preview" 
+                      <img
+                        src={qrPreviewUrl}
+                        alt="QR Preview"
                         className="w-28 h-28 object-contain"
                       />
                       <span className="text-[9px] text-gray-400 mt-1 italic">Previsualización QR automática</span>
@@ -496,7 +495,7 @@ export default function TicketConfigTab() {
           {/* 4. CHECKBOXES DE VISUALIZACIÓN */}
           <div className="p-4 bg-gray-50/50 dark:bg-gray-900/40 border border-gray-150 dark:border-gray-800 rounded-xl space-y-3">
             <h4 className="text-xs font-bold text-gray-700 dark:text-gray-300 uppercase">Opciones de Impresión del Recibo</h4>
-            
+
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               <label className="flex items-center gap-2 bg-white dark:bg-gray-950 p-2.5 rounded-xl border border-gray-200 dark:border-gray-800 cursor-pointer">
                 <input
@@ -572,15 +571,15 @@ export default function TicketConfigTab() {
         <h4 className="text-sm font-bold uppercase text-gray-500 tracking-wider flex items-center gap-1.5">
           <Eye size={16} /> Previsualización en Vivo POS
         </h4>
-        
+
         {/* Ticket Container */}
         <div className="bg-white text-black p-5 border border-gray-350 shadow-md flex-1 font-mono text-xs max-w-[280px] mx-auto w-full select-none" style={{ minHeight: '400px' }}>
           <div className="text-center space-y-2">
             {logoPreview && (
-              <img 
-                src={logoPreview} 
-                alt="Logo" 
-                className="w-20 h-20 object-contain mx-auto filter grayscale" 
+              <img
+                src={logoPreview}
+                alt="Logo"
+                className="w-20 h-20 object-contain mx-auto filter grayscale"
               />
             )}
             <p className="font-bold whitespace-pre-wrap uppercase text-[11px] leading-tight">
@@ -644,10 +643,10 @@ export default function TicketConfigTab() {
           {/* Promo */}
           {config.promo_tipo === 'imagen' && promoPreview && (
             <div className="text-center py-2">
-              <img 
-                src={promoPreview} 
-                alt="Promo" 
-                className="w-24 h-24 object-contain mx-auto filter grayscale" 
+              <img
+                src={promoPreview}
+                alt="Promo"
+                className="w-24 h-24 object-contain mx-auto filter grayscale"
               />
               <span className="text-[8px] text-gray-400 font-sans mt-0.5 block">Promo final de ticket</span>
             </div>
@@ -655,10 +654,10 @@ export default function TicketConfigTab() {
 
           {config.promo_tipo === 'qr' && qrPreviewUrl && (
             <div className="text-center space-y-1.5 py-1">
-              <img 
-                src={qrPreviewUrl} 
-                alt="QR Code" 
-                className="w-20 h-20 object-contain mx-auto" 
+              <img
+                src={qrPreviewUrl}
+                alt="QR Code"
+                className="w-20 h-20 object-contain mx-auto"
               />
               {config.promo_qr_descripcion && (
                 <p className="text-[9px] font-bold leading-tight max-w-[150px] mx-auto uppercase">

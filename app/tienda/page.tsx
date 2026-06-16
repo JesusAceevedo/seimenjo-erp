@@ -1,12 +1,15 @@
 'use client';
+/* eslint-disable @typescript-eslint/no-explicit-any */
+/* eslint-disable react-hooks/exhaustive-deps */
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabase';
-import { 
-  ShoppingCart, LogOut, Plus, Minus, Send, CheckCircle2, AlertTriangle, 
-  FileText, FileCode, Download, RefreshCw, Lock, Sparkles
+import {
+  ShoppingCart, LogOut, Plus, Minus, Send, CheckCircle2, AlertTriangle,
+  FileText, FileCode, RefreshCw, Lock, Sparkles
 } from 'lucide-react';
+import Image from 'next/image';
 import { useProtectedRoute } from '../../lib/useProtectedRoute';
 
 // Interfaces de tipado
@@ -18,16 +21,16 @@ export default function Tienda() {
   useProtectedRoute(); // Protege esta ruta - redirige a login si no hay sesión
   const router = useRouter();
   const [sesion, setSesion] = useState<any>(null);
-  
+
   const [productos, setProductos] = useState<Producto[]>([]);
   const [variantes, setVariantes] = useState<Variante[]>([]);
   const [preciosEspeciales, setPreciosEspeciales] = useState<Record<string, number>>({});
   const [empresaNombre, setEmpresaNombre] = useState('Portal SEIMENJO');
   const [empresaLogoUrl, setEmpresaLogoUrl] = useState<string | null>(null);
-  
+
   const [carrito, setCarrito] = useState<ItemCarrito[]>([]);
   const [comentarios, setComentarios] = useState('');
-  
+
   const [loading, setLoading] = useState(true);
   const [errorCritico, setErrorCritico] = useState('');
   const [enviando, setEnviando] = useState(false);
@@ -53,15 +56,20 @@ export default function Tienda() {
 
       if (error) throw error;
       setFacturas(data || []);
-    } catch (err: any) {
-      console.error("Error al cargar facturas:", err);
-      setErrorFacturas(err.message || 'Error al cargar las facturas');
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        console.error("Error al cargar facturas:", err);
+        setErrorFacturas(err.message || 'Error al cargar las facturas');
+      } else {
+        console.error("Error al cargar facturas:", err);
+        setErrorFacturas('Error al cargar las facturas');
+      }
     } finally {
       setLoadingFacturas(false);
     }
   };
 
-  const descargarArchivo = async (path: string, type: 'xml' | 'pdf') => {
+  const descargarArchivo = async (path: string) => {
     try {
       const { data, error } = await supabase.storage.from('facturas').createSignedUrl(path, 60);
       if (error) throw error;
@@ -70,9 +78,14 @@ export default function Tienda() {
       } else {
         alert("No se pudo generar el enlace de descarga.");
       }
-    } catch (err: any) {
-      console.error(err);
-      alert("Error al descargar el archivo: " + err.message);
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        console.error(err);
+        alert('Error al descargar el archivo: ' + err.message);
+      } else {
+        console.error(err);
+        alert('Error al descargar el archivo');
+      }
     }
   };
 
@@ -84,19 +97,19 @@ export default function Tienda() {
           router.push('/');
           return;
         }
-        
+
         const datosSesion = JSON.parse(sesionGuardada);
 
         // 1. Cargar Productos
         const { data: dataProductos, error: errProd } = await supabase.from('productos').select('*');
         if (errProd) throw new Error(`Fallo al cargar productos: ${errProd.message}`);
-        
+
         // 2. Cargar Variantes
         const { data: dataVariantes, error: errVar } = await supabase.from('producto_variantes').select('*');
         if (errVar) throw new Error(`Fallo al cargar variantes: ${errVar.message}`);
-        
+
         // 3. Cargar Precios Especiales e Información de la Sucursal (empresa_id)
-        let mapaPrecios: Record<string, number> = {};
+        const mapaPrecios: Record<string, number> = {};
         let clientEmpresaId = datosSesion.empresa_id || null;
 
         if (datosSesion.tipo === 'b2b' && datosSesion.id) {
@@ -128,7 +141,7 @@ export default function Tienda() {
             .from('precios_especiales')
             .select('variante_id, precio_pactado')
             .eq('cliente_id', datosSesion.id);
-            
+
           if (errPrecios) throw new Error(`Fallo al cargar precios especiales: ${errPrecios.message}`);
 
           if (dataPrecios) {
@@ -154,10 +167,12 @@ export default function Tienda() {
           if (varianteAsociada) seleccionesIniciales[prod.id] = varianteAsociada.id;
         });
         setSeleccionGramaje(seleccionesIniciales);
-        
-      } catch (error: any) {
-        console.error("Error detectado en cargarDatos:", error);
-        setErrorCritico(error.message || 'Error de conexión con la base de datos.');
+
+      } catch (err: unknown) {
+        let message = 'Error de conexión con la base de datos.';
+        if (err instanceof Error) message = err.message;
+        console.error("Error detectado en cargarDatos:", err);
+        setErrorCritico(message);
       } finally {
         // Garantizamos que la pantalla de carga se quite pase lo que pase
         setLoading(false);
@@ -177,7 +192,7 @@ export default function Tienda() {
       const itemExistente = prev.find(item => item.variante_id === varianteId);
       const variante = variantes.find(v => v.id === varianteId);
       const producto = productos.find(p => p.id === variante?.producto_id);
-      
+
       if (!variante || !producto) return prev;
 
       const precioReal = preciosEspeciales[variante.id] || variante.precio_base;
@@ -194,57 +209,57 @@ export default function Tienda() {
 
   const totalCarrito = carrito.reduce((sum, item) => sum + (item.cantidad * item.precio_unitario), 0);
 
- const enviarPedido = async () => {
-  if (carrito.length === 0) return;
-  setEnviando(true);
+  const enviarPedido = async () => {
+    if (carrito.length === 0) return;
+    setEnviando(true);
 
-  try {
-    // 1. Insertar el Pedido
-    const { data: pedidoData, error: pedidoError } = await supabase
-      .from('pedidos')
-      .insert({
-        cliente_id: sesion?.tipo === 'b2b' ? sesion.id : null,
-        empresa_id: sesion?.empresa_id || null,
-        precio_total: totalCarrito,
-        comentarios: comentarios || null
-      })
-      .select('id')
-      .single();
+    try {
+      const sesionInfo = sesion as unknown as { tipo?: string; id?: string; empresa_id?: string; [key: string]: unknown };
+      // 1. Insertar el Pedido
+      const { data: pedidoData, error: pedidoError } = await supabase
+        .from('pedidos')
+        .insert({
+          cliente_id: sesionInfo?.tipo === 'b2b' ? sesionInfo.id : null,
+          empresa_id: sesionInfo?.empresa_id || null,
+          precio_total: totalCarrito,
+          comentarios: comentarios || null
+        })
+        .select('id')
+        .single();
 
-    if (pedidoError) throw pedidoError;
+      if (pedidoError) throw pedidoError;
 
-    // 2. Insertar Detalles con validación de UUID
-    // Nos aseguramos de que el pedido_id sea un string limpio
-    const pedidoId = pedidoData.id; 
+      // 2. Insertar Detalles con validación de UUID
+      const pedidoId = pedidoData.id;
 
-    const detallesAInsertar = carrito.map(item => ({
-      pedido_id: pedidoId, // Supabase detectará automáticamente que es un UUID
-      variante_id: item.variante_id, // Asegúrate de que esto sea el UUID real (string)
-      cantidad: item.cantidad,
-      precio_aplicado: item.precio_unitario,
-      subtotal: item.cantidad * item.precio_unitario
-    }));
+      const detallesAInsertar = carrito.map(item => ({
+        pedido_id: pedidoId, 
+        variante_id: item.variante_id, 
+        cantidad: item.cantidad,
+        precio_aplicado: item.precio_unitario,
+        subtotal: item.cantidad * item.precio_unitario
+      }));
 
-    const { error: detallesError } = await supabase
-      .from('pedido_detalles')
-      .insert(detallesAInsertar);
+      const { error: detallesError } = await supabase
+        .from('pedido_detalles')
+        .insert(detallesAInsertar);
 
-    if (detallesError) throw detallesError;
+      if (detallesError) throw detallesError;
 
-    // Éxito
-    setPedidoExitoso(true);
-    setCarrito([]);
-    setComentarios('');
-    alert("¡Pedido enviado correctamente!");
+      // Éxito
+      setPedidoExitoso(true);
+      setCarrito([]);
+      setComentarios('');
+      alert("¡Pedido enviado correctamente!");
 
-  } catch (error: any) {
-    console.error("Error al procesar el pedido:", error);
-    // Mostramos un mensaje claro para identificar si es el Pedido o el Detalle
-    alert(`Error al enviar: ${error.message || 'Error desconocido'}`);
-  } finally {
-    setEnviando(false);
-  }
-};
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Error desconocido';
+      console.error("Error al procesar el pedido:", err);
+      alert(`Error al enviar: ${message}`);
+    } finally {
+      setEnviando(false);
+    }
+  };
   if (loading) return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50">
       <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
@@ -271,6 +286,8 @@ export default function Tienda() {
     </div>
   );
 
+  
+
   return (
     <div className="min-h-screen bg-gray-100 flex flex-col">
       {/* CABECERA PRINCIPAL Y NAV DE PESTAÑAS */}
@@ -280,7 +297,7 @@ export default function Tienda() {
             <div className="flex items-center space-x-8">
               <div className="flex items-center">
                 {empresaLogoUrl ? (
-                  <img src={empresaLogoUrl} alt="Logo" className="h-8 w-8 rounded-lg object-contain mr-2 border border-indigo-100 bg-white shadow-sm" />
+                  <Image src={empresaLogoUrl} alt="Logo" width={32} height={32} className="h-8 w-8 rounded-lg object-contain mr-2 border border-indigo-100 bg-white shadow-sm" />
                 ) : (
                   <Sparkles className="h-6 w-6 text-indigo-600 mr-2 animate-pulse" />
                 )}
@@ -289,11 +306,10 @@ export default function Tienda() {
               <nav className="flex space-x-1" aria-label="Tabs">
                 <button
                   onClick={() => setActiveTab('comprar')}
-                  className={`px-4 py-2 text-sm font-bold rounded-lg transition-all ${
-                    activeTab === 'comprar'
+                  className={`px-4 py-2 text-sm font-bold rounded-lg transition-all ${activeTab === 'comprar'
                       ? 'bg-indigo-50 text-indigo-700 shadow-sm'
                       : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
-                  }`}
+                    }`}
                 >
                   🛒 Realizar Pedido
                 </button>
@@ -303,18 +319,17 @@ export default function Tienda() {
                       setActiveTab('facturas');
                       if (sesion?.id) cargarFacturas(sesion.id);
                     }}
-                    className={`px-4 py-2 text-sm font-bold rounded-lg transition-all ${
-                      activeTab === 'facturas'
+                    className={`px-4 py-2 text-sm font-bold rounded-lg transition-all ${activeTab === 'facturas'
                         ? 'bg-indigo-50 text-indigo-700 shadow-sm'
                         : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
-                    }`}
+                      }`}
                   >
                     📄 Mis Facturas
                   </button>
                 )}
               </nav>
             </div>
-            
+
             <div className="flex items-center space-x-4">
               <span className="hidden sm:inline text-xs text-gray-500">
                 Cliente: <span className="font-semibold text-indigo-700">{sesion?.nombre_local || sesion?.email}</span>
@@ -346,7 +361,7 @@ export default function Tienda() {
                   const variantesProducto = variantes.filter(v => v.producto_id === producto.id);
                   const varianteSeleccionadaId = seleccionGramaje[producto.id];
                   const varianteActiva = variantesProducto.find(v => v.id === varianteSeleccionadaId);
-                  
+
                   const precioBase = varianteActiva?.precio_base || 0;
                   const precioPactado = varianteActiva ? preciosEspeciales[varianteActiva.id] : undefined;
                   const tienePrecioEspecial = precioPactado !== undefined;
@@ -358,20 +373,20 @@ export default function Tienda() {
                       <div className="h-48 bg-indigo-50 w-full relative flex items-center justify-center border-b border-gray-100">
                         <span className="text-indigo-300 font-bold tracking-widest">{producto.categoria.toUpperCase()}</span>
                       </div>
-                      
+
                       <div className="p-5">
                         <h3 className="text-lg font-bold text-gray-900 mb-4 leading-tight">{producto.nombre}</h3>
-                        
+
                         <label className="block text-sm font-medium text-gray-700 mb-1">Presentación (Gramaje)</label>
                         {variantesProducto.length <= 1 ? (
                           <div className="w-full py-2 px-3 bg-gray-50 border border-gray-200 rounded-md text-sm mb-4 text-gray-800 font-medium">
                             {variantesProducto[0]?.gramaje || 'Única'}
                           </div>
                         ) : (
-                          <select 
+                          <select
                             className="w-full border-gray-300 rounded-md shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm mb-4 text-gray-900"
                             value={varianteSeleccionadaId || ''}
-                            onChange={(e) => setSeleccionGramaje({...seleccionGramaje, [producto.id]: e.target.value})}
+                            onChange={(e) => setSeleccionGramaje({ ...seleccionGramaje, [producto.id]: e.target.value })}
                           >
                             {variantesProducto.map(v => (
                               <option key={v.id} value={v.id}>{v.gramaje}</option>
@@ -390,7 +405,7 @@ export default function Tienda() {
                               <p className="text-2xl font-bold text-gray-900">${precioBase.toFixed(2)}</p>
                             )}
                           </div>
-                          
+
                           <div className="flex items-center bg-gray-100 rounded-lg p-1">
                             <button onClick={() => varianteActiva && modificarCarrito(varianteActiva.id, 'restar')} className="p-1 rounded bg-white text-gray-600 shadow hover:bg-gray-50 transition">
                               <Minus className="w-5 h-5" />
@@ -441,7 +456,7 @@ export default function Tienda() {
                   <label className="block text-xs font-medium text-gray-700 mb-1">Instrucciones</label>
                   <textarea rows={2} className="w-full text-sm border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 text-gray-900" placeholder="Ej. Entregar por la puerta..." value={comentarios} onChange={(e) => setComentarios(e.target.value)}></textarea>
                 </div>
-                
+
                 <div className="flex justify-between items-center mb-6">
                   <span className="text-gray-600 font-medium">Total a Pagar</span>
                   <span className="text-2xl font-black text-gray-900">${totalCarrito.toFixed(2)}</span>
@@ -464,8 +479,8 @@ export default function Tienda() {
                 </h2>
                 <p className="text-sm text-gray-500">Consulta y descarga tus facturas fiscales en formato XML y PDF.</p>
               </div>
-              <button 
-                onClick={() => sesion?.id && cargarFacturas(sesion.id)} 
+              <button
+                onClick={() => sesion?.id && cargarFacturas(sesion.id)}
                 disabled={loadingFacturas}
                 className="inline-flex items-center gap-1.5 px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-bold shadow-md hover:shadow-lg transition-all disabled:opacity-50"
               >
@@ -512,7 +527,7 @@ export default function Tienda() {
                       {facturas.map((fac) => {
                         const esEntregado = fac.pedidos?.estatus_pedido === 'Entregado';
                         const numPedido = fac.pedidos?.numero_pedido || 'N/A';
-                        
+
                         return (
                           <tr key={fac.id} className="hover:bg-gray-50 transition-colors">
                             <td className="p-4">
@@ -533,11 +548,10 @@ export default function Tienda() {
                               ${Number(fac.total).toFixed(2)} MXN
                             </td>
                             <td className="p-4">
-                              <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold ${
-                                fac.estatus_factura?.nombre === 'Facturado' 
-                                  ? 'bg-green-50 text-green-700 border border-green-200' 
+                              <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold ${fac.estatus_factura?.nombre === 'Facturado'
+                                  ? 'bg-green-50 text-green-700 border border-green-200'
                                   : 'bg-amber-50 text-amber-700 border border-amber-200'
-                              }`}>
+                                }`}>
                                 {fac.estatus_factura?.nombre || 'Desconocido'}
                               </span>
                             </td>
@@ -546,7 +560,7 @@ export default function Tienda() {
                                 <div className="flex justify-center gap-2">
                                   {fac.xml_url ? (
                                     <button
-                                      onClick={() => descargarArchivo(fac.xml_url, 'xml')}
+                                      onClick={() => descargarArchivo(fac.xml_url)}
                                       className="inline-flex items-center gap-1 px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-600 border border-blue-200 rounded-lg text-xs font-bold transition-all shadow-sm"
                                       title="Descargar XML"
                                     >
@@ -558,7 +572,7 @@ export default function Tienda() {
                                   )}
                                   {fac.pdf_url ? (
                                     <button
-                                      onClick={() => descargarArchivo(fac.pdf_url, 'pdf')}
+                                      onClick={() => descargarArchivo(fac.pdf_url)}
                                       className="inline-flex items-center gap-1 px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 rounded-lg text-xs font-bold transition-all shadow-sm"
                                       title="Descargar PDF"
                                     >

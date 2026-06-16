@@ -84,6 +84,10 @@ export default function AdminLogin() {
       .eq('supabase_auth_id', authData.user.id)
       .maybeSingle();
 
+    if (staffError) {
+      console.error("Error al buscar staff:", staffError);
+    }
+
     console.log("Resultado de búsqueda en staff:", staff);
 
     if (staff) {
@@ -117,6 +121,7 @@ export default function AdminLogin() {
         </div>
 
         <div className="text-center mb-10">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
           {logoUrl ? (
             <img src={logoUrl} alt="Logo" className="w-16 h-16 rounded-2xl object-contain border border-amber-500/20 bg-white mx-auto mb-4" />
           ) : (

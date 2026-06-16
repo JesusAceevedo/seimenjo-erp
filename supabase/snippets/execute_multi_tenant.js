@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-require-imports */
 const { execSync } = require('child_process');
 
 const queries = [
@@ -82,10 +83,10 @@ console.log("Iniciando ejecución de consultas de aislamiento multiempresa...");
 for (let i = 0; i < queries.length; i++) {
   const query = queries[i];
   console.log(`\n[${i + 1}/${queries.length}] Ejecutando: ${query.split('\n')[0].substring(0, 80)}...`);
-  
+
   // Escapar comillas dobles para compatibilidad con la línea de comandos de Windows (cmd/powershell)
   const escapedQuery = query.replace(/"/g, '\\"');
-  
+
   try {
     const output = execSync(`npx supabase db query "${escapedQuery}"`, {
       cwd: 'd:\\seimenjo-erp',

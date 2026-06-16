@@ -2,8 +2,8 @@
 
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../../../lib/supabase';
-import { 
-  Building2, Landmark, ShieldCheck, Settings, UploadCloud, 
+import {
+  Building2, Landmark, ShieldCheck, Settings, UploadCloud,
   Check, AlertCircle, Loader2, Sparkles, KeyRound, FileCode
 } from 'lucide-react';
 import { inicializarNuevaEmpresa } from '../actions/adminAuth';
@@ -18,7 +18,7 @@ export default function OnboardingWizard({ empresaId, onSuccess }: OnboardingWiz
   const [loading, setLoading] = useState(false);
   const [subiendoArchivo, setSubiendoArchivo] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState('');
-  
+
   // Catálogo de regímenes fiscales
   const [regimenes, setRegimenes] = useState<any[]>([]);
 
@@ -75,7 +75,7 @@ export default function OnboardingWizard({ empresaId, onSuccess }: OnboardingWiz
     setSubiendoArchivo('Logotipo');
     const fileExt = logoFile.name.split('.').pop();
     const filePath = `logos/${empresaId}_logo_${Date.now()}.${fileExt}`;
-    
+
     const { error: uploadError } = await supabase.storage
       .from('empresas-logos')
       .upload(filePath, logoFile, { upsert: true });
@@ -146,7 +146,7 @@ export default function OnboardingWizard({ empresaId, onSuccess }: OnboardingWiz
   };
 
   const toggleModulo = (modName: string) => {
-    setModulos(prev => 
+    setModulos(prev =>
       prev.includes(modName) ? prev.filter(m => m !== modName) : [...prev, modName]
     );
   };
@@ -200,7 +200,7 @@ export default function OnboardingWizard({ empresaId, onSuccess }: OnboardingWiz
   return (
     <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-md flex items-center justify-center z-[100] p-4 overflow-y-auto">
       <div className="bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-3xl w-full max-w-2xl shadow-2xl p-8 max-h-[95vh] flex flex-col transition-all">
-        
+
         {/* ENCABEZADO STEPPER */}
         <div className="text-center mb-8 shrink-0">
           <div className="inline-flex p-3 bg-amber-500/10 rounded-2xl border border-amber-500/20 mb-3 text-amber-500">
@@ -228,16 +228,14 @@ export default function OnboardingWizard({ empresaId, onSuccess }: OnboardingWiz
 
             return (
               <div key={s.num} className="flex flex-col items-center gap-1.5 flex-1 relative">
-                <div className={`w-8 h-8 rounded-full flex items-center justify-center transition-all border ${
-                  active 
-                    ? 'bg-amber-600 border-amber-600 text-white shadow-md' 
+                <div className={`w-8 h-8 rounded-full flex items-center justify-center transition-all border ${active
+                    ? 'bg-amber-600 border-amber-600 text-white shadow-md'
                     : 'bg-white dark:bg-slate-950 border-slate-200 dark:border-slate-800 text-slate-400 dark:text-slate-600'
-                } ${current ? 'ring-4 ring-amber-500/20 scale-110 font-bold' : ''}`}>
+                  } ${current ? 'ring-4 ring-amber-500/20 scale-110 font-bold' : ''}`}>
                   {step > s.num ? <Check className="w-4 h-4" /> : <Icon size={14} />}
                 </div>
-                <span className={`text-[10px] uppercase font-bold tracking-wider ${
-                  active ? 'text-amber-600 dark:text-amber-500' : 'text-slate-400 dark:text-slate-600'
-                }`}>
+                <span className={`text-[10px] uppercase font-bold tracking-wider ${active ? 'text-amber-600 dark:text-amber-500' : 'text-slate-400 dark:text-slate-600'
+                  }`}>
                   {s.label}
                 </span>
               </div>
@@ -247,7 +245,7 @@ export default function OnboardingWizard({ empresaId, onSuccess }: OnboardingWiz
 
         {/* CONTENEDOR DE PASOS */}
         <div className="flex-1 overflow-y-auto pr-1 mb-6 space-y-4">
-          
+
           {errorMsg && (
             <div className="bg-red-50 dark:bg-red-950/20 text-red-650 dark:text-red-400 border border-red-200 dark:border-red-800/30 p-4 rounded-xl flex items-start gap-3">
               <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
@@ -261,7 +259,7 @@ export default function OnboardingWizard({ empresaId, onSuccess }: OnboardingWiz
               <h3 className="text-sm font-bold text-slate-800 dark:text-slate-200 uppercase tracking-wider">
                 Paso 1: Identidad Comercial y Marca
               </h3>
-              
+
               <div>
                 <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">Nombre Comercial *</label>
                 <input
@@ -394,15 +392,15 @@ export default function OnboardingWizard({ empresaId, onSuccess }: OnboardingWiz
               <h3 className="text-sm font-bold text-slate-800 dark:text-slate-200 uppercase tracking-wider flex items-center gap-2">
                 Paso 3: Carga de Certificados Digitales (CSD)
               </h3>
-              
+
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {/* Zona de Arrastre CER */}
                 <div className="flex flex-col items-center justify-center border-2 border-dashed border-slate-300 dark:border-slate-700 p-6 rounded-2xl bg-slate-50 dark:bg-slate-900/40 text-center hover:border-amber-500 transition-colors cursor-pointer relative">
-                  <input 
-                    type="file" 
-                    accept=".cer" 
-                    className="absolute inset-0 opacity-0 cursor-pointer" 
-                    onChange={e => e.target.files && setCerFile(e.target.files[0])} 
+                  <input
+                    type="file"
+                    accept=".cer"
+                    className="absolute inset-0 opacity-0 cursor-pointer"
+                    onChange={e => e.target.files && setCerFile(e.target.files[0])}
                   />
                   <FileCode className="text-amber-500 w-10 h-10 mb-2" />
                   <span className="text-xs font-bold text-slate-700 dark:text-slate-300 block">Certificado Fiscal (.cer)</span>
@@ -413,11 +411,11 @@ export default function OnboardingWizard({ empresaId, onSuccess }: OnboardingWiz
 
                 {/* Zona de Arrastre KEY */}
                 <div className="flex flex-col items-center justify-center border-2 border-dashed border-slate-300 dark:border-slate-700 p-6 rounded-2xl bg-slate-50 dark:bg-slate-900/40 text-center hover:border-amber-500 transition-colors cursor-pointer relative">
-                  <input 
-                    type="file" 
-                    accept=".key" 
-                    className="absolute inset-0 opacity-0 cursor-pointer" 
-                    onChange={e => e.target.files && setKeyFile(e.target.files[0])} 
+                  <input
+                    type="file"
+                    accept=".key"
+                    className="absolute inset-0 opacity-0 cursor-pointer"
+                    onChange={e => e.target.files && setKeyFile(e.target.files[0])}
                   />
                   <KeyRound className="text-amber-500 w-10 h-10 mb-2" />
                   <span className="text-xs font-bold text-slate-700 dark:text-slate-300 block">Llave Privada (.key)</span>
@@ -463,16 +461,14 @@ export default function OnboardingWizard({ empresaId, onSuccess }: OnboardingWiz
                         key={mod.id}
                         type="button"
                         onClick={() => toggleModulo(mod.id)}
-                        className={`flex items-center justify-between p-3 rounded-xl border text-xs font-bold transition-all ${
-                          isSelected
+                        className={`flex items-center justify-between p-3 rounded-xl border text-xs font-bold transition-all ${isSelected
                             ? 'bg-amber-600/10 text-amber-700 dark:text-amber-400 border-amber-600/30'
                             : 'bg-white dark:bg-slate-950 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-900'
-                        }`}
+                          }`}
                       >
                         <span>{mod.label}</span>
-                        <div className={`w-4 h-4 rounded-md border flex items-center justify-center shrink-0 ${
-                          isSelected ? 'bg-amber-600 border-amber-600 text-white' : 'border-slate-300 dark:border-slate-700'
-                        }`}>
+                        <div className={`w-4 h-4 rounded-md border flex items-center justify-center shrink-0 ${isSelected ? 'bg-amber-600 border-amber-600 text-white' : 'border-slate-300 dark:border-slate-700'
+                          }`}>
                           {isSelected && <Check size={10} />}
                         </div>
                       </button>

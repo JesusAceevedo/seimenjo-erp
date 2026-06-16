@@ -3,16 +3,16 @@
 import { supabase } from '../../../lib/supabase';
 
 // Helper to map SAT payment codes to DB names
-async function getFormaPagoIdByCode(code: string) {
+async function getFormaPagoIdByCode(code: string): Promise<number | null> {
   try {
     const { data } = await supabase.from('formas_pago').select('id, nombre');
     if (!data || data.length === 0) return null;
-    
+
     let term = 'Efectivo';
     if (code === '03') term = 'Transferencia';
     else if (code === '04' || code === '28') term = 'Tarjeta';
     else if (code === '02') term = 'Cheque';
-    
+
     const match = data.find(f => f.nombre.toLowerCase().includes(term.toLowerCase()));
     return match ? match.id : data[0].id;
   } catch (err) {
@@ -22,34 +22,35 @@ async function getFormaPagoIdByCode(code: string) {
 }
 
 // Helper to get status id by name
-async function getEstatusFacturaIdByName(name = 'Facturado') {
+async function getEstatusFacturaIdByName(name = 'Facturado'): Promise<number | null> {
   try {
     const { data } = await supabase.from('estatus_factura').select('id').ilike('nombre', name).maybeSingle();
     if (data) return data.id;
     const { data: first } = await supabase.from('estatus_factura').select('id').limit(1).maybeSingle();
     return first ? first.id : null;
-  } catch (err) {
-    console.error('Error fetching EstatusFactura:', err);
-    return null;
-  }
+  } catch (err: unknown) {
+      console.error('Error fetching EstatusFactura:', err);
+      return null;
+    }
 }
 
 // 1. Generate Signed URL for secure downloads
-export async function obtenerSignedUrl(filePath: string) {
+export async function obtenerSignedUrl(filePath: string): Promise<{ success: boolean; url?: string; error?: string }> {
   try {
     const { data, error } = await supabase.storage.from('facturas').createSignedUrl(filePath, 900); // Valid for 15 minutes
     if (error) throw error;
     return { success: true, url: data.signedUrl };
-  } catch (err: any) {
-    console.error('Error generating signed URL:', err);
-    return { success: false, error: err.message || 'Error al generar enlace de descarga' };
-  }
+  } catch (err: unknown) {
+      console.error('Error generating signed URL:', err);
+      const message = err instanceof Error ? err.message : String(err);
+      return { success: false, error: message || 'Error al generar enlace de descarga' };
+    }
 }
 
 // 2. Simulated Mailer for customer invoices
-export async function enviarFacturaPorCorreo(pedidoId: string) {
+export async function enviarFacturaPorCorreo(pedidoId: string): Promise<{ success: boolean; error?: string; email?: string; cliente?: string; numero_pedido?: string; total?: number; uuid_fiscal?: string; xmlUrl?: string | null; pdfUrl?: string | null }> {
   try {
-    // 1. Get Pedido & Cliente details
+    // 1. Get Pedido
     const { data: pedido, error: pedErr } = await supabase
       .from('pedidos')
       .select('id, numero_pedido, precio_total, cliente_id')
@@ -98,9 +99,9 @@ export async function enviarFacturaPorCorreo(pedidoId: string) {
       xmlUrl,
       pdfUrl
     };
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error('Error simulating invoice email:', err);
-    return { success: false, error: err.message || 'Error en el envío de correo' };
+    return { success: false, error: err instanceof Error ? err.message : 'Error en el envío de correo' };
   }
 }
 
@@ -162,7 +163,7 @@ export async function guardarFacturaEnBaseDatos(payload: {
           })
           .eq('id', existenteId)
           .select();
-        
+
         if (error) throw error;
         return { success: true, mode: 'association', data };
       } else {
@@ -175,7 +176,7 @@ export async function guardarFacturaEnBaseDatos(payload: {
             .select('id')
             .eq('rfc', xmlData.emisorRfc.toUpperCase())
             .maybeSingle();
-          
+
           if (prov) {
             proveedorId = prov.id;
           } else {
@@ -227,7 +228,7 @@ export async function guardarFacturaEnBaseDatos(payload: {
           .select('id')
           .eq('rfc', xmlData.receptorRfc.toUpperCase())
           .maybeSingle();
-        
+
         if (cli) {
           clienteId = cli.id;
         } else {
@@ -277,7 +278,7 @@ export async function guardarFacturaEnBaseDatos(payload: {
             uso_cfdi_clave: xmlData.usoCfdi || 'G03'
           })
           .select();
-        
+
         if (error) throw error;
 
         // 2. Update Pedido status
@@ -288,7 +289,7 @@ export async function guardarFacturaEnBaseDatos(payload: {
             estatus_pago: 'Liquidado'
           })
           .eq('id', existenteId);
-        
+
         if (pedError) console.error('Error updating associated pedido status:', pedError);
 
         return { success: true, mode: 'association', data };
@@ -330,11 +331,11 @@ export async function guardarFacturaEnBaseDatos(payload: {
             .order('created_at', { ascending: false })
             .limit(1)
             .maybeSingle();
-          
+
           if (matchedP) {
             matchedPedidoId = matchedP.id;
             console.log(`Auto-conciliated: matched Invoice with Pedido #${matchedP.numero_pedido}`);
-            
+
             // Link invoice to this pedido
             await supabase
               .from('facturas_clientes')
@@ -355,8 +356,9 @@ export async function guardarFacturaEnBaseDatos(payload: {
         return { success: true, mode: 'creation', autoMatched: !!matchedPedidoId, data };
       }
     }
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error('Error saving invoice metadata:', err);
-    return { success: false, error: err.message || 'Error al guardar metadatos en la base de datos' };
+    const message = err instanceof Error ? err.message : String(err);
+    return { success: false, error: message || 'Error al guardar metadatos en la base de datos' };
   }
 }

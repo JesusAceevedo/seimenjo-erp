@@ -2,9 +2,9 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { supabase } from '../../../lib/supabase';
-import { 
-  Package, Plus, Edit2, Trash2, DollarSign, Layers, 
-  Search, Image, UploadCloud, CheckCircle, AlertTriangle, 
+import {
+  Package, Plus, Edit2, Trash2, DollarSign, Layers,
+  Search, Image, UploadCloud, CheckCircle, AlertTriangle,
   Save, RefreshCw, User, X
 } from 'lucide-react';
 
@@ -87,7 +87,7 @@ export default function ProductosTab() {
   const [savingProd, setSavingProd] = useState(false);
   const [savingVar, setSavingVar] = useState(false);
   const [savingPrecio, setSavingPrecio] = useState(false);
-  
+
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
@@ -242,7 +242,7 @@ export default function ProductosTab() {
       if (prodImagenFile) {
         const fileExt = prodImagenFile.name.split('.').pop();
         const fileName = `productos/${Date.now()}_${Math.random().toString(36).substring(2, 8)}.${fileExt}`;
-        
+
         const { data: uploadData, error: uploadError } = await supabase.storage
           .from('productos-imagenes')
           .upload(fileName, prodImagenFile);
@@ -253,7 +253,7 @@ export default function ProductosTab() {
         const { data: publicUrlData } = supabase.storage
           .from('productos-imagenes')
           .getPublicUrl(fileName);
-        
+
         finalImageUrl = publicUrlData.publicUrl;
       }
 
@@ -313,7 +313,7 @@ export default function ProductosTab() {
       }
 
       setSuccessMsg(prodId ? 'Producto actualizado con éxito.' : 'Producto creado con éxito.');
-      
+
       // Limpiar formulario de producto
       resetProductoForm();
       await loadProductos();
@@ -343,8 +343,8 @@ export default function ProductosTab() {
   };
 
   const getCatalogTable = () => {
-    return showCatalogModal === 'categorias' 
-      ? 'cat_categorias_producto' 
+    return showCatalogModal === 'categorias'
+      ? 'cat_categorias_producto'
       : 'cat_unidades_medida';
   };
 
@@ -357,7 +357,7 @@ export default function ProductosTab() {
 
     const tableName = getCatalogTable();
     const payload: any = { nombre: catalogInput.trim() };
-    
+
     if (editingCatalogItem) {
       payload.id = editingCatalogItem.id;
     }
@@ -420,11 +420,11 @@ export default function ProductosTab() {
   const handleDeleteProducto = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     if (!confirm('¿Estás seguro de eliminar este producto? Esto eliminará también todas sus variantes y precios especiales asociados.')) return;
-    
+
     try {
       const { error } = await supabase.from('productos').delete().eq('id', id);
       if (error) throw error;
-      
+
       setSuccessMsg('Producto eliminado.');
       if (selectedProd?.id === id) {
         setSelectedProd(null);
@@ -462,7 +462,7 @@ export default function ProductosTab() {
         })
         .select()
         .single();
-      
+
       if (error) throw error;
 
       setVarGramaje('');
@@ -482,7 +482,7 @@ export default function ProductosTab() {
     try {
       const { error } = await supabase.from('producto_variantes').delete().eq('id', id);
       if (error) throw error;
-      
+
       if (selectedVar?.id === id) {
         setSelectedVar(null);
       }
@@ -541,7 +541,7 @@ export default function ProductosTab() {
     try {
       const { error } = await supabase.from('precios_especiales').delete().eq('id', id);
       if (error) throw error;
-      
+
       if (selectedVar) {
         await loadPreciosEspeciales(selectedVar.id);
       }
@@ -554,15 +554,15 @@ export default function ProductosTab() {
   // --- BUSCADOR DE CLIENTES FILTRADOS ---
   const clientesFiltrados = useMemo(() => {
     if (!filtroCliente.trim()) return clientes;
-    return clientes.filter(c => 
-      c.nombre_local.toLowerCase().includes(filtroCliente.toLowerCase()) || 
+    return clientes.filter(c =>
+      c.nombre_local.toLowerCase().includes(filtroCliente.toLowerCase()) ||
       (c.razon_social && c.razon_social.toLowerCase().includes(filtroCliente.toLowerCase()))
     );
   }, [clientes, filtroCliente]);
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-      
+
       {/* 1. ADMINISTRACIÓN DE PRODUCTOS */}
       <div className="lg:col-span-1 space-y-6">
         <div className="bg-white dark:bg-gray-950 p-6 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-sm space-y-4">
@@ -695,9 +695,9 @@ export default function ProductosTab() {
               <div className="mt-1 flex flex-col gap-3">
                 {prodImagenPreview ? (
                   <div className="relative w-full h-40 bg-gray-100 dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 overflow-hidden group">
-                    <img 
-                      src={prodImagenPreview} 
-                      alt="Preview" 
+                    <img
+                      src={prodImagenPreview}
+                      alt="Preview"
                       className="w-full h-full object-cover"
                     />
                     <button
@@ -777,11 +777,10 @@ export default function ProductosTab() {
                   // Resetea edición si se hace clic en otro
                   if (prodId !== p.id) resetProductoForm();
                 }}
-                className={`p-3 rounded-xl border flex items-center justify-between gap-3 cursor-pointer transition-all ${
-                  selectedProd?.id === p.id
+                className={`p-3 rounded-xl border flex items-center justify-between gap-3 cursor-pointer transition-all ${selectedProd?.id === p.id
                     ? 'border-amber-500 bg-amber-600/5 dark:bg-amber-600/10'
                     : 'border-gray-150 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-900/50'
-                }`}
+                  }`}
               >
                 <div className="flex items-center gap-3 overflow-hidden">
                   <div className="w-10 h-10 rounded-lg bg-gray-100 dark:bg-gray-800 flex items-center justify-center overflow-hidden shrink-0 border border-gray-200/50 dark:border-gray-800">
@@ -903,14 +902,13 @@ export default function ProductosTab() {
                   </thead>
                   <tbody className="divide-y divide-gray-100 dark:divide-gray-850/40">
                     {variantes.map(v => (
-                      <tr 
-                        key={v.id} 
+                      <tr
+                        key={v.id}
                         onClick={() => setSelectedVar(v)}
-                        className={`cursor-pointer transition-colors ${
-                          selectedVar?.id === v.id
+                        className={`cursor-pointer transition-colors ${selectedVar?.id === v.id
                             ? 'bg-blue-600/5 dark:bg-blue-600/10 font-bold'
                             : 'hover:bg-gray-50 dark:hover:bg-gray-900/20'
-                        }`}
+                          }`}
                       >
                         <td className="p-3 text-gray-900 dark:text-white">{v.gramaje}</td>
                         <td className="p-3 font-mono font-semibold text-gray-800 dark:text-gray-200">${Number(v.precio_base).toFixed(2)}</td>

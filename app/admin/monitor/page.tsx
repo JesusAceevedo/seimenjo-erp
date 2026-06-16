@@ -1,11 +1,14 @@
 'use client';
+/* eslint-disable @typescript-eslint/no-explicit-any */
+/* eslint-disable react-hooks/exhaustive-deps */
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../../lib/supabase';
 import { Plus, Filter, Soup, ShoppingCart, Truck, FileCheck, Search, Sun, Moon, FileText, ChevronLeft, ChevronRight, Users, LayoutDashboard, Printer, Mail, FileCode, Edit3, DollarSign, AlertTriangle } from 'lucide-react';
 import { useThemeMode } from '../../../lib/useThemeMode';
 import { enviarFacturaPorCorreo } from '../gastos/actions';
+import { Pedido, Cliente, ProductoVariante, Repartidor, FormaPago, PrecioEspecialMap, DetallePedido } from '../types';
 
 // --- ESTADOS INICIALES (Optimizados fuera del componente para no recrearlos en cada render) ---
 const PEDIDO_INICIAL = {
@@ -19,7 +22,7 @@ export default function AdminMonitor() {
   const router = useRouter();
 
   // Helper de Formato Contable
-  const formatCurrency = (val: any) => {
+  const formatCurrency = (val: unknown) => {
     const num = Number(val) || 0;
     return new Intl.NumberFormat('es-MX', {
       style: 'currency',
@@ -28,11 +31,11 @@ export default function AdminMonitor() {
   };
 
   // Datos principales
-  const [pedidos, setPedidos] = useState<any[]>([]);
-  const [productos, setProductos] = useState<any[]>([]);
-  const [clientes, setClientes] = useState<any[]>([]);
-  const [repartidoresList, setRepartidoresList] = useState<any[]>([]);
-  const [formasPagoList, setFormasPagoList] = useState<any[]>([]);
+  const [pedidos, setPedidos] = useState<Pedido[]>([]);
+  const [productos, setProductos] = useState<ProductoVariante[]>([]);
+  const [clientes, setClientes] = useState<Cliente[]>([]);
+  const [repartidoresList, setRepartidoresList] = useState<Repartidor[]>([]);
+  const [formasPagoList, setFormasPagoList] = useState<FormaPago[]>([]);
 
   // Paginación y Filtros
   const [page, setPage] = useState(0);
@@ -63,14 +66,14 @@ export default function AdminMonitor() {
   // Estados de UI y Modales
   const { isDarkMode, toggleDarkMode } = useThemeMode();
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [liquidarModal, setLiquidarModal] = useState({ open: false, pedido: null as any, fecha: '', costo_envio: 0, entregado_por: '', metodo_pago: '' });
+  const [liquidarModal, setLiquidarModal] = useState({ open: false, pedido: null as unknown, fecha: '', costo_envio: 0, entregado_por: '', metodo_pago: '' });
   const [emailModal, setEmailModal] = useState<{ open: boolean; details: any | null }>({ open: false, details: null });
   const [isSendingEmail, setIsSendingEmail] = useState(false);
-  const [editPedidoModal, setEditPedidoModal] = useState({ open: false, pedido: null as any, nuevoNumero: '', nuevoEstatus: '' });
+  const [editPedidoModal, setEditPedidoModal] = useState({ open: false, pedido: null as unknown, nuevoNumero: '', nuevoEstatus: '' });
 
   // Formulario
   const [nuevoPedido, setNuevoPedido] = useState(PEDIDO_INICIAL);
-  const [preciosEspecialesCliente, setPreciosEspecialesCliente] = useState<Record<string, number>>({});
+  const [preciosEspecialesCliente, setPreciosEspecialesCliente] = useState<PrecioEspecialMap>({});
 
   // --- CARGA DE PRECIOS ESPECIALES AL SELECCIONAR CLIENTE EN FORMULARIO ---
   useEffect(() => {
@@ -84,9 +87,9 @@ export default function AdminMonitor() {
           .from('precios_especiales')
           .select('variante_id, precio_pactado')
           .eq('cliente_id', nuevoPedido.cliente_id);
-        
+
         if (error) throw error;
-        
+
         const mapa: Record<string, number> = {};
         if (data) {
           data.forEach(item => {
@@ -102,7 +105,7 @@ export default function AdminMonitor() {
   }, [nuevoPedido.cliente_id]);
 
   // --- CONSULTAS A BASE DE DATOS ---
-  const fetchPedidos = async () => {
+  const fetchPedidos = useCallback(async () => {
     const from = page * pageSize;
     const to = from + pageSize - 1;
 
@@ -113,11 +116,12 @@ export default function AdminMonitor() {
       .range(from, to);
 
     setPedidos(data || []);
-  };
+  }, [page, pageSize]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchPedidos();
-  }, [page, pageSize]); 
+  }, [fetchPedidos]);
   useEffect(() => {
     const init = async () => {
       const { data: { session } } = await supabase.auth.getSession();
@@ -149,13 +153,13 @@ export default function AdminMonitor() {
 
     if (filtroRango === 'semana') {
       const haceUnaSemana = new Date(); haceUnaSemana.setDate(hoy.getDate() - 7);
-      filtrados = filtrados.filter(p => new Date(p.created_at) >= haceUnaSemana);
+      filtrados = filtrados.filter(p => new Date(p.created_at || '') >= haceUnaSemana);
     } else if (filtroRango === 'mes') {
       const haceUnMes = new Date(); haceUnMes.setMonth(hoy.getMonth() - 1);
-      filtrados = filtrados.filter(p => new Date(p.created_at) >= haceUnMes);
+      filtrados = filtrados.filter(p => new Date(p.created_at || '') >= haceUnMes);
     } else if (filtroRango === 'rango' && fechaInicio && fechaFin) {
       filtrados = filtrados.filter(p => {
-        const d = new Date(p.created_at);
+        const d = new Date(p.created_at || '');
         return d >= new Date(fechaInicio) && d <= new Date(fechaFin);
       });
     }
@@ -171,7 +175,7 @@ export default function AdminMonitor() {
       });
     }
 
-    return filtrados.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    return filtrados.sort((a, b) => new Date(b.created_at || '').getTime() - new Date(a.created_at || '').getTime());
   }, [pedidos, filtroRango, fechaInicio, fechaFin, busquedaGlobal]);
 
   const kpiMetricas = useMemo(() => {
@@ -205,7 +209,7 @@ export default function AdminMonitor() {
       return { variante_id: item.variante_id, cantidad: item.cantidad, comentarios: item.comentarios, precio_aplicado: precioUnitario, subtotal: subtotalItem };
     });
 
-    const insertPayload: any = {
+    const insertPayload: Pedido = {
       cliente_id: nuevoPedido.cliente_id || null,
       cliente_nombre: nuevoPedido.cliente_nombre,
       cliente_telefono: nuevoPedido.cliente_telefono,
@@ -218,7 +222,7 @@ export default function AdminMonitor() {
       entregado_por: nuevoPedido.entregado_por,
       costo_envio: nuevoPedido.costo_envio,
       comentarios: nuevoPedido.comentarios_generales
-    };
+    } as unknown as Pedido;
 
     if (nuevoPedido.numero_pedido && !isNaN(parseInt(nuevoPedido.numero_pedido))) {
       insertPayload.numero_pedido = parseInt(nuevoPedido.numero_pedido);
@@ -236,7 +240,8 @@ export default function AdminMonitor() {
   };
 
   const confirmarLiquidacion = async () => {
-    const p = liquidarModal.pedido;
+    const p = liquidarModal.pedido as Pedido;
+    if (!p) return;
     const nuevoTotal = Number(p.precio_total) - Number(p.costo_envio || 0) + Number(liquidarModal.costo_envio || 0);
 
     const { error } = await supabase.from('pedidos').update({
@@ -256,6 +261,8 @@ export default function AdminMonitor() {
     }
   };
 
+
+
   const handleResendInvoice = async (pedidoId: string) => {
     setIsSendingEmail(true);
     try {
@@ -265,9 +272,13 @@ export default function AdminMonitor() {
       } else {
         alert(res.error || 'No se pudo realizar el envío del correo');
       }
-    } catch (err: any) {
+    } catch (err) {
       console.error(err);
-      alert('Error en el servicio de envío de correos: ' + err.message);
+      if (err instanceof Error) {
+        alert('Error en el servicio de envío de correos: ' + err.message);
+      } else {
+        alert('Error en el servicio de envío de correos');
+      }
     } finally {
       setIsSendingEmail(false);
     }
@@ -278,13 +289,15 @@ export default function AdminMonitor() {
       alert("Por favor ingresa un número de pedido válido.");
       return;
     }
+    const p = editPedidoModal.pedido as Pedido;
+    if (!p) return;
     const { error } = await supabase
       .from('pedidos')
-      .update({ 
+      .update({
         numero_pedido: parseInt(editPedidoModal.nuevoNumero),
         estatus_pedido: editPedidoModal.nuevoEstatus
       })
-      .eq('id', editPedidoModal.pedido.id);
+      .eq('id', p.id);
 
     if (error) {
       alert("Error al actualizar el pedido: " + error.message);
@@ -294,7 +307,7 @@ export default function AdminMonitor() {
     }
   };
 
-  const imprimirTicketPOS = async (pedido: any) => {
+  const imprimirTicketPOS = async (pedido: Pedido) => {
     try {
       // 1. Obtener la configuración actual del ticket
       const { data: config, error } = await supabase
@@ -321,37 +334,37 @@ export default function AdminMonitor() {
 
       // Preparar variables
       const opts = activeConfig.opciones_visualizacion || {};
-      const logoHtml = activeConfig.logo_url 
-        ? `<img src="${activeConfig.logo_url}" style="filter: grayscale(100%); max-height: 80px; margin: 10px auto; display: block;" />` 
+      const logoHtml = activeConfig.logo_url
+        ? `<img src="${activeConfig.logo_url}" style="filter: grayscale(100%); max-height: 80px; margin: 10px auto; display: block;" />`
         : '';
-      
+
       const phoneHtml = opts.mostrar_telefono && (pedido.cliente_telefono || pedido.clientes?.telefono)
-        ? `<p style="margin: 3px 0;"><strong>Tel:</strong> ${pedido.cliente_telefono || pedido.clientes?.telefono}</p>` 
+        ? `<p style="margin: 3px 0;"><strong>Tel:</strong> ${pedido.cliente_telefono || pedido.clientes?.telefono}</p>`
         : '';
-      
+
       const billingHtml = opts.mostrar_facturacion && pedido.clientes?.rfc
-        ? `<p style="margin: 3px 0;"><strong>RFC:</strong> ${pedido.clientes.rfc}</p>` 
+        ? `<p style="margin: 3px 0;"><strong>RFC:</strong> ${pedido.clientes.rfc}</p>`
         : '';
 
       const commentsHtml = opts.mostrar_comentarios && pedido.comentarios
-        ? `<div class="divider"></div><p style="font-size: 10px; font-style: italic; margin: 5px 0 0 0;"><strong>Notas:</strong> ${pedido.comentarios}</p>` 
+        ? `<div class="divider"></div><p style="font-size: 10px; font-style: italic; margin: 5px 0 0 0;"><strong>Notas:</strong> ${pedido.comentarios}</p>`
         : '';
 
       // Items table rows
-      const itemsHtml = pedido.pedido_detalles?.map((d: any) => {
-        const prodNombre = d.producto_variantes?.productos?.nombre || 'Producto';
-        const gramaje = d.producto_variantes?.gramaje || '';
-        return `
-          <tr>
-            <td style="padding: 4px 0; max-width: 180px; word-wrap: break-word;">
-              ${d.cantidad}x ${prodNombre} ${gramaje ? `(${gramaje})` : ''}
-            </td>
-            <td style="text-align: right; vertical-align: top; padding: 4px 0;">
-              ${formatCurrency(d.subtotal)}
-            </td>
-          </tr>
-        `;
-      }).join('') || '<tr><td colspan="2">Sin productos</td></tr>';
+      const itemsHtml = pedido.pedido_detalles?.map((d: DetallePedido) => {
+          const prodNombre = d.producto_variantes?.productos?.nombre || 'Producto';
+          const gramaje = d.producto_variantes?.gramaje || '';
+          return `
+            <tr>
+              <td style="padding: 4px 0; max-width: 180px; word-wrap: break-word;">
+                ${d.cantidad}x ${prodNombre} ${gramaje ? `(${gramaje})` : ''}
+              </td>
+              <td style="text-align: right; vertical-align: top; padding: 4px 0;">
+                ${formatCurrency(d.subtotal)}
+              </td>
+            </tr>
+          `;
+        }).join('') || '<tr><td colspan="2">Sin productos</td></tr>';
 
       // Promo section
       let promoHtml = '';
@@ -405,7 +418,7 @@ export default function AdminMonitor() {
             <div class="divider"></div>
             <div style="margin-bottom: 5px;">
               <p style="margin: 3px 0;"><strong>Pedido:</strong> #${pedido.numero_pedido || pedido.id.split('-')[0]}</p>
-              <p style="margin: 3px 0;"><strong>Fecha:</strong> ${new Date(pedido.created_at).toLocaleString()}</p>
+              <p style="margin: 3px 0;"><strong>Fecha:</strong> ${new Date(pedido.created_at || '').toLocaleString()}</p>
               <p style="margin: 3px 0;"><strong>Cliente:</strong> ${pedido.clientes?.nombre_local || pedido.cliente_nombre || 'Ocasional'}</p>
               ${phoneHtml}
               ${billingHtml}
@@ -460,9 +473,10 @@ export default function AdminMonitor() {
         </html>
       `);
       printWindow.document.close();
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error(err);
-      alert('Error al generar el ticket: ' + err.message);
+      const errMsg = err instanceof Error ? err.message : String(err);
+      alert('Error al generar el ticket: ' + errMsg);
     }
   };
 
@@ -600,15 +614,15 @@ export default function AdminMonitor() {
                         <div className="font-semibold mt-0.5 text-gray-900 dark:text-white">{p.clientes?.nombre_local || p.cliente_nombre || 'Ocasional'}</div>
                       </td>
                       <td className="p-4 space-y-1 font-mono text-[11px] text-gray-900 dark:text-white">
-                        <div><span className="text-gray-500">Ped:</span> {new Date(p.fecha_pedido).toLocaleDateString()}</div>
+                        <div><span className="text-gray-500">Ped:</span> {new Date(p.fecha_pedido || '').toLocaleDateString()}</div>
                         <div><span className="text-amber-600 dark:text-amber-500">Prod:</span> {p.fecha_produccion || 'N/A'}</div>
                         <div><span className="text-emerald-600 dark:text-emerald-500">Ent:</span> {p.fecha_entrega || 'N/A'}</div>
                       </td>
                       <td className="p-4 space-y-1">
                         <div className="bg-gray-50 dark:bg-gray-900/60 p-2 rounded border border-gray-200 dark:border-gray-800 space-y-1 text-gray-900 dark:text-white">
-                          {p.pedido_detalles?.map((d: any) => (
-                            <div key={d.id}>📦 <span className="font-semibold">{d.producto_variantes?.productos?.nombre} ({d.producto_variantes?.gramaje}):</span> {d.cantidad} un.</div>
-                          ))}
+                          {p.pedido_detalles?.map((d: DetallePedido) => (
+            <div key={d.id}>📦 <span className="font-semibold">{d.producto_variantes?.productos?.nombre} ({d.producto_variantes?.gramaje}):</span> {d.cantidad} un.</div>
+          ))}
                         </div>
                       </td>
                       <td className="p-4 space-y-1 text-gray-900 dark:text-white">
@@ -805,7 +819,7 @@ export default function AdminMonitor() {
               <h3 className="text-xl font-extrabold mb-4 flex items-center gap-2 text-emerald-500">
                 <Mail /> Correo de Facturación Enviado (Simulado)
               </h3>
-              
+
               <div className="space-y-4 text-sm">
                 <div className="p-3 bg-gray-50 dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 font-mono text-xs space-y-1">
                   <div><span className="text-gray-400">De:</span> facturacion@seimenjo.com</div>
@@ -821,7 +835,7 @@ export default function AdminMonitor() {
                   <p className="text-xs text-gray-400 font-mono">
                     UUID Fiscal: {emailModal.details.uuid_fiscal}
                   </p>
-                  
+
                   <div className="pt-3 border-t border-gray-200 dark:border-gray-800 space-y-2">
                     <div className="text-xs font-bold text-gray-500 uppercase mb-1">Archivos Adjuntos (Enlaces Firmados de Storage):</div>
                     <div className="flex flex-wrap gap-2">

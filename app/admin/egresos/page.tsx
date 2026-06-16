@@ -1,6 +1,8 @@
 'use client';
+/* eslint-disable @typescript-eslint/no-explicit-any */
+/* eslint-disable react-hooks/exhaustive-deps */
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../../lib/supabase';
 import { useThemeMode } from '../../../lib/useThemeMode';
@@ -11,11 +13,37 @@ import {
 
 export const dynamic = 'force-dynamic';
 
+interface Proveedor {
+  id: string;
+  nombre_comercial: string;
+  rfc?: string | null;
+}
+
+interface CategoriaGasto {
+  id: string;
+  nombre: string;
+}
+
+interface FormaPago {
+  id: string;
+  nombre: string;
+}
+
+interface Gasto {
+  id: string;
+  fecha_gasto: string;
+  proveedores?: Proveedor | null;
+  categorias_gasto?: CategoriaGasto | null;
+  concepto?: string | null;
+  metodo_pago?: string | null;
+  monto: number;
+}
+
 export default function AdminGastos() {
   const router = useRouter();
 
   // Helper de Formato Contable
-  const formatCurrency = (val: any) => {
+  const formatCurrency = (val: string | number) => {
     const num = Number(val) || 0;
     return new Intl.NumberFormat('es-MX', {
       style: 'currency',
@@ -24,16 +52,16 @@ export default function AdminGastos() {
   };
 
   // Estados de Datos
-  const [gastos, setGastos] = useState<any[]>([]);
-  const [categorias, setCategorias] = useState<any[]>([]);
-  const [proveedores, setProveedores] = useState<any[]>([]);
+  const [gastos, setGastos] = useState<Gasto[]>([]);
+  const [categorias, setCategorias] = useState<CategoriaGasto[]>([]);
+  const [proveedores, setProveedores] = useState<Proveedor[]>([]);
   const [conceptosDisponibles, setConceptosDisponibles] = useState<string[]>([]);
   
   // Estados de UI y Filtros
   const { isDarkMode, toggleDarkMode } = useThemeMode();
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(8);
-  const [formasPagoList, setFormasPagoList] = useState<any[]>([]);
+  const [formasPagoList, setFormasPagoList] = useState<FormaPago[]>([]);
   const [busquedaGasto, setBusquedaGasto] = useState('');
 
   // Calcular pageSize dinámicamente según la altura del viewport para evitar scroll principal
@@ -75,7 +103,7 @@ export default function AdminGastos() {
   });
 
   // --- CONSULTAS A BASE DE DATOS ---
-  const fetchPeriodData = async () => {
+  const fetchPeriodData = useCallback(async () => {
     setIsLoading(true);
     try {
       let startDateStr: string | null = null;
@@ -133,14 +161,14 @@ export default function AdminGastos() {
       const { data: gastosData, error: gastosError } = await gastosQuery;
       if (gastosError) throw gastosError;
 
-      setGastos(gastosData || []);
+      setGastos((gastosData || []) as Gasto[]);
       setPage(0); // Reiniciar a la primera página al cambiar filtros
     } catch (err) {
       console.error("Error al cargar datos del período:", err);
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [filtroRango, fechaInicio, fechaFin]);
 
   const fetchCatalogos = async () => {
     const [cats, provs, formas] = await Promise.all([
@@ -186,8 +214,9 @@ export default function AdminGastos() {
 
   // Cargar datos al cambiar filtros
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchPeriodData();
-  }, [filtroRango, fechaInicio, fechaFin]);
+  }, [fetchPeriodData]);
 
   // Métricas de Gastos
   const kpiGastos = useMemo(() => {
@@ -246,7 +275,7 @@ export default function AdminGastos() {
 
     // Si es un proveedor nuevo, crearlo en la tabla proveedores
     if (proveedorFinalId === 'nuevo' && nuevoProveedorNombre.trim() !== '') {
-      const insertData: any = { nombre_comercial: nuevoProveedorNombre.trim() };
+      const insertData: Partial<Proveedor> = { nombre_comercial: nuevoProveedorNombre.trim() };
       if (nuevoProveedorRfc.trim()) {
         insertData.rfc = nuevoProveedorRfc.trim().toUpperCase();
       }

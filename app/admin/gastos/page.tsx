@@ -1,4 +1,7 @@
 'use client';
+/* eslint-disable @typescript-eslint/no-explicit-any */
+/* eslint-disable react-hooks/exhaustive-deps */
+/* eslint-disable react/no-unescaped-entities */
 
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
@@ -13,6 +16,59 @@ import {
   UploadCloud, FileText, Send, Eye, RefreshCw, AlertTriangle, CheckCircle,
   FileCode, Download, Trash2, Calendar, DollarSign, Layers, Plus, Mail, Sun, Moon
 } from 'lucide-react';
+interface GastoFacturado {
+  id: string;
+  fecha_timbrado?: string;
+  fecha_gasto?: string;
+  uuid_fiscal?: string;
+  concepto: string;
+  monto: number;
+  iva_acreditable?: number;
+  proveedores?: { nombre_comercial: string; rfc: string };
+  categorias_gasto?: { nombre: string };
+  xml_url?: string;
+  pdf_url?: string;
+}
+
+interface VentaFacturada {
+  id: string;
+  numero_pedido: string;
+  precio_total: number;
+  cliente_nombre?: string;
+  fecha_pedido?: string;
+  estatus_pago?: string;
+  clientes?: { nombre_local: string; rfc: string; email_facturacion?: string };
+  facturas_clientes?: { 
+    uuid_fiscal?: string; 
+    xml_url?: string; 
+    pdf_url?: string;
+    total?: number;
+    iva_trasladado?: number;
+    fecha_emision?: string;
+    serie_folio?: string;
+  }[];
+}
+
+interface PedidoPendiente {
+  id: string;
+  numero_pedido: string;
+  precio_total: number;
+  cliente_nombre?: string;
+  fecha_pedido?: string;
+}
+
+interface GastoPendiente {
+  id: string;
+  concepto: string;
+  monto: number;
+  fecha_gasto?: string;
+}
+
+interface Cliente {
+  id: string;
+  nombre_local: string;
+  rfc: string;
+}
 
 export const dynamic = 'force-dynamic';
 
@@ -20,7 +76,7 @@ export default function AdvancedBillingModule() {
   const router = useRouter();
 
   // Helper de Formato Contable
-  const formatCurrency = (val: any) => {
+  const formatCurrency = (val: number) => {
     const num = Number(val) || 0;
     return new Intl.NumberFormat('es-MX', {
       style: 'currency',
@@ -34,11 +90,11 @@ export default function AdvancedBillingModule() {
   const [activeTab, setActiveTab] = useState<'egresos' | 'ingresos'>('egresos');
 
   // --- ESTADOS DE DATOS ---
-  const [gastosFacturados, setGastosFacturados] = useState<any[]>([]);
-  const [ventasFacturadas, setVentasFacturadas] = useState<any[]>([]);
-  const [pedidosPendientes, setPedidosPendientes] = useState<any[]>([]);
-  const [gastosPendientes, setGastosPendientes] = useState<any[]>([]);
-  const [clientes, setClientes] = useState<any[]>([]);
+  const [gastosFacturados, setGastosFacturados] = useState<GastoFacturado[]>([]);
+  const [ventasFacturadas, setVentasFacturadas] = useState<VentaFacturada[]>([]);
+  const [pedidosPendientes, setPedidosPendientes] = useState<PedidoPendiente[]>([]);
+  const [gastosPendientes, setGastosPendientes] = useState<GastoPendiente[]>([]);
+  const [clientes, setClientes] = useState<Cliente[]>([]);
   const [facturacionAcumuladaModal, setFacturacionAcumuladaModal] = useState({
     open: false,
     clienteId: '',
@@ -48,7 +104,7 @@ export default function AdvancedBillingModule() {
     loading: false,
     error: ''
   });
-  
+
   // --- ESTADOS DE CARGA DE ARCHIVOS ---
   const [xmlFile, setXmlFile] = useState<File | null>(null);
   const [pdfFile, setPdfFile] = useState<File | null>(null);
@@ -108,7 +164,7 @@ export default function AdvancedBillingModule() {
         .order('nombre_local', { ascending: true });
       setClientes(cliData || []);
 
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Error fetching data:', err);
     }
   };
@@ -171,7 +227,7 @@ export default function AdvancedBillingModule() {
   const toggleSeleccionPedidoFacturacionAcumulada = (id: string) => {
     setFacturacionAcumuladaModal(prev => {
       const idx = prev.seleccionados.indexOf(id);
-      let nuevasSelecciones = [...prev.seleccionados];
+      const nuevasSelecciones = [...prev.seleccionados];
       if (idx > -1) {
         nuevasSelecciones.splice(idx, 1);
       } else {
@@ -222,7 +278,7 @@ export default function AdvancedBillingModule() {
         loading: false,
         error: ''
       });
-      
+
       setMessage({ text: 'Facturación acumulada procesada con éxito.', type: 'success' });
     } catch (err: any) {
       console.error('Error al procesar facturación acumulada:', err);
@@ -289,7 +345,7 @@ export default function AdvancedBillingModule() {
           const traslados = cfdiImpuestos.getElementsByTagName('cfdi:Traslado').length > 0
             ? cfdiImpuestos.getElementsByTagName('cfdi:Traslado')
             : cfdiImpuestos.getElementsByTagName('Traslado');
-            
+
           for (let i = 0; i < traslados.length; i++) {
             const t = traslados[i];
             if (t.getAttribute('Impuesto') === '002') {
@@ -395,7 +451,7 @@ export default function AdvancedBillingModule() {
       const dateStr = parsedXmlData.fecha || new Date().toISOString();
       const yearMonth = dateStr.substring(0, 7); // '2026-06'
       const timestamp = Date.now();
-      
+
       const xmlPath = `facturas/${yearMonth}/${timestamp}_${xmlFile.name.replace(/\s+/g, '_')}`;
       const pdfPath = `facturas/${yearMonth}/${timestamp}_${pdfFile.name.replace(/\s+/g, '_')}`;
 
@@ -475,7 +531,7 @@ export default function AdvancedBillingModule() {
   return (
     <div className={`${isDarkMode ? 'dark' : ''} w-full h-full overflow-hidden flex flex-col`}>
       <div className="bg-gray-50 dark:bg-gray-900 h-full text-gray-900 dark:text-gray-100 transition-colors flex flex-col p-8 w-full max-w-[100vw] mx-auto overflow-hidden">
-        
+
         {/* HEADER */}
         <div className="mb-8 flex justify-between items-start md:items-center flex-col md:flex-row gap-4 shrink-0">
           <div>
@@ -505,13 +561,12 @@ export default function AdvancedBillingModule() {
 
         {/* FEEDBACK DE ESTADO */}
         {message && (
-          <div className={`p-4 rounded-xl border mb-6 flex items-start gap-3 animate-in fade-in duration-300 ${
-            message.type === 'success'
+          <div className={`p-4 rounded-xl border mb-6 flex items-start gap-3 animate-in fade-in duration-300 ${message.type === 'success'
               ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800/50'
               : message.type === 'error'
-              ? 'bg-red-50 dark:bg-red-950/40 text-red-800 dark:text-red-400 border-red-200 dark:border-red-800/50'
-              : 'bg-blue-50 dark:bg-blue-950/40 text-blue-800 dark:text-blue-400 border-blue-200 dark:border-blue-800/50'
-          }`}>
+                ? 'bg-red-50 dark:bg-red-950/40 text-red-800 dark:text-red-400 border-red-200 dark:border-red-800/50'
+                : 'bg-blue-50 dark:bg-blue-950/40 text-blue-800 dark:text-blue-400 border-blue-200 dark:border-blue-800/50'
+            }`}>
             {message.type === 'success' ? (
               <CheckCircle className="w-5 h-5 mt-0.5 shrink-0" />
             ) : message.type === 'error' ? (
@@ -524,7 +579,7 @@ export default function AdvancedBillingModule() {
         )}
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 flex-1 overflow-hidden min-h-0">
-          
+
           {/* COLUMNA IZQUIERDA: PANEL DE INGESTA */}
           <div className="lg:col-span-1 bg-white dark:bg-gray-950 p-6 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-xl space-y-6 overflow-y-auto h-full">
             <div>
@@ -537,7 +592,7 @@ export default function AdvancedBillingModule() {
             </div>
 
             <form onSubmit={handleUploadAndProcess} className="space-y-4">
-              
+
               {/* SELECTOR DE TIPO (GASTO VS VENTA) */}
               <div>
                 <label className="text-xs font-bold text-gray-500 uppercase">Tipo de Factura</label>
@@ -545,22 +600,20 @@ export default function AdvancedBillingModule() {
                   <button
                     type="button"
                     onClick={() => { setInvoiceType('gasto'); resetUploadForm(); }}
-                    className={`py-2 rounded-xl text-xs font-bold border transition-all ${
-                      invoiceType === 'gasto'
+                    className={`py-2 rounded-xl text-xs font-bold border transition-all ${invoiceType === 'gasto'
                         ? 'bg-red-600/10 text-red-500 border-red-500/40'
                         : 'bg-transparent text-gray-400 border-gray-200 dark:border-gray-800'
-                    }`}
+                      }`}
                   >
                     Gasto (Proveedor)
                   </button>
                   <button
                     type="button"
                     onClick={() => { setInvoiceType('venta'); resetUploadForm(); }}
-                    className={`py-2 rounded-xl text-xs font-bold border transition-all ${
-                      invoiceType === 'venta'
+                    className={`py-2 rounded-xl text-xs font-bold border transition-all ${invoiceType === 'venta'
                         ? 'bg-emerald-600/10 text-emerald-500 border-emerald-500/40'
                         : 'bg-transparent text-gray-400 border-gray-200 dark:border-gray-800'
-                    }`}
+                      }`}
                   >
                     Venta (Cliente)
                   </button>
@@ -681,13 +734,13 @@ export default function AdvancedBillingModule() {
                         {invoiceType === 'gasto' ? (
                           gastosPendientes.map(g => (
                             <option key={g.id} value={g.id}>
-                              {g.concepto.substring(0, 18)}... - ${g.monto} ({new Date(g.fecha_gasto).toLocaleDateString()})
+                              {g.concepto.substring(0, 18)}... - ${g.monto} ({new Date(g.fecha_gasto || '').toLocaleDateString()})
                             </option>
                           ))
                         ) : (
                           pedidosPendientes.map(p => (
                             <option key={p.id} value={p.id}>
-                              Ped #{p.numero_pedido} - {p.cliente_nombre.substring(0, 12)} - ${p.precio_total}
+                              Ped #{p.numero_pedido} - {(p.cliente_nombre || '').substring(0, 12)} - ${p.precio_total}
                             </option>
                           ))
                         )}
@@ -727,26 +780,24 @@ export default function AdvancedBillingModule() {
 
           {/* COLUMNA DERECHA: PESTAÑAS DE VISUALIZACIÓN */}
           <div className="lg:col-span-2 bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-2xl shadow-xl flex flex-col overflow-hidden h-full">
-            
+
             {/* PESTAÑAS */}
             <div className="flex border-b border-gray-200 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-900/30">
               <button
                 onClick={() => setActiveTab('egresos')}
-                className={`flex-1 py-4 text-sm font-bold border-b-2 transition-all flex items-center justify-center gap-2 ${
-                  activeTab === 'egresos'
+                className={`flex-1 py-4 text-sm font-bold border-b-2 transition-all flex items-center justify-center gap-2 ${activeTab === 'egresos'
                     ? 'border-blue-500 text-blue-500'
                     : 'border-transparent text-gray-400 hover:text-gray-900 dark:hover:text-white'
-                }`}
+                  }`}
               >
                 <DollarSign size={16} /> Egresos Facturados (Gastos)
               </button>
               <button
                 onClick={() => setActiveTab('ingresos')}
-                className={`flex-1 py-4 text-sm font-bold border-b-2 transition-all flex items-center justify-center gap-2 ${
-                  activeTab === 'ingresos'
+                className={`flex-1 py-4 text-sm font-bold border-b-2 transition-all flex items-center justify-center gap-2 ${activeTab === 'ingresos'
                     ? 'border-emerald-500 text-emerald-500'
                     : 'border-transparent text-gray-400 hover:text-gray-900 dark:hover:text-white'
-                }`}
+                  }`}
               >
                 <Layers size={16} /> Ingresos Facturados (Ventas)
               </button>
@@ -769,7 +820,7 @@ export default function AdvancedBillingModule() {
                     {gastosFacturados.map((g) => (
                       <tr key={g.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/20 transition-colors">
                         <td className="p-4 font-mono text-gray-600 dark:text-gray-400">
-                          {g.fecha_timbrado ? new Date(g.fecha_timbrado).toLocaleDateString() : new Date(g.fecha_gasto).toLocaleDateString()}
+                          {g.fecha_timbrado ? new Date(g.fecha_timbrado || '').toLocaleDateString() : new Date(g.fecha_gasto || '').toLocaleDateString()}
                         </td>
                         <td className="p-4 font-mono">
                           <div className="text-gray-800 dark:text-gray-200 font-bold" title={g.uuid_fiscal}>
@@ -789,7 +840,7 @@ export default function AdvancedBillingModule() {
                           <div className="flex gap-1 justify-center">
                             {g.xml_url && (
                               <button
-                                onClick={() => handleDownloadFile(g.xml_url)}
+                                onClick={() => handleDownloadFile(g.xml_url || '')}
                                 className="p-1.5 bg-blue-50 dark:bg-blue-900/20 hover:bg-blue-100 dark:hover:bg-blue-900/40 rounded border border-blue-200 dark:border-blue-900/50 text-blue-500"
                                 title="Descargar XML"
                               >
@@ -798,7 +849,7 @@ export default function AdvancedBillingModule() {
                             )}
                             {g.pdf_url && (
                               <button
-                                onClick={() => handleDownloadFile(g.pdf_url)}
+                                onClick={() => handleDownloadFile(g.pdf_url || '')}
                                 className="p-1.5 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/40 rounded border border-red-200 dark:border-red-900/50 text-red-500"
                                 title="Descargar PDF"
                               >
@@ -836,124 +887,123 @@ export default function AdvancedBillingModule() {
                     <Plus size={14} /> Facturación Acumulada
                   </button>
                 </div>
-                
+
                 <div className="overflow-auto flex-1">
                   <table className="w-full text-left border-collapse min-w-[700px]">
-                  <thead>
-                    <tr className="bg-gray-50 dark:bg-gray-900/50 border-b border-gray-200 dark:border-gray-800 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase">
-                      <th className="p-4">Fecha Emisión</th>
-                      <th className="p-4">UUID / Folio</th>
-                      <th className="p-4">Cliente / Receptor</th>
-                      <th className="p-4 text-right">Monto</th>
-                      <th className="p-4 text-center">XML / PDF</th>
-                      <th className="p-4 text-center">Acciones</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100 dark:divide-gray-800/50 text-xs">
-                    {ventasFacturadas.map((v) => {
-                      const hasInvoice = v.facturas_clientes && v.facturas_clientes.length > 0;
-                      const invoice = hasInvoice ? v.facturas_clientes[0] : null;
-                      const clientName = v.clientes?.nombre_local || v.cliente_nombre || 'Cliente Ocasional';
-                      const clientRfc = v.clientes?.rfc || 'S/N';
-                      const totalAmount = invoice ? invoice.total : v.precio_total;
-                      const ivaAmount = invoice ? invoice.iva_trasladado : (Number(v.precio_total) * 0.16);
-                      const fechaDisplay = invoice?.fecha_emision || v.fecha_pedido;
+                    <thead>
+                      <tr className="bg-gray-50 dark:bg-gray-900/50 border-b border-gray-200 dark:border-gray-800 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase">
+                        <th className="p-4">Fecha Emisión</th>
+                        <th className="p-4">UUID / Folio</th>
+                        <th className="p-4">Cliente / Receptor</th>
+                        <th className="p-4 text-right">Monto</th>
+                        <th className="p-4 text-center">XML / PDF</th>
+                        <th className="p-4 text-center">Acciones</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100 dark:divide-gray-800/50 text-xs">
+                      {ventasFacturadas.map((v) => {
+                        const invoice = (v.facturas_clientes && v.facturas_clientes.length > 0) ? v.facturas_clientes[0] : null;
+                        const clientName = v.clientes?.nombre_local || v.cliente_nombre || 'Cliente Ocasional';
+                        const clientRfc = v.clientes?.rfc || 'S/N';
+                        const totalAmount = invoice ? (invoice.total || 0) : v.precio_total;
+                        const ivaAmount = invoice ? (invoice.iva_trasladado || 0) : (Number(v.precio_total) * 0.16);
+                        const fechaDisplay = invoice?.fecha_emision || v.fecha_pedido;
 
-                      return (
-                        <tr key={v.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/20 transition-colors">
-                          <td className="p-4 font-mono text-gray-600 dark:text-gray-400">
-                            {fechaDisplay ? new Date(fechaDisplay).toLocaleDateString() : 'N/A'}
-                          </td>
-                          <td className="p-4 font-mono">
-                            {invoice ? (
-                              <>
-                                <div className="text-gray-800 dark:text-gray-200 font-bold" title={invoice.uuid_fiscal}>
-                                  {invoice.uuid_fiscal.substring(0, 18)}...
+                        return (
+                          <tr key={v.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/20 transition-colors">
+                            <td className="p-4 font-mono text-gray-600 dark:text-gray-400">
+                              {fechaDisplay ? new Date(fechaDisplay).toLocaleDateString() : 'N/A'}
+                            </td>
+                            <td className="p-4 font-mono">
+                              {invoice ? (
+                                <>
+                                  <div className="text-gray-800 dark:text-gray-200 font-bold" title={invoice.uuid_fiscal}>
+                                    {(invoice.uuid_fiscal || '').substring(0, 18)}...
+                                  </div>
+                                  <div className="text-[10px] text-gray-400">
+                                    Folio: {invoice.serie_folio || 'S/N'} | Pedido #{v.numero_pedido}
+                                  </div>
+                                </>
+                              ) : (
+                                <div className="space-y-1">
+                                  <div>
+                                    {v.estatus_pago === 'Liquidado' ? (
+                                      <span className="px-2 py-0.5 rounded-full text-[9px] bg-yellow-100 dark:bg-yellow-500/10 text-yellow-700 dark:text-yellow-400 border border-yellow-200 dark:border-yellow-500/20 font-sans font-bold">
+                                        Pendiente de Facturar
+                                      </span>
+                                    ) : (
+                                      <span className="px-2 py-0.5 rounded-full text-[9px] bg-gray-100 dark:bg-gray-800 text-gray-500 border border-gray-200 dark:border-gray-700 font-sans font-bold">
+                                        No Liquidado
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="text-[10px] text-gray-400">
+                                    Pedido #{v.numero_pedido}
+                                  </div>
                                 </div>
-                                <div className="text-[10px] text-gray-400">
-                                  Folio: {invoice.serie_folio || 'S/N'} | Pedido #{v.numero_pedido}
-                                </div>
-                              </>
-                            ) : (
-                              <div className="space-y-1">
-                                <div>
-                                  {v.estatus_pago === 'Liquidado' ? (
-                                    <span className="px-2 py-0.5 rounded-full text-[9px] bg-yellow-100 dark:bg-yellow-500/10 text-yellow-700 dark:text-yellow-400 border border-yellow-200 dark:border-yellow-500/20 font-sans font-bold">
-                                      Pendiente de Facturar
-                                    </span>
-                                  ) : (
-                                    <span className="px-2 py-0.5 rounded-full text-[9px] bg-gray-100 dark:bg-gray-800 text-gray-500 border border-gray-200 dark:border-gray-700 font-sans font-bold">
-                                      No Liquidado
-                                    </span>
+                              )}
+                            </td>
+                            <td className="p-4">
+                              <div className="font-bold text-gray-800 dark:text-gray-200">{clientName}</div>
+                              <div className="font-mono text-[10px] text-gray-400">{clientRfc}</div>
+                            </td>
+                            <td className="p-4 text-right font-mono">
+                              <div className="font-bold text-emerald-500">+{formatCurrency(totalAmount)}</div>
+                              <div className="text-[10px] text-gray-400">IVA: {formatCurrency(ivaAmount)}</div>
+                            </td>
+                            <td className="p-4 text-center">
+                              {invoice ? (
+                                <div className="flex gap-1 justify-center">
+                                  {invoice.xml_url && (
+                                    <button
+                                      onClick={() => handleDownloadFile(invoice.xml_url || '')}
+                                      className="p-1.5 bg-blue-50 dark:bg-blue-900/20 hover:bg-blue-100 dark:hover:bg-blue-900/40 rounded border border-blue-200 dark:border-blue-900/50 text-blue-500"
+                                      title="Descargar XML"
+                                    >
+                                      <FileCode size={14} />
+                                    </button>
+                                  )}
+                                  {invoice.pdf_url && (
+                                    <button
+                                      onClick={() => handleDownloadFile(invoice.pdf_url || '')}
+                                      className="p-1.5 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/40 rounded border border-red-200 dark:border-red-900/50 text-red-500"
+                                      title="Descargar PDF"
+                                    >
+                                      <FileText size={14} />
+                                    </button>
                                   )}
                                 </div>
-                                <div className="text-[10px] text-gray-400">
-                                  Pedido #{v.numero_pedido}
-                                </div>
-                              </div>
-                            )}
-                          </td>
-                          <td className="p-4">
-                            <div className="font-bold text-gray-800 dark:text-gray-200">{clientName}</div>
-                            <div className="font-mono text-[10px] text-gray-400">{clientRfc}</div>
-                          </td>
-                          <td className="p-4 text-right font-mono">
-                            <div className="font-bold text-emerald-500">+{formatCurrency(totalAmount)}</div>
-                            <div className="text-[10px] text-gray-400">IVA: {formatCurrency(ivaAmount)}</div>
-                          </td>
-                          <td className="p-4 text-center">
-                            {invoice ? (
-                              <div className="flex gap-1 justify-center">
-                                {invoice.xml_url && (
-                                  <button
-                                    onClick={() => handleDownloadFile(invoice.xml_url)}
-                                    className="p-1.5 bg-blue-50 dark:bg-blue-900/20 hover:bg-blue-100 dark:hover:bg-blue-900/40 rounded border border-blue-200 dark:border-blue-900/50 text-blue-500"
-                                    title="Descargar XML"
-                                  >
-                                    <FileCode size={14} />
-                                  </button>
-                                )}
-                                {invoice.pdf_url && (
-                                  <button
-                                    onClick={() => handleDownloadFile(invoice.pdf_url)}
-                                    className="p-1.5 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/40 rounded border border-red-200 dark:border-red-900/50 text-red-500"
-                                    title="Descargar PDF"
-                                  >
-                                    <FileText size={14} />
-                                  </button>
-                                )}
-                              </div>
-                            ) : (
-                              <span className="text-gray-400 italic">No disponible</span>
-                            )}
-                          </td>
-                          <td className="p-4 text-center">
-                            {invoice ? (
-                              <button
-                                onClick={() => handleSendEmail(v.id)}
-                                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded font-medium shadow-sm transition-colors text-[10px] uppercase tracking-wider"
-                              >
-                                <Mail size={12} /> Enviar
-                              </button>
-                            ) : (
-                              <span className="text-gray-400 italic">-</span>
-                            )}
+                              ) : (
+                                <span className="text-gray-400 italic">No disponible</span>
+                              )}
+                            </td>
+                            <td className="p-4 text-center">
+                              {invoice ? (
+                                <button
+                                  onClick={() => handleSendEmail(v.id)}
+                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded font-medium shadow-sm transition-colors text-[10px] uppercase tracking-wider"
+                                >
+                                  <Mail size={12} /> Enviar
+                                </button>
+                              ) : (
+                                <span className="text-gray-400 italic">-</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      {ventasFacturadas.length === 0 && (
+                        <tr>
+                          <td colSpan={6} className="p-8 text-center text-gray-400 italic">
+                            No hay ventas registradas
                           </td>
                         </tr>
-                      );
-                    })}
-                    {ventasFacturadas.length === 0 && (
-                      <tr>
-                        <td colSpan={6} className="p-8 text-center text-gray-400 italic">
-                          No hay ventas registradas
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
               </div>
-            </div>
-          )}
+            )}
 
           </div>
 
@@ -968,7 +1018,7 @@ export default function AdvancedBillingModule() {
             <h3 className="text-xl font-extrabold mb-4 flex items-center gap-2 text-emerald-500">
               <Mail /> Correo de Facturación Enviado (Simulado)
             </h3>
-            
+
             <div className="space-y-4 text-sm">
               <div className="p-3 bg-gray-50 dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 font-mono text-xs space-y-1">
                 <div><span className="text-gray-400">De:</span> facturacion@seimenjo.com</div>
@@ -984,7 +1034,7 @@ export default function AdvancedBillingModule() {
                 <p className="text-xs text-gray-400 font-mono">
                   UUID Fiscal: {emailModal.details.uuid_fiscal}
                 </p>
-                
+
                 <div className="pt-3 border-t border-gray-200 dark:border-gray-800 space-y-2">
                   <div className="text-xs font-bold text-gray-500 uppercase mb-1">Archivos Adjuntos (Enlaces Firmados de Storage):</div>
                   <div className="flex flex-wrap gap-2">
@@ -1032,7 +1082,7 @@ export default function AdvancedBillingModule() {
       {facturacionAcumuladaModal.open && (
         <div className="fixed inset-0 bg-black/60 dark:bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4 transition-all">
           <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-6 rounded-2xl w-full max-w-4xl shadow-2xl max-h-[90vh] overflow-y-auto text-gray-900 dark:text-gray-100 flex flex-col">
-            
+
             {/* Cabecera */}
             <div className="flex justify-between items-start border-b border-gray-100 dark:border-gray-800 pb-4 mb-4">
               <div>
@@ -1120,7 +1170,7 @@ export default function AdvancedBillingModule() {
                                 type="checkbox"
                                 checked={
                                   facturacionAcumuladaModal.seleccionados.length ===
-                                    facturacionAcumuladaModal.pedidos.length &&
+                                  facturacionAcumuladaModal.pedidos.length &&
                                   facturacionAcumuladaModal.pedidos.length > 0
                                 }
                                 onChange={toggleSeleccionarTodosPedidosFacturacionAcumulada}

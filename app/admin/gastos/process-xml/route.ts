@@ -6,7 +6,7 @@ export async function POST(req: Request) {
   // 1. SOLUCIÓN A VERCEL: Inicializamos a Supabase DENTRO de la función.
   // Así evitamos que Next.js intente leer variables faltantes durante el "build".
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-  
+
   // 2. FALLBACK INTELIGENTE: Si no tienes el Service Role en Vercel, usará tu llave pública (Anon Key).
   const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
   const supabase = createClient(supabaseUrl, supabaseKey);
@@ -17,7 +17,7 @@ export async function POST(req: Request) {
     if (!file) return NextResponse.json({ error: 'Archivo no encontrado' }, { status: 400 });
 
     const text = await file.text();
-    
+
     // 3. SOLUCIÓN CRÍTICA PARA CFDI: 'ignoreAttributes: false' es obligatorio
     // para poder leer correctamente los campos que empiezan con "@_"
     const parser = new XMLParser({ ignoreAttributes: false });
@@ -27,7 +27,7 @@ export async function POST(req: Request) {
     if (!cfdi) throw new Error("El archivo XML no es un CFDI válido");
 
     const emisor = cfdi['cfdi:Emisor'];
-    
+
     // Manejamos variaciones de mayúsculas entre CFDI 3.3 y 4.0
     const rfcEmisor = emisor?.['@_Rfc'] || emisor?.['@_rfc'];
     const nombreEmisor = emisor?.['@_Nombre'] || emisor?.['@_nombre'];
@@ -57,8 +57,9 @@ export async function POST(req: Request) {
     if (gastoError) throw gastoError;
 
     return NextResponse.json({ message: 'Gasto registrado correctamente' });
-  } catch (error: any) {
-    console.error("Error procesando XML:", error);
-    return NextResponse.json({ error: error.message || 'Error en el procesamiento' }, { status: 500 });
+  } catch (error: unknown) {
+    console.error('Error procesando XML:', error);
+    const message = error instanceof Error ? error.message : String(error);
+    return NextResponse.json({ error: message || 'Error en el procesamiento' }, { status: 500 });
   }
 }

@@ -1,12 +1,40 @@
 'use client';
+/* eslint-disable @typescript-eslint/no-explicit-any */
+/* eslint-disable react-hooks/exhaustive-deps */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../../lib/supabase';
 import { useThemeMode } from '../../../lib/useThemeMode';
 import {
   Users, Shield, Plus, Trash2, Key, CheckSquare, Square, Sun, Moon, Building, UserCheck
 } from 'lucide-react';
+
+// Type definitions for data structures
+interface Empresa {
+  id: string;
+  nombre: string;
+  [key: string]: unknown;
+}
+interface Perfil {
+  id: string;
+  nombre: string;
+  permisos: Record<string, { read: boolean; write: boolean }>;
+  [key: string]: unknown;
+}
+interface Sucursal {
+  id: string;
+  nombre: string;
+  [key: string]: unknown;
+}
+interface UsuarioStaff {
+  id: string;
+  correo: string;
+  activo: boolean;
+  es_superusuario?: boolean;
+  perfiles_seguridad?: { nombre: string };
+  [key: string]: unknown;
+}
 import { crearUsuarioStaffAdmin } from '../actions/adminAuth';
 
 export default function StaffPage() {
@@ -19,11 +47,11 @@ export default function StaffPage() {
   const [loading, setLoading] = useState(true);
 
   // --- LISTAS DE DATOS ---
-  const [empresas, setEmpresas] = useState<any[]>([]);
+  const [empresas, setEmpresas] = useState<Empresa[]>([]);
   const [selectedEmpresaId, setSelectedEmpresaId] = useState<string>(''); // Para Superusuario
-  const [perfiles, setPerfiles] = useState<any[]>([]);
-  const [sucursales, setSucursales] = useState<any[]>([]);
-  const [usuariosStaff, setUsuariosStaff] = useState<any[]>([]);
+  const [perfiles, setPerfiles] = useState<Perfil[]>([]);
+  const [sucursales, setSucursales] = useState<Sucursal[]>([]);
+  const [usuariosStaff, setUsuariosStaff] = useState<UsuarioStaff[]>([]);
 
   // --- ESTADOS FORMULARIO PERFIL ---
   const [nuevoPerfilNombre, setNuevoPerfilNombre] = useState('');
@@ -45,7 +73,7 @@ export default function StaffPage() {
   const [guardandoUsuario, setGuardandoUsuario] = useState(false);
 
   // --- CARGA DE DATOS ---
-  const loadData = async (empId: string | null, isSuper: boolean) => {
+  const loadData = useCallback(async (empId: string | null, isSuper: boolean) => {
     setLoading(true);
     try {
       let targetEmpresa = empId;
@@ -53,7 +81,7 @@ export default function StaffPage() {
       // Si es Superusuario, cargar catálogo de empresas
       if (isSuper) {
         const { data: emps } = await supabase.from('empresas').select('*').order('nombre');
-        const empsList = emps || [];
+        const empsList = (emps as Empresa[]) || [];
         setEmpresas(empsList);
         targetEmpresa = selectedEmpresaId || empsList[0]?.id || null;
       }
@@ -69,7 +97,7 @@ export default function StaffPage() {
         .select('*')
         .eq('empresa_id', targetEmpresa)
         .order('nombre');
-      setPerfiles(perfs || []);
+      setPerfiles((perfs as Perfil[]) || []);
 
       // Consultar sucursales
       const { data: sucs } = await supabase
@@ -77,7 +105,7 @@ export default function StaffPage() {
         .select('*')
         .eq('empresa_id', targetEmpresa)
         .order('nombre');
-      setSucursales(sucs || []);
+      setSucursales((sucs as Sucursal[]) || []);
 
       // Consultar staff con sus perfiles
       const { data: staffList } = await supabase
@@ -85,13 +113,13 @@ export default function StaffPage() {
         .select('*, perfiles_seguridad(nombre)')
         .eq('empresa_id', targetEmpresa)
         .order('correo');
-      setUsuariosStaff(staffList || []);
-    } catch (err) {
-      console.error('Error al cargar datos de Personal:', err);
+      setUsuariosStaff((staffList as UsuarioStaff[]) || []);
+    } catch (err: unknown) {
+      if (err instanceof Error) console.error('Error al cargar datos de Personal:', err); else console.error('Error al cargar datos de Personal:', err);
     } finally {
       setLoading(false);
     }
-  };
+  }, [selectedEmpresaId]);
 
   useEffect(() => {
     const checkAuth = async () => {
@@ -113,7 +141,7 @@ export default function StaffPage() {
       }
     };
     checkAuth();
-  }, [router, selectedEmpresaId]);
+  }, [router, selectedEmpresaId, loadData]);
 
   // --- ACCIONES DE PERFILES (ROLES) ---
   const handleCrearPerfil = async () => {
@@ -142,9 +170,14 @@ export default function StaffPage() {
         facturacion: { read: true, write: false }
       });
       await loadData(empresaId, esSuperusuario);
-    } catch (err: any) {
-      console.error(err);
-      alert('Error al crear perfil: ' + err.message);
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+         console.error(err);
+         alert('Error al crear perfil: ' + err.message);
+       } else {
+         console.error(err);
+         alert('Error al crear perfil');
+       }
     }
   };
 
@@ -154,9 +187,14 @@ export default function StaffPage() {
       const { error } = await supabase.from('perfiles_seguridad').delete().eq('id', id);
       if (error) throw error;
       await loadData(empresaId, esSuperusuario);
-    } catch (err: any) {
-      console.error(err);
-      alert('Error al eliminar perfil: ' + err.message);
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+         console.error(err);
+         alert('Error al eliminar perfil: ' + err.message);
+       } else {
+         console.error(err);
+         alert('Error al eliminar perfil');
+       }
     }
   };
 
@@ -204,9 +242,14 @@ export default function StaffPage() {
       setSelectedPerfilId('');
       setSelectedSucursales([]);
       await loadData(empresaId, esSuperusuario);
-    } catch (err: any) {
-      console.error(err);
-      alert('Error al crear usuario de staff: ' + err.message);
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+         console.error(err);
+         alert('Error al crear usuario de staff: ' + err.message);
+       } else {
+         console.error(err);
+         alert('Error al crear usuario de staff');
+       }
     } finally {
       setGuardandoUsuario(false);
     }
@@ -224,16 +267,17 @@ export default function StaffPage() {
       if (error) throw error;
       await loadData(empresaId, esSuperusuario);
       alert('Usuario inhabilitado correctamente.');
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error(err);
-      alert('Error al inhabilitar usuario: ' + err.message);
+      const errMsg = err instanceof Error ? err.message : String(err);
+      alert('Error al inhabilitar usuario: ' + errMsg);
     }
   };
 
   return (
     <div className={`${isDarkMode ? 'dark' : ''} w-full`}>
       <div className="bg-gray-50 dark:bg-gray-900 min-h-screen text-gray-900 dark:text-gray-100 transition-colors p-8 flex flex-col w-full max-w-[100vw]">
-        
+
         {/* HEADER */}
         <div className="mb-8 flex justify-between items-start md:items-center flex-col md:flex-row gap-4 shrink-0">
           <div>
@@ -273,7 +317,7 @@ export default function StaffPage() {
           <div className="flex-1 flex items-center justify-center italic text-gray-500">Cargando personal y roles...</div>
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 flex-1 items-start">
-            
+
             {/* IZQUIERDA: PERFILES / ROLES (Permisos JSONB) */}
             <div className="bg-white dark:bg-gray-950 p-6 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-sm space-y-6">
               <h3 className="text-lg font-bold flex items-center gap-2">
@@ -352,7 +396,7 @@ export default function StaffPage() {
                       <tr key={perf.id} className="hover:bg-gray-50 dark:hover:bg-gray-900/10">
                         <td className="p-3 font-semibold text-gray-800 dark:text-gray-200">{perf.nombre}</td>
                         <td className="p-3 text-[10px] space-y-0.5">
-                          {Object.entries(perf.permisos || {}).map(([mod, rules]: any) => (
+                          {Object.entries(perf.permisos || {}).map(([mod, rules]: [string, {read:boolean; write:boolean}]) => (
                             <div key={mod}>
                               <span className="font-bold text-gray-500 uppercase">{mod}:</span>{' '}
                               <span className="text-gray-400">

@@ -1,9 +1,12 @@
 'use client';
+/* eslint-disable @typescript-eslint/no-explicit-any */
+/* eslint-disable react-hooks/exhaustive-deps */
 
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../../lib/supabase';
 import { useThemeMode } from '../../../lib/useThemeMode';
+import { Repartidor, FormaPago, EstatusFactura, RegimenFiscal, UsoCfdi, CategoriaGasto, Proveedor, ProductoVariante } from '../types';
 import {
   Settings, Truck, CreditCard, FileCheck, Hash, Globe, FileText,
   FolderOpen, Users, Plus, Trash2, Save, Sun, Moon, AlertTriangle, Package
@@ -19,15 +22,15 @@ export default function ConfigPage() {
   const [activeTab, setActiveTab] = useState<'ventas' | 'clientes' | 'gastos' | 'productos' | 'tickets' | 'superusuario'>('ventas');
 
   // --- ESTADOS DE DATOS ---
-  const [repartidores, setRepartidores] = useState<any[]>([]);
-  const [formasPago, setFormasPago] = useState<any[]>([]);
-  const [estatusFactura, setEstatusFactura] = useState<any[]>([]);
-  const [regimenesFiscales, setRegimenesFiscales] = useState<any[]>([]);
-  const [usosCfdi, setUsosCfdi] = useState<any[]>([]);
-  const [categoriasGasto, setCategoriasGasto] = useState<any[]>([]);
-  const [proveedores, setProveedores] = useState<any[]>([]);
-  const [productos, setProductos] = useState<any[]>([]);
-  const [productoVariantes, setProductoVariantes] = useState<any[]>([]);
+  const [repartidores, setRepartidores] = useState<Repartidor[]>([]);
+  const [formasPago, setFormasPago] = useState<FormaPago[]>([]);
+  const [estatusFactura, setEstatusFactura] = useState<EstatusFactura[]>([]);
+  const [regimenesFiscales, setRegimenesFiscales] = useState<RegimenFiscal[]>([]);
+  const [usosCfdi, setUsosCfdi] = useState<UsoCfdi[]>([]);
+  const [categoriasGasto, setCategoriasGasto] = useState<CategoriaGasto[]>([]);
+  const [proveedores, setProveedores] = useState<Proveedor[]>([]);
+  const [productos, setProductos] = useState<unknown[]>([]);
+  const [productoVariantes, setProductoVariantes] = useState<ProductoVariante[]>([]);
 
   // --- ESTADOS DE SUPERUSUARIO ---
   const [esSuperusuario, setEsSuperusuario] = useState(false);
@@ -87,9 +90,10 @@ export default function ConfigPage() {
       if (error) throw error;
       setErrors(prev => ({ ...prev, [tableName]: null }));
       return data || [];
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error(`Error al cargar ${tableName}:`, err);
-      setErrors(prev => ({ ...prev, [tableName]: err.message || 'Error de base de datos' }));
+      const errMsg = err instanceof Error ? err.message : String(err);
+      setErrors(prev => ({ ...prev, [tableName]: errMsg }));
       return [];
     }
   };
@@ -247,7 +251,7 @@ export default function ConfigPage() {
       const fileName = `${folder}/${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
       const { data, error } = await supabase.storage.from(bucket).upload(fileName, file);
       if (error) throw error;
-      
+
       const { data: urlData } = supabase.storage.from(bucket).getPublicUrl(fileName);
       return urlData.publicUrl;
     } catch (err: any) {
@@ -282,14 +286,14 @@ export default function ConfigPage() {
         }])
         .select()
         .single();
-      
+
       if (error) throw error;
-      
+
       // Auto-inicializar módulos
       const modulosDefecto = ['ventas', 'clientes', 'gastos', 'facturacion', 'personal', 'configuracion'];
       const insertsModulos = modulosDefecto.map(m => ({ empresa_id: data.id, modulo: m, activo: true }));
       await supabase.from('modulos_empresa').insert(insertsModulos);
-      
+
       setNuevaEmpresa({
         nombre: '', rfc: '', razon_social: '', codigo_postal: '', regimen_fiscal_id: '',
         email_contacto: '', telefono: '', moneda: 'MXN', logo_url: '', logo_ticket_url: '',
@@ -315,9 +319,9 @@ export default function ConfigPage() {
           nombre: nuevaSucursal.nombre,
           codigo: nuevaSucursal.codigo || null
         }]);
-      
+
       if (error) throw error;
-      
+
       setNuevaSucursal({ empresa_id: '', nombre: '', codigo: '' });
       await loadSuperData();
       alert('Sucursal creada correctamente.');
@@ -329,7 +333,7 @@ export default function ConfigPage() {
 
   const handleCrearAdminEmpresa = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     // 1. Validar selección de empresa
     if (!adminEmpresaId) {
       return alert('Error de Validación: Debes seleccionar una empresa de la lista.');
@@ -396,7 +400,7 @@ export default function ConfigPage() {
           modulo: modulo,
           activo: !estadoActual
         }, { onConflict: 'empresa_id,modulo' });
-      
+
       if (error) throw error;
       await loadSuperData();
     } catch (err: any) {
@@ -439,7 +443,7 @@ export default function ConfigPage() {
       <div className="bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-400 p-3 rounded-xl border border-red-200 dark:border-red-900/50 text-xs flex items-start gap-2 animate-in fade-in">
         <AlertTriangle size={16} className="shrink-0 mt-0.5" />
         <div>
-          <strong>Error de Base de Datos:</strong> {err}. 
+          <strong>Error de Base de Datos:</strong> {err}.
           <p className="mt-1 text-gray-500 dark:text-gray-400 font-sans">
             Asegúrate de ejecutar el script <span className="font-mono bg-gray-100 dark:bg-gray-800 p-0.5 rounded">supabase_setup.sql</span> en el editor SQL para crear la tabla.
           </p>
@@ -451,7 +455,7 @@ export default function ConfigPage() {
   return (
     <div className={`${isDarkMode ? 'dark' : ''} w-full`}>
       <div className="bg-gray-50 dark:bg-gray-900 min-h-screen text-gray-900 dark:text-gray-100 transition-colors flex flex-col p-8 w-full max-w-[100vw] mx-auto">
-        
+
         {/* HEADER DE CONFIGURACIÓN */}
         <div className="mb-8 flex justify-between items-start md:items-center flex-col md:flex-row gap-4 shrink-0">
           <div>
@@ -474,62 +478,56 @@ export default function ConfigPage() {
         <div className="flex gap-2 p-1.5 bg-gray-200/55 dark:bg-gray-950/40 backdrop-blur-md rounded-2xl mb-8 self-start border border-gray-300/30 dark:border-gray-800/30 font-sans">
           <button
             onClick={() => setActiveTab('ventas')}
-            className={`px-5 py-2.5 rounded-xl text-sm font-semibold transition-all duration-300 flex items-center gap-2 ${
-              activeTab === 'ventas'
+            className={`px-5 py-2.5 rounded-xl text-sm font-semibold transition-all duration-300 flex items-center gap-2 ${activeTab === 'ventas'
                 ? 'bg-amber-600 text-white shadow-md'
                 : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-200/50 dark:hover:bg-gray-800/50'
-            }`}
+              }`}
           >
             <Truck size={16} /> Módulo de Ventas
           </button>
           <button
             onClick={() => setActiveTab('clientes')}
-            className={`px-5 py-2.5 rounded-xl text-sm font-semibold transition-all duration-300 flex items-center gap-2 ${
-              activeTab === 'clientes'
+            className={`px-5 py-2.5 rounded-xl text-sm font-semibold transition-all duration-300 flex items-center gap-2 ${activeTab === 'clientes'
                 ? 'bg-emerald-600 text-white shadow-md'
                 : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-200/50 dark:hover:bg-gray-800/50'
-            }`}
+              }`}
           >
             <Globe size={16} /> Módulo de Clientes (SAT)
           </button>
           <button
             onClick={() => setActiveTab('gastos')}
-            className={`px-5 py-2.5 rounded-xl text-sm font-semibold transition-all duration-300 flex items-center gap-2 ${
-              activeTab === 'gastos'
+            className={`px-5 py-2.5 rounded-xl text-sm font-semibold transition-all duration-300 flex items-center gap-2 ${activeTab === 'gastos'
                 ? 'bg-blue-600 text-white shadow-md'
                 : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-200/50 dark:hover:bg-gray-800/50'
-            }`}
+              }`}
           >
             <FolderOpen size={16} /> Módulo de Gastos
           </button>
           <button
             onClick={() => setActiveTab('productos')}
-            className={`px-5 py-2.5 rounded-xl text-sm font-semibold transition-all duration-300 flex items-center gap-2 ${
-              activeTab === 'productos'
+            className={`px-5 py-2.5 rounded-xl text-sm font-semibold transition-all duration-300 flex items-center gap-2 ${activeTab === 'productos'
                 ? 'bg-amber-600 text-white shadow-md'
                 : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-200/50 dark:hover:bg-gray-800/50'
-            }`}
+              }`}
           >
             <Package size={16} /> Productos y Precios Especiales
           </button>
           <button
             onClick={() => setActiveTab('tickets')}
-            className={`px-5 py-2.5 rounded-xl text-sm font-semibold transition-all duration-300 flex items-center gap-2 ${
-              activeTab === 'tickets'
+            className={`px-5 py-2.5 rounded-xl text-sm font-semibold transition-all duration-300 flex items-center gap-2 ${activeTab === 'tickets'
                 ? 'bg-amber-600 text-white shadow-md'
                 : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-200/50 dark:hover:bg-gray-800/50'
-            }`}
+              }`}
           >
             <FileText size={16} /> Configuración de Tickets
           </button>
           {esSuperusuario && (
             <button
               onClick={() => setActiveTab('superusuario')}
-              className={`px-5 py-2.5 rounded-xl text-sm font-semibold transition-all duration-300 flex items-center gap-2 ${
-                activeTab === 'superusuario'
+              className={`px-5 py-2.5 rounded-xl text-sm font-semibold transition-all duration-300 flex items-center gap-2 ${activeTab === 'superusuario'
                   ? 'bg-amber-600 text-white shadow-md'
                   : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-200/50 dark:hover:bg-gray-800/50'
-              }`}
+                }`}
             >
               <Globe size={16} /> Administración de Superusuario
             </button>
@@ -538,17 +536,17 @@ export default function ConfigPage() {
 
         {/* --- CONTENIDO DE LAS PESTAÑAS --- */}
         <div className="flex-1 space-y-8 animate-in fade-in duration-300">
-          
+
           {/* PESTAÑA: VENTAS */}
           {activeTab === 'ventas' && (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-              
+
               {/* BLOQUE: REPARTIDORES */}
               <div className="bg-white dark:bg-gray-950 p-6 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-sm space-y-4">
                 <h3 className="text-lg font-bold flex items-center gap-2">
                   <Truck className="text-amber-500" size={20} /> Catálogo de Repartidores
                 </h3>
-                
+
                 <ErrorBanner table="repartidores" />
 
                 {/* Formulario */}
@@ -606,9 +604,9 @@ export default function ConfigPage() {
                 <h3 className="text-lg font-bold flex items-center gap-2">
                   <Hash className="text-amber-500" size={20} /> Consecutivo del Pedido
                 </h3>
-                
+
                 <ErrorBanner table="consecutivo" />
-                
+
                 <p className="text-xs text-gray-500 dark:text-gray-400 font-sans">
                   Define el número consecutivo del siguiente pedido que se capture en el monitor maestro.
                 </p>
@@ -634,7 +632,7 @@ export default function ConfigPage() {
                 <h3 className="text-lg font-bold flex items-center gap-2">
                   <CreditCard className="text-amber-500" size={20} /> Formas de Pago
                 </h3>
-                
+
                 <ErrorBanner table="formas_pago" />
 
                 {/* Formulario */}
@@ -692,7 +690,7 @@ export default function ConfigPage() {
                 <h3 className="text-lg font-bold flex items-center gap-2">
                   <FileCheck className="text-amber-500" size={20} /> Estatus de Factura
                 </h3>
-                
+
                 <ErrorBanner table="estatus_factura" />
 
                 {/* Formulario */}
@@ -751,13 +749,13 @@ export default function ConfigPage() {
           {/* PESTAÑA: CLIENTES */}
           {activeTab === 'clientes' && (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-              
+
               {/* BLOQUE: RÉGIMENES FISCALES */}
               <div className="bg-white dark:bg-gray-950 p-6 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-sm space-y-4">
                 <h3 className="text-lg font-bold flex items-center gap-2">
                   <Globe className="text-emerald-500" size={20} /> Régimen Fiscal (SAT)
                 </h3>
-                
+
                 <ErrorBanner table="regimenes_fiscales" />
 
                 {/* Formulario */}
@@ -824,7 +822,7 @@ export default function ConfigPage() {
                 <h3 className="text-lg font-bold flex items-center gap-2">
                   <FileText className="text-emerald-500" size={20} /> Uso de CFDI (SAT)
                 </h3>
-                
+
                 <ErrorBanner table="usos_cfdi" />
 
                 {/* Formulario */}
@@ -892,15 +890,15 @@ export default function ConfigPage() {
           {/* PESTAÑA: GASTOS */}
           {activeTab === 'gastos' && (
             <div className="space-y-8 animate-in fade-in">
-              
+
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                
+
                 {/* BLOQUE: CATEGORÍAS DE GASTO */}
                 <div className="bg-white dark:bg-gray-950 p-6 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-sm space-y-4">
                   <h3 className="text-lg font-bold flex items-center gap-2">
                     <FolderOpen className="text-blue-500" size={20} /> Categorías de Gasto
                   </h3>
-                  
+
                   <ErrorBanner table="categorias_gasto" />
 
                   {/* Formulario */}
@@ -943,11 +941,10 @@ export default function ConfigPage() {
                           <tr key={cg.id} className="hover:bg-gray-50 dark:hover:bg-gray-900/10">
                             <td className="p-3 font-semibold">{cg.nombre}</td>
                             <td className="p-3">
-                              <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold border ${
-                                (cg.tipo === 'Materia Prima' || cg.descripcion === 'Materia Prima')
+                              <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold border ${(cg.tipo === 'Materia Prima' || cg.descripcion === 'Materia Prima')
                                   ? 'bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-400 border-amber-200 dark:border-amber-900/50'
                                   : 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-400 border-blue-200 dark:border-blue-800/50'
-                              }`}>
+                                }`}>
                                 {cg.tipo || cg.descripcion || 'Operativo'}
                               </span>
                             </td>
@@ -976,9 +973,9 @@ export default function ConfigPage() {
                   <h3 className="text-lg font-bold flex items-center gap-2">
                     <CreditCard className="text-blue-500" size={20} /> Métodos de Pago (Consulta)
                   </h3>
-                  
+
                   <ErrorBanner table="formas_pago" />
-                  
+
                   <p className="text-xs text-gray-500 dark:text-gray-400 font-sans">
                     Este catálogo se comparte con las formas de pago de Ventas. Puedes gestionarlo desde la pestaña Ventas.
                   </p>
@@ -1012,7 +1009,7 @@ export default function ConfigPage() {
                 <h3 className="text-lg font-bold flex items-center gap-2">
                   <Users className="text-blue-500" size={20} /> Directorio de Proveedores
                 </h3>
-                
+
                 <ErrorBanner table="proveedores" />
 
                 {/* Formulario */}
@@ -1135,16 +1132,16 @@ export default function ConfigPage() {
 
           {activeTab === 'superusuario' && esSuperusuario && (
             <div className="space-y-8 animate-in fade-in duration-300">
-              
+
               {/* SECCIÓN: EMPRESAS */}
               <div className="bg-white dark:bg-gray-950 p-6 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-sm space-y-6">
                 <h3 className="text-lg font-bold flex items-center gap-2">
                   <Globe className="text-amber-500" size={20} /> Registro de Empresas (Tenants)
                 </h3>
-                
+
                 {/* Formulario Empresa Extendido */}
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6 p-6 bg-gray-50 dark:bg-gray-900/60 rounded-xl border border-gray-100 dark:border-gray-800 font-sans">
-                  
+
                   {/* Fila 1: Datos de Identidad */}
                   <div>
                     <label className="text-[10px] font-bold text-gray-500 uppercase">Nombre Comercial / Nombre de Fantasía *</label>
@@ -1399,11 +1396,10 @@ export default function ConfigPage() {
                                     <button
                                       key={m}
                                       onClick={() => handleToggleModulo(emp.id, m, !!moduloActivo)}
-                                      className={`px-2 py-0.5 rounded text-[10px] font-semibold transition-all ${
-                                        moduloActivo
+                                      className={`px-2 py-0.5 rounded text-[10px] font-semibold transition-all ${moduloActivo
                                           ? 'bg-emerald-100 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-500/20'
                                           : 'bg-gray-100 dark:bg-gray-800 text-gray-400 dark:text-gray-500 border border-gray-200 dark:border-gray-700'
-                                      }`}
+                                        }`}
                                     >
                                       {m.toUpperCase()}
                                     </button>

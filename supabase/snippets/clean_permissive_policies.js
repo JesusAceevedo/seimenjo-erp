@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-require-imports */
 const { execSync } = require('child_process');
 
 const queries = [
@@ -49,9 +50,9 @@ console.log("Limpiando políticas permisivas y asignando datos históricos...");
 for (let i = 0; i < queries.length; i++) {
   const query = queries[i];
   console.log(`\n[${i + 1}/${queries.length}] Ejecutando: ${query}...`);
-  
+
   const escapedQuery = query.replace(/"/g, '\\"');
-  
+
   try {
     const output = execSync(`npx supabase db query "${escapedQuery}"`, {
       cwd: 'd:\\seimenjo-erp',
