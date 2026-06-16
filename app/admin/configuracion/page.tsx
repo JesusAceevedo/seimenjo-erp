@@ -453,8 +453,8 @@ export default function ConfigPage() {
   };
 
   return (
-    <div className={`${isDarkMode ? 'dark' : ''} w-full`}>
-      <div className="bg-gray-50 dark:bg-gray-900 min-h-screen text-gray-900 dark:text-gray-100 transition-colors flex flex-col p-8 w-full max-w-[100vw] mx-auto">
+    <div className={`${isDarkMode ? 'dark' : ''} w-full h-full overflow-y-auto`}>
+      <div className="bg-gray-50 dark:bg-gray-900 min-h-full text-gray-900 dark:text-gray-100 transition-colors flex flex-col p-8 w-full max-w-[100vw] mx-auto">
 
         {/* HEADER DE CONFIGURACIÓN */}
         <div className="mb-8 flex justify-between items-start md:items-center flex-col md:flex-row gap-4 shrink-0">
