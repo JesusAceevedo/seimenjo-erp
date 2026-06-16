@@ -122,7 +122,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const isSelected = (path: string) => pathname === path || pathname.startsWith(path);
 
   return (
-    <div className="flex min-h-screen bg-gray-50 dark:bg-gray-900">
+    <div className="flex h-screen bg-gray-50 dark:bg-gray-900 overflow-hidden">
       {needsOnboarding && empresaId && (
         <OnboardingWizard 
           empresaId={empresaId} 
@@ -247,7 +247,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         )}
       </aside>
 
-      <main className="flex-1 overflow-auto">
+      <main className="flex-1 h-full overflow-hidden flex flex-col">
         {children}
       </main>
     </div>

@@ -32,9 +32,25 @@ export default function AdminGastos() {
   // Estados de UI y Filtros
   const { isDarkMode, toggleDarkMode } = useThemeMode();
   const [page, setPage] = useState(0);
-  const pageSize = 10;
+  const [pageSize, setPageSize] = useState(8);
   const [formasPagoList, setFormasPagoList] = useState<any[]>([]);
   const [busquedaGasto, setBusquedaGasto] = useState('');
+
+  // Calcular pageSize dinámicamente según la altura del viewport para evitar scroll principal
+  useEffect(() => {
+    const calcularPageSize = () => {
+      const vh = window.innerHeight;
+      // Para Egresos: padding (64px) + header (60px) + KPIs (120px) + filtros (80px) + cabeceras/márgenes (120px) = 444px
+      const espacioDisponible = vh - 440;
+      const alturaFila = 56; // Fila de gasto mide aprox 56px de alto
+      const filasQueCaben = Math.floor(espacioDisponible / alturaFila);
+      setPageSize(Math.max(3, filasQueCaben));
+    };
+
+    calcularPageSize();
+    window.addEventListener('resize', calcularPageSize);
+    return () => window.removeEventListener('resize', calcularPageSize);
+  }, []);
   
   // Filtros de fecha y método de pago
   const [filtroRango, setFiltroRango] = useState<string>('todo');
@@ -217,7 +233,7 @@ export default function AdminGastos() {
     const from = page * pageSize;
     const to = from + pageSize;
     return gastosFiltrados.slice(from, to);
-  }, [gastosFiltrados, page]);
+  }, [gastosFiltrados, page, pageSize]);
 
   // --- LÓGICA DE GUARDADO MANUAL ---
   const handleGuardarGasto = async () => {
@@ -279,11 +295,11 @@ export default function AdminGastos() {
   };
 
   return (
-    <div className={`${isDarkMode ? 'dark' : ''}`}>
-      <div className="bg-gray-50 dark:bg-gray-900 min-h-screen text-gray-900 dark:text-gray-100 transition-colors flex">
+    <div className={`${isDarkMode ? 'dark' : ''} h-full overflow-hidden flex flex-col`}>
+      <div className="bg-gray-50 dark:bg-gray-900 h-full text-gray-900 dark:text-gray-100 transition-colors flex overflow-hidden">
 
         {/* ÁREA PRINCIPAL */}
-        <main className="flex-1 flex flex-col p-8 w-full max-w-[100vw] md:max-w-[calc(100vw-16rem)] mx-auto">
+        <main className="flex-1 flex flex-col p-8 w-full max-w-[100vw] md:max-w-[calc(100vw-16rem)] mx-auto overflow-hidden h-full">
 
           {/* HEADER */}
           <div className="mb-6 flex justify-between items-start md:items-center flex-col md:flex-row gap-4">

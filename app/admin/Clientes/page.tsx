@@ -53,11 +53,35 @@
     
     // Paginación y Filtros de Órdenes
     const [page, setPage] = useState(0);
-    const pageSize = 10;
+    const [pageSize, setPageSize] = useState(6);
     const [filtroCliente, setFiltroCliente] = useState('');
     const [filtroRango, setFiltroRango] = useState('todo');
     const [fechaInicio, setFechaInicio] = useState('');
     const [fechaFin, setFechaFin] = useState('');
+
+    // Paginación y Filtros de Clientes
+    const [pageClientes, setPageClientes] = useState(0);
+    const [pageSizeClientes, setPageSizeClientes] = useState(8);
+    const [busquedaCliente, setBusquedaCliente] = useState('');
+
+    // Calcular pageSizes dinámicamente según la altura del viewport para evitar scroll principal
+    useEffect(() => {
+      const calcularPageSizes = () => {
+        const vh = window.innerHeight;
+        
+        // Ventas:
+        const espacioVentas = vh - 450;
+        setPageSize(Math.max(2, Math.floor(espacioVentas / 85)));
+
+        // Clientes:
+        const espacioClientes = vh - 325;
+        setPageSizeClientes(Math.max(3, Math.floor(espacioClientes / 56)));
+      };
+
+      calcularPageSizes();
+      window.addEventListener('resize', calcularPageSizes);
+      return () => window.removeEventListener('resize', calcularPageSizes);
+    }, []);
 
     // Estados de UI y Modales
     const { isDarkMode, toggleDarkMode } = useThemeMode();
@@ -96,7 +120,7 @@
 
     useEffect(() => {
       fetchPedidos();
-    }, [page]);
+    }, [page, pageSize]);
 
     useEffect(() => {
       const init = async () => {
@@ -117,6 +141,22 @@
     const clientesFiltrados = useMemo(() => 
       clientes.filter(c => c.nombre_local?.toLowerCase().includes(filtroCliente.toLowerCase())),
     [clientes, filtroCliente]);
+
+    const clientesFiltradosCatalog = useMemo(() => {
+      if (!busquedaCliente.trim()) return clientes;
+      const term = busquedaCliente.toLowerCase().trim();
+      return clientes.filter(c => 
+        (c.nombre_local || '').toLowerCase().includes(term) ||
+        (c.razon_social || '').toLowerCase().includes(term) ||
+        (c.rfc || '').toLowerCase().includes(term)
+      );
+    }, [clientes, busquedaCliente]);
+
+    const paginatedClientes = useMemo(() => {
+      const from = pageClientes * pageSizeClientes;
+      const to = from + pageSizeClientes;
+      return clientesFiltradosCatalog.slice(from, to);
+    }, [clientesFiltradosCatalog, pageClientes, pageSizeClientes]);
 
     const pedidosFiltrados = useMemo(() => {
       let filtrados = [...pedidos];
@@ -287,13 +327,13 @@
     };
 
     return (
-      <div className={`${isDarkMode ? 'dark' : ''}`}>
-        <div className="bg-gray-50 dark:bg-gray-900 min-h-screen text-gray-900 dark:text-gray-100 transition-colors flex">
+      <div className={`${isDarkMode ? 'dark' : ''} h-full overflow-hidden flex flex-col`}>
+        <div className="bg-gray-50 dark:bg-gray-900 h-full text-gray-900 dark:text-gray-100 transition-colors flex overflow-hidden">
           
           {/* EL ASIDE HA SIDO ELIMINADO AQUÍ PARA QUE TU LAYOUT PRINCIPAL TOME EL CONTROL */}
 
           {/* ÁREA PRINCIPAL DINÁMICA */}
-          <main className="flex-1 flex flex-col p-8 w-full max-w-[100vw] overflow-y-auto">
+          <main className="flex-1 flex flex-col p-8 w-full max-w-[100vw] overflow-hidden h-full">
             
             {/* HEADER GENERAL */}
             <div className="mb-6 flex justify-between items-start md:items-center flex-col md:flex-row gap-4 shrink-0">
@@ -318,8 +358,8 @@
 
             {/* VISTA 1: MONITOR DE VENTAS */}
             {vistaActiva === 'ventas' && (
-              <div className="flex-1">
-                <div className="space-y-4">
+              <div className="flex-1 flex flex-col overflow-hidden h-full">
+                <div className="space-y-4 flex-1 overflow-y-auto pr-1">
                   {pedidos.map(p => (
                     <div key={p.id} className="bg-white dark:bg-gray-950 p-4 rounded-xl border border-gray-200 dark:border-gray-800 flex justify-between items-center shadow-sm">
                       <div>
@@ -335,62 +375,117 @@
                     </div>
                   )}
                 </div>
+
+                {/* CONTROLES DE PAGINACIÓN DE PEDIDOS (Ventas) */}
+                <div className="flex items-center justify-between p-4 border-t border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-950 mt-4 shrink-0 rounded-xl shadow">
+                  <button disabled={page === 0} onClick={() => setPage(page - 1)} className="flex items-center gap-2 px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-900 disabled:opacity-50 text-sm font-medium transition-colors"><ChevronLeft size={16} /> Anterior</button>
+                  <span className="text-sm font-medium text-gray-600 dark:text-gray-400">Página {page + 1}</span>
+                  <button disabled={pedidos.length < pageSize} onClick={() => setPage(page + 1)} className="flex items-center gap-2 px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-900 disabled:opacity-50 text-sm font-medium transition-colors">Siguiente <ChevronRight size={16} /></button>
+                </div>
               </div>
             )}
           
             {/* VISTA 2: CATÁLOGO Y EDICIÓN DE CLIENTES */}
             {vistaActiva === 'clientes' && (
-              <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-xl shadow-xl flex flex-col flex-1 overflow-hidden">
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left border-collapse min-w-[900px]">
-                    <thead>
-                      <tr className="bg-gray-50 dark:bg-gray-900/50 border-b border-gray-200 dark:border-gray-800 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase">
-                        <th className="p-4">Nombre Comercial</th>
-                        <th className="p-4">Razón Social / RFC</th>
-                        <th className="p-4">Régimen Fiscal</th>
-                        <th className="p-4">Uso de CFDI</th>
-                        <th className="p-4">C.P. / Correo</th>
-                        <th className="p-4 text-center">Acciones</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100 dark:divide-gray-800/50 text-xs">
-                      {clientes.map((c) => (
-                        <tr key={c.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/20 transition-colors">
-                          <td className="p-4 font-bold text-amber-600 dark:text-amber-500">{c.nombre_local}</td>
-                          <td className="p-4 space-y-0.5">
-                            <div className="font-semibold text-gray-900 dark:text-white">{c.razon_social || 'N/A'}</div>
-                            <div className="text-gray-400 font-mono text-[11px]">{c.rfc}</div>
-                          </td>
-                          <td className="p-4 font-medium text-gray-700 dark:text-gray-300">
-                            {c.regimen_fiscal ? `${c.regimen_fiscal} - ${CATALOGO_REGIMEN_FISCAL.find(r => r.clave === c.regimen_fiscal)?.descripcion || ''}` : 'No definido'}
-                          </td>
-                          <td className="p-4 font-medium text-gray-700 dark:text-gray-300">
-                            {c.uso_cfdi ? `${c.uso_cfdi} - ${CATALOGO_USO_CFDI.find(u => u.clave === c.uso_cfdi)?.descripcion || ''}` : 'No definido'}
-                          </td>
-                          <td className="p-4 space-y-0.5">
-                            <div className="font-mono text-gray-900 dark:text-white">CP: {c.codigo_postal || 'N/A'}</div>
-                            <div className="text-gray-400 text-[11px]">{c.email_facturacion || 'Sin correo'}</div>
-                          </td>
-                          <td className="p-4 text-center">
-                            <div className="flex gap-2 justify-center">
-                              <button 
-                                onClick={() => setEditarClienteModal({ open: true, cliente: c })}
-                                className="p-2 border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-900 hover:bg-amber-500/20 rounded-lg text-gray-600 dark:text-gray-300 hover:text-amber-500 transition-colors"
-                              >
-                                <Edit3 size={15} />
-                              </button>
-                              <button 
-                                onClick={() => eliminarCliente(c.id)}
-                                className="p-2 border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-900 hover:bg-red-500/20 rounded-lg text-gray-600 dark:text-red-400 hover:text-red-500 transition-colors"
-                              >
-                                <Trash2 size={15} />
-                              </button>
-                            </div>
-                          </td>
+              <div className="flex-1 flex flex-col overflow-hidden h-full">
+                {/* BUSCADOR DE CLIENTES */}
+                <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-4 rounded-xl shadow-md mb-6 flex gap-4 items-center shrink-0">
+                  <div className="relative flex-1">
+                    <Search className="absolute left-3 top-2.5 text-gray-400" size={16} />
+                    <input
+                      type="text"
+                      placeholder="Buscar clientes por nombre comercial, razón social o RFC..."
+                      value={busquedaCliente}
+                      onChange={e => {
+                        setBusquedaCliente(e.target.value);
+                        setPageClientes(0);
+                      }}
+                      className="w-full pl-9 pr-4 py-2 border border-gray-200 dark:border-gray-800 rounded-lg text-sm bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-white outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition-all"
+                    />
+                  </div>
+                </div>
+
+                {/* TABLA PRINCIPAL DE CLIENTES */}
+                <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-xl shadow-xl flex flex-col flex-1 overflow-hidden">
+                  <div className="overflow-x-auto flex-1">
+                    <table className="w-full text-left border-collapse min-w-[900px]">
+                      <thead>
+                        <tr className="bg-gray-50 dark:bg-gray-900/50 border-b border-gray-200 dark:border-gray-800 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase">
+                          <th className="p-4">Nombre Comercial</th>
+                          <th className="p-4">Razón Social / RFC</th>
+                          <th className="p-4">Régimen Fiscal</th>
+                          <th className="p-4">Uso de CFDI</th>
+                          <th className="p-4">C.P. / Correo</th>
+                          <th className="p-4 text-center">Acciones</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100 dark:divide-gray-800/50 text-xs">
+                        {paginatedClientes.map((c) => (
+                          <tr key={c.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/20 transition-colors">
+                            <td className="p-4 font-bold text-amber-600 dark:text-amber-500">{c.nombre_local}</td>
+                            <td className="p-4 space-y-0.5">
+                              <div className="font-semibold text-gray-900 dark:text-white">{c.razon_social || 'N/A'}</div>
+                              <div className="text-gray-400 font-mono text-[11px]">{c.rfc}</div>
+                            </td>
+                            <td className="p-4 font-medium text-gray-700 dark:text-gray-300">
+                              {c.regimen_fiscal ? `${c.regimen_fiscal} - ${CATALOGO_REGIMEN_FISCAL.find(r => r.clave === c.regimen_fiscal)?.descripcion || ''}` : 'No definido'}
+                            </td>
+                            <td className="p-4 font-medium text-gray-700 dark:text-gray-300">
+                              {c.uso_cfdi ? `${c.uso_cfdi} - ${CATALOGO_USO_CFDI.find(u => u.clave === c.uso_cfdi)?.descripcion || ''}` : 'No definido'}
+                            </td>
+                            <td className="p-4 space-y-0.5">
+                              <div className="font-mono text-gray-900 dark:text-white">CP: {c.codigo_postal || 'N/A'}</div>
+                              <div className="text-gray-400 text-[11px]">{c.email_facturacion || 'Sin correo'}</div>
+                            </td>
+                            <td className="p-4 text-center">
+                              <div className="flex gap-2 justify-center">
+                                <button 
+                                  onClick={() => setEditarClienteModal({ open: true, cliente: c })}
+                                  className="p-2 border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-900 hover:bg-amber-500/20 rounded-lg text-gray-600 dark:text-gray-300 hover:text-amber-500 transition-colors"
+                                >
+                                  <Edit3 size={15} />
+                                </button>
+                                <button 
+                                  onClick={() => eliminarCliente(c.id)}
+                                  className="p-2 border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-900 hover:bg-red-500/20 rounded-lg text-gray-600 dark:text-red-400 hover:text-red-500 transition-colors"
+                                >
+                                  <Trash2 size={15} />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                        {clientesFiltradosCatalog.length === 0 && (
+                          <tr>
+                            <td colSpan={6} className="p-8 text-center text-gray-500 dark:text-gray-400">
+                              {clientes.length === 0 ? 'No hay clientes registrados.' : 'Ningún cliente coincide con los filtros.'}
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* CONTROLES DE PAGINACIÓN DE CLIENTES */}
+                  <div className="flex items-center justify-between p-4 border-t border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-950 shrink-0">
+                    <button 
+                      disabled={pageClientes === 0} 
+                      onClick={() => setPageClientes(pageClientes - 1)} 
+                      className="flex items-center gap-2 px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-900 disabled:opacity-50 text-sm font-medium transition-colors"
+                    >
+                      <ChevronLeft size={16} /> Anterior
+                    </button>
+                    <span className="text-sm font-medium text-gray-600 dark:text-gray-400">
+                      Página {pageClientes + 1} de {Math.max(1, Math.ceil(clientesFiltradosCatalog.length / pageSizeClientes))}
+                    </span>
+                    <button 
+                      disabled={(pageClientes + 1) * pageSizeClientes >= clientesFiltradosCatalog.length} 
+                      onClick={() => setPageClientes(pageClientes + 1)} 
+                      className="flex items-center gap-2 px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-900 disabled:opacity-50 text-sm font-medium transition-colors"
+                    >
+                      Siguiente <ChevronRight size={16} />
+                    </button>
+                  </div>
                 </div>
               </div>
             )}

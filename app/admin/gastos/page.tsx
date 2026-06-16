@@ -473,8 +473,8 @@ export default function AdvancedBillingModule() {
   };
 
   return (
-    <div className={`${isDarkMode ? 'dark' : ''} w-full`}>
-      <div className="bg-gray-50 dark:bg-gray-900 min-h-screen text-gray-900 dark:text-gray-100 transition-colors flex flex-col p-8 w-full max-w-[100vw] mx-auto">
+    <div className={`${isDarkMode ? 'dark' : ''} w-full h-full overflow-hidden flex flex-col`}>
+      <div className="bg-gray-50 dark:bg-gray-900 h-full text-gray-900 dark:text-gray-100 transition-colors flex flex-col p-8 w-full max-w-[100vw] mx-auto overflow-hidden">
         
         {/* HEADER */}
         <div className="mb-8 flex justify-between items-start md:items-center flex-col md:flex-row gap-4 shrink-0">
@@ -523,10 +523,10 @@ export default function AdvancedBillingModule() {
           </div>
         )}
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 flex-1 overflow-hidden min-h-0">
           
           {/* COLUMNA IZQUIERDA: PANEL DE INGESTA */}
-          <div className="lg:col-span-1 bg-white dark:bg-gray-950 p-6 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-xl space-y-6">
+          <div className="lg:col-span-1 bg-white dark:bg-gray-950 p-6 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-xl space-y-6 overflow-y-auto h-full">
             <div>
               <h3 className="text-lg font-bold flex items-center gap-2">
                 <FileCode size={20} className="text-blue-500" /> Ingesta de Factura
@@ -726,7 +726,7 @@ export default function AdvancedBillingModule() {
           </div>
 
           {/* COLUMNA DERECHA: PESTAÑAS DE VISUALIZACIÓN */}
-          <div className="lg:col-span-2 bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-2xl shadow-xl flex flex-col overflow-hidden">
+          <div className="lg:col-span-2 bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-2xl shadow-xl flex flex-col overflow-hidden h-full">
             
             {/* PESTAÑAS */}
             <div className="flex border-b border-gray-200 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-900/30">
@@ -754,7 +754,7 @@ export default function AdvancedBillingModule() {
 
             {/* CONTENIDO TAB 1: EGRESOS (GASTOS) */}
             {activeTab === 'egresos' && (
-              <div className="overflow-x-auto flex-1 font-sans">
+              <div className="overflow-auto flex-1 font-sans">
                 <table className="w-full text-left border-collapse min-w-[700px]">
                   <thead>
                     <tr className="bg-gray-50 dark:bg-gray-900/50 border-b border-gray-200 dark:border-gray-800 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase">
@@ -837,7 +837,7 @@ export default function AdvancedBillingModule() {
                   </button>
                 </div>
                 
-                <div className="overflow-x-auto flex-1">
+                <div className="overflow-auto flex-1">
                   <table className="w-full text-left border-collapse min-w-[700px]">
                   <thead>
                     <tr className="bg-gray-50 dark:bg-gray-900/50 border-b border-gray-200 dark:border-gray-800 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase">

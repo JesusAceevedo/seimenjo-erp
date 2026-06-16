@@ -36,13 +36,29 @@ export default function AdminMonitor() {
 
   // Paginación y Filtros
   const [page, setPage] = useState(0);
-  const pageSize = 10;
+  const [pageSize, setPageSize] = useState(6);
   const [filtroCliente, setFiltroCliente] = useState('');
   const [filtroRango, setFiltroRango] = useState('todo');
   const [fechaInicio, setFechaInicio] = useState('');
   const [fechaFin, setFechaFin] = useState('');
   const [busquedaGlobal, setBusquedaGlobal] = useState('');
   const [popupBlockerWarning, setPopupBlockerWarning] = useState(false);
+
+  // Calcular pageSize dinámicamente según la altura del viewport para evitar scroll principal
+  useEffect(() => {
+    const calcularPageSize = () => {
+      const vh = window.innerHeight;
+      // Para Monitor de Ventas: padding (64px) + header (60px) + KPIs (120px) + filtros (80px) + cabeceras/márgenes (120px) = 444px
+      const espacioDisponible = vh - 450;
+      const alturaFila = 85; // Fila de pedido mide aprox 85px de alto
+      const filasQueCaben = Math.floor(espacioDisponible / alturaFila);
+      setPageSize(Math.max(2, filasQueCaben));
+    };
+
+    calcularPageSize();
+    window.addEventListener('resize', calcularPageSize);
+    return () => window.removeEventListener('resize', calcularPageSize);
+  }, []);
 
   // Estados de UI y Modales
   const { isDarkMode, toggleDarkMode } = useThemeMode();
@@ -101,8 +117,7 @@ export default function AdminMonitor() {
 
   useEffect(() => {
     fetchPedidos();
-  }, [page]); 
-
+  }, [page, pageSize]); 
   useEffect(() => {
     const init = async () => {
       const { data: { session } } = await supabase.auth.getSession();
@@ -452,11 +467,11 @@ export default function AdminMonitor() {
   };
 
   return (
-    <div className={`${isDarkMode ? 'dark' : ''}`}>
-      <div className="bg-gray-50 dark:bg-gray-900 min-h-screen text-gray-900 dark:text-gray-100 transition-colors flex">
+    <div className={`${isDarkMode ? 'dark' : ''} h-full overflow-hidden flex flex-col`}>
+      <div className="bg-gray-50 dark:bg-gray-900 h-full text-gray-900 dark:text-gray-100 transition-colors flex overflow-hidden">
 
         {/* ÁREA PRINCIPAL */}
-        <main className="flex-1 flex flex-col p-8 w-full max-w-[100vw] md:max-w-[calc(100vw-16rem)]">
+        <main className="flex-1 flex flex-col p-8 w-full max-w-[100vw] md:max-w-[calc(100vw-16rem)] overflow-hidden h-full">
 
           {/* HEADER */}
           <div className="mb-6 flex justify-between items-start md:items-center flex-col md:flex-row gap-4">
