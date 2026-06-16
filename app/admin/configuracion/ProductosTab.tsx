@@ -13,6 +13,8 @@ interface Producto {
   nombre: string;
   categoria: string;
   imagen_url: string | null;
+  precio_base?: number | null;
+  unidad_medida?: string | null;
 }
 
 interface Variante {
@@ -52,6 +54,8 @@ export default function ProductosTab() {
   const [prodImagenFile, setProdImagenFile] = useState<File | null>(null);
   const [prodImagenPreview, setProdImagenPreview] = useState<string | null>(null);
   const [prodImagenUrl, setProdImagenUrl] = useState('');
+  const [prodPrecioBase, setProdPrecioBase] = useState('');
+  const [prodUnidadMedida, setProdUnidadMedida] = useState('Pieza');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // --- FORMULARIO DE VARIANTE ---
@@ -216,7 +220,9 @@ export default function ProductosTab() {
       const payload: any = {
         nombre: prodNombre.trim(),
         categoria: prodCategoria,
-        imagen_url: finalImageUrl || null
+        imagen_url: finalImageUrl || null,
+        precio_base: prodPrecioBase ? parseFloat(prodPrecioBase) : null,
+        unidad_medida: prodUnidadMedida || null
       };
 
       if (prodId) {
@@ -230,6 +236,40 @@ export default function ProductosTab() {
         .single();
 
       if (upsertError) throw upsertError;
+
+      // 3. Sincronizar automáticamente con la tabla de producto_variantes para compatibilidad
+      if (prodPrecioBase && prodUnidadMedida) {
+        const parsedPrice = parseFloat(prodPrecioBase);
+        if (!isNaN(parsedPrice) && parsedPrice >= 0) {
+          // Buscar si el producto ya tiene variantes existentes
+          const { data: existingVars } = await supabase
+            .from('producto_variantes')
+            .select('id, gramaje')
+            .eq('producto_id', savedData.id);
+
+          // Si hay variantes, actualizamos la primera variante existente
+          // o la que coincida con la unidad de medida. De lo contrario, se crea una nueva.
+          const defaultVar = existingVars?.find(v => v.gramaje === prodUnidadMedida) || existingVars?.[0];
+
+          const varPayload: any = {
+            producto_id: savedData.id,
+            gramaje: prodUnidadMedida.trim(),
+            precio_base: parsedPrice
+          };
+
+          if (defaultVar) {
+            varPayload.id = defaultVar.id;
+          }
+
+          const { error: varError } = await supabase
+            .from('producto_variantes')
+            .upsert(varPayload);
+
+          if (varError) {
+            console.error('Error al sincronizar variante por defecto:', varError);
+          }
+        }
+      }
 
       setSuccessMsg(prodId ? 'Producto actualizado con éxito.' : 'Producto creado con éxito.');
       
@@ -256,6 +296,8 @@ export default function ProductosTab() {
     setProdImagenFile(null);
     setProdImagenPreview(null);
     setProdImagenUrl('');
+    setProdPrecioBase('');
+    setProdUnidadMedida('Pieza');
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
@@ -265,6 +307,8 @@ export default function ProductosTab() {
     setProdCategoria(prod.categoria);
     setProdImagenUrl(prod.imagen_url || '');
     setProdImagenPreview(prod.imagen_url || null);
+    setProdPrecioBase(prod.precio_base ? String(prod.precio_base) : '');
+    setProdUnidadMedida(prod.unidad_medida || 'Pieza');
     setProdImagenFile(null);
   };
 
@@ -449,20 +493,51 @@ export default function ProductosTab() {
               />
             </div>
 
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="text-[10px] font-bold text-gray-500 uppercase">Categoría</label>
+                <select
+                  value={prodCategoria}
+                  className="w-full mt-1 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-xl text-sm text-gray-900 dark:text-white focus:ring-1 focus:ring-amber-500 outline-none"
+                  onChange={e => setProdCategoria(e.target.value)}
+                >
+                  <option value="Fideos">Fideos</option>
+                  <option value="Tortillas">Tortillas</option>
+                  <option value="Salsas">Salsas</option>
+                  <option value="Caldo">Caldo</option>
+                  <option value="Toppings">Toppings</option>
+                  <option value="Otros">Otros</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-bold text-gray-500 uppercase">Unidad de Medida</label>
+                <select
+                  value={prodUnidadMedida}
+                  className="w-full mt-1 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-xl text-sm text-gray-900 dark:text-white focus:ring-1 focus:ring-amber-500 outline-none"
+                  onChange={e => setProdUnidadMedida(e.target.value)}
+                >
+                  <option value="Pieza">Pieza</option>
+                  <option value="Kg">Kg</option>
+                  <option value="Litro">Litro</option>
+                  <option value="Caja">Caja</option>
+                  <option value="Paquete">Paquete</option>
+                  <option value="Gramo">Gramo</option>
+                </select>
+              </div>
+            </div>
+
             <div>
-              <label className="text-[10px] font-bold text-gray-500 uppercase">Categoría</label>
-              <select
-                value={prodCategoria}
-                className="w-full mt-1 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-xl text-sm text-gray-900 dark:text-white"
-                onChange={e => setProdCategoria(e.target.value)}
-              >
-                <option value="Fideos">Fideos</option>
-                <option value="Tortillas">Tortillas</option>
-                <option value="Salsas">Salsas</option>
-                <option value="Caldo">Caldo</option>
-                <option value="Toppings">Toppings</option>
-                <option value="Otros">Otros</option>
-              </select>
+              <label className="text-[10px] font-bold text-gray-500 uppercase">Precio Base ($) *</label>
+              <input
+                type="number"
+                step="0.01"
+                placeholder="0.00"
+                value={prodPrecioBase}
+                className="w-full mt-1 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-xl text-sm focus:ring-1 focus:ring-amber-500 outline-none text-gray-900 dark:text-white"
+                onChange={e => setProdPrecioBase(e.target.value)}
+                required
+              />
             </div>
 
             {/* SECCIÓN IMAGEN */}
@@ -569,7 +644,14 @@ export default function ProductosTab() {
                   </div>
                   <div className="overflow-hidden">
                     <h5 className="font-bold text-sm truncate text-gray-900 dark:text-white leading-tight">{p.nombre}</h5>
-                    <span className="text-[10px] text-gray-400 dark:text-gray-500 uppercase">{p.categoria}</span>
+                    <div className="flex flex-wrap gap-x-2 gap-y-0.5 items-center mt-0.5">
+                      <span className="text-[10px] text-gray-400 dark:text-gray-500 uppercase">{p.categoria}</span>
+                      {p.precio_base !== null && p.precio_base !== undefined && (
+                        <span className="text-[10px] text-amber-600 dark:text-amber-400 font-semibold font-mono">
+                          • ${Number(p.precio_base).toFixed(2)} / {p.unidad_medida || 'Pieza'}
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </div>
                 <div className="flex items-center gap-1 shrink-0">

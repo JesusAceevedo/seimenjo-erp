@@ -345,15 +345,21 @@ export default function Tienda() {
                         <h3 className="text-lg font-bold text-gray-900 mb-4 leading-tight">{producto.nombre}</h3>
                         
                         <label className="block text-sm font-medium text-gray-700 mb-1">Presentación (Gramaje)</label>
-                        <select 
-                          className="w-full border-gray-300 rounded-md shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm mb-4 text-gray-900"
-                          value={varianteSeleccionadaId || ''}
-                          onChange={(e) => setSeleccionGramaje({...seleccionGramaje, [producto.id]: e.target.value})}
-                        >
-                          {variantesProducto.map(v => (
-                            <option key={v.id} value={v.id}>{v.gramaje}</option>
-                          ))}
-                        </select>
+                        {variantesProducto.length <= 1 ? (
+                          <div className="w-full py-2 px-3 bg-gray-50 border border-gray-200 rounded-md text-sm mb-4 text-gray-800 font-medium">
+                            {variantesProducto[0]?.gramaje || 'Única'}
+                          </div>
+                        ) : (
+                          <select 
+                            className="w-full border-gray-300 rounded-md shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm mb-4 text-gray-900"
+                            value={varianteSeleccionadaId || ''}
+                            onChange={(e) => setSeleccionGramaje({...seleccionGramaje, [producto.id]: e.target.value})}
+                          >
+                            {variantesProducto.map(v => (
+                              <option key={v.id} value={v.id}>{v.gramaje}</option>
+                            ))}
+                          </select>
+                        )}
 
                         <div className="flex items-end justify-between mt-4">
                           <div>
