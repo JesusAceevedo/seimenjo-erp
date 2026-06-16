@@ -362,3 +362,81 @@ export async function guardarFacturaEnBaseDatos(payload: {
     return { success: false, error: message || 'Error al guardar metadatos en la base de datos' };
   }
 }
+
+// 4. Comprobar egreso manual por transferencia con múltiples facturas XML
+export async function comprobarEgresoConFacturas(
+  egresoPadreId: string,
+  subgastosIds: string[],
+  comentariosComprobacion?: string
+): Promise<{ success: boolean; data?: any; error?: string }> {
+  try {
+    if (!egresoPadreId) {
+      throw new Error('El ID del egreso principal es requerido.');
+    }
+    if (!subgastosIds || subgastosIds.length === 0) {
+      throw new Error('Debes seleccionar al menos una factura XML para comprobar.');
+    }
+
+    // 1. Obtener datos del egreso padre para validar y documentar
+    const { data: egresoPadre, error: egresoErr } = await supabase
+      .from('gastos')
+      .select('monto, concepto, comentarios')
+      .eq('id', egresoPadreId)
+      .single();
+
+    if (egresoErr || !egresoPadre) {
+      throw new Error('No se encontró el egreso principal en la base de datos.');
+    }
+
+    // 2. Asociar los subgastos al egreso padre (gasto_padre_id)
+    const { error: assocErr } = await supabase
+      .from('gastos')
+      .update({ gasto_padre_id: egresoPadreId })
+      .in('id', subgastosIds);
+
+    if (assocErr) throw assocErr;
+
+    // 3. Obtener detalles de las facturas asociadas para consolidar en comentarios
+    const { data: subgastos } = await supabase
+      .from('gastos')
+      .select('uuid_fiscal, folio_factura, monto')
+      .in('id', subgastosIds);
+
+    const detComprobantes = subgastos
+      ? subgastos
+          .map(
+            (s) =>
+              `Factura XML (UUID: ${s.uuid_fiscal?.substring(0, 8) || 'N/A'}${
+                s.folio_factura ? `, Folio: ${s.folio_factura}` : ''
+              }, Monto: $${Number(s.monto).toFixed(2)})`
+          )
+          .join('; ')
+      : '';
+
+    const nuevoComentario = `[COMPROBADO CON XMLs: ${detComprobantes}]${
+      comentariosComprobacion ? ` - Nota: ${comentariosComprobacion}` : ''
+    }${egresoPadre.comentarios ? ` | ${egresoPadre.comentarios}` : ''}`;
+
+    // 4. Actualizar egreso padre: marcar como facturado/comprobado y añadir comentarios detallados
+    const { data, error: updateErr } = await supabase
+      .from('gastos')
+      .update({
+        estatus_facturado: true,
+        comentarios: nuevoComentario.substring(0, 1000)
+      })
+      .eq('id', egresoPadreId)
+      .select();
+
+    if (updateErr) throw updateErr;
+
+    return { success: true, data };
+  } catch (err: unknown) {
+    console.error('Error en comprobarEgresoConFacturas:', err);
+    const message = err instanceof Error ? err.message : String(err);
+    return {
+      success: false,
+      error: message || 'Error al comprobar el egreso con las facturas seleccionadas'
+    };
+  }
+}
+

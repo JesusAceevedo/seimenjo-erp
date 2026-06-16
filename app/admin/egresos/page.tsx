@@ -149,6 +149,7 @@ export default function AdminGastos() {
       let gastosQuery = supabase
         .from('gastos')
         .select(`*, proveedores(nombre_comercial, rfc), categorias_gasto(nombre)`)
+        .is('gasto_padre_id', null)
         .order('fecha_gasto', { ascending: false });
 
       if (startDateStr) {
