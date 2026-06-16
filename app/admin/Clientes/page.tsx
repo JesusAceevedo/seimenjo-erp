@@ -4,7 +4,8 @@
   import { useRouter, usePathname } from 'next/navigation';
   import { supabase } from '../../../lib/supabase';
   import { useThemeMode } from '../../../lib/useThemeMode';
-  import { Plus, Filter, Soup, ShoppingCart, Truck, FileCheck, Search, Sun, Moon, FileText, ChevronLeft, ChevronRight, Users, Save, Edit3, Trash2 } from 'lucide-react';
+  import { Plus, Filter, Soup, ShoppingCart, Truck, FileCheck, Search, Sun, Moon, FileText, ChevronLeft, ChevronRight, Users, Save, Edit3, Trash2, Key } from 'lucide-react';
+  import { habilitarPortalClienteAdmin } from '../actions/adminAuth';
 
   // --- CATÁLOGOS MAESTROS DEL SAT (CFDI 4.0) ---
   const CATALOGO_REGIMEN_FISCAL = [
@@ -90,6 +91,8 @@
     const [editarClienteModal, setEditarClienteModal] = useState({ open: false, cliente: null as any });
     const [liquidarModal, setLiquidarModal] = useState({ open: false, pedido: null as any, fecha: '', costo_envio: 0, entregado_por: '' });
     const [facturaModal, setFacturaModal] = useState({ open: false, pedido: null as any, folio: '' });
+    const [portalModal, setPortalModal] = useState({ open: false, cliente: null as any, email: '', password: '' });
+    const [habilitandoPortal, setHabilitandoPortal] = useState(false);
     
     // Formularios
     const [nuevoPedido, setNuevoPedido] = useState(PEDIDO_INICIAL);
@@ -326,6 +329,33 @@
       if (!error) { setFacturaModal({ ...facturaModal, open: false }); fetchPedidos(); }
     };
 
+    const ejecutarHabilitarPortal = async () => {
+      if (!portalModal.email.trim() || !portalModal.password.trim()) {
+        alert('Por favor ingresa un correo y una contraseña.');
+        return;
+      }
+      setHabilitandoPortal(true);
+      try {
+        const res = await habilitarPortalClienteAdmin({
+          email: portalModal.email,
+          passwordTemporal: portalModal.password,
+          clienteId: portalModal.cliente.id,
+          nombreCliente: portalModal.cliente.nombre_local
+        });
+        
+        if (!res.success) throw new Error(res.error);
+        
+        alert('Acceso al portal de auto-servicio habilitado correctamente.');
+        setPortalModal({ open: false, cliente: null, email: '', password: '' });
+        fetchClientesCompleto();
+      } catch (err: any) {
+        console.error(err);
+        alert('Error al habilitar portal: ' + err.message);
+      } finally {
+        setHabilitandoPortal(false);
+      }
+    };
+
     return (
       <div className={`${isDarkMode ? 'dark' : ''} h-full overflow-hidden flex flex-col`}>
         <div className="bg-gray-50 dark:bg-gray-900 h-full text-gray-900 dark:text-gray-100 transition-colors flex overflow-hidden">
@@ -439,6 +469,13 @@
                             </td>
                             <td className="p-4 text-center">
                               <div className="flex gap-2 justify-center">
+                                <button 
+                                  onClick={() => setPortalModal({ open: true, cliente: c, email: c.email_facturacion || '', password: '' })}
+                                  className="p-2 border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-900 hover:bg-emerald-500/20 rounded-lg text-gray-600 dark:text-gray-300 hover:text-emerald-500 transition-colors"
+                                  title="Habilitar Acceso al Portal"
+                                >
+                                  <Key size={15} />
+                                </button>
                                 <button 
                                   onClick={() => setEditarClienteModal({ open: true, cliente: c })}
                                   className="p-2 border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-900 hover:bg-amber-500/20 rounded-lg text-gray-600 dark:text-gray-300 hover:text-amber-500 transition-colors"
@@ -735,6 +772,48 @@
                 <div className="flex gap-3 pt-6 mt-4 border-t border-gray-200 dark:border-gray-800">
                   <button onClick={() => setFacturaModal({...facturaModal, open: false})} className="flex-1 py-2 font-semibold border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-400 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">Cancelar</button>
                   <button onClick={confirmarFactura} className="flex-1 py-2 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-lg shadow-lg transition-colors">Guardar Folio</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* MODAL: ALTA/HABILITACIÓN DE PORTAL */}
+          {portalModal.open && (
+            <div className="fixed inset-0 bg-black/60 dark:bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+              <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-6 rounded-2xl w-full max-w-md shadow-2xl text-gray-900 dark:text-gray-100">
+                <h3 className="text-xl font-extrabold mb-2 flex items-center gap-2"><Key className="text-amber-500"/> Alta de Portal de Clientes</h3>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mb-6">
+                  Crea un usuario para que el cliente <span className="font-bold">{portalModal.cliente?.nombre_local}</span> acceda al portal de auto-servicio.
+                </p>
+                <div className="space-y-4 mb-6">
+                  <div>
+                    <label className="text-xs font-semibold text-gray-500 dark:text-gray-400">Correo Electrónico (Usuario) *</label>
+                    <input 
+                      type="email" 
+                      placeholder="correo@cliente.com" 
+                      value={portalModal.email} 
+                      className="w-full mt-1 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-sm text-gray-900 dark:text-white" 
+                      onChange={e => setPortalModal({...portalModal, email: e.target.value})} 
+                      disabled={habilitandoPortal} 
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-semibold text-gray-500 dark:text-gray-400">Contraseña Temporal *</label>
+                    <input 
+                      type="password" 
+                      placeholder="Mínimo 6 caracteres" 
+                      value={portalModal.password} 
+                      className="w-full mt-1 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-sm text-gray-900 dark:text-white" 
+                      onChange={e => setPortalModal({...portalModal, password: e.target.value})} 
+                      disabled={habilitandoPortal} 
+                    />
+                  </div>
+                </div>
+                <div className="flex gap-3">
+                  <button onClick={() => setPortalModal({ open: false, cliente: null, email: '', password: '' })} disabled={habilitandoPortal} className="flex-1 py-2.5 border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-300 rounded-xl font-semibold hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors disabled:opacity-50">Cancelar</button>
+                  <button onClick={ejecutarHabilitarPortal} disabled={habilitandoPortal} className="flex-1 py-2.5 bg-amber-600 hover:bg-amber-500 text-white font-semibold rounded-xl shadow-lg transition-colors flex items-center justify-center gap-1">
+                    {habilitandoPortal ? 'Registrando...' : 'Habilitar Portal'}
+                  </button>
                 </div>
               </div>
             </div>

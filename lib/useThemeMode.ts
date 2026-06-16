@@ -24,17 +24,15 @@ export function useThemeMode(defaultMode = true) {
     document.documentElement.style.colorScheme = defaultMode ? 'dark' : 'light';
   }, [defaultMode]);
 
-  useEffect(() => {
-    if (typeof window === 'undefined') {
-      return;
+  const toggleDarkMode = () => {
+    const nextMode = !isDarkMode;
+    setIsDarkMode(nextMode);
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(THEME_STORAGE_KEY, nextMode ? 'dark' : 'light');
+      document.documentElement.classList.toggle('dark', nextMode);
+      document.documentElement.style.colorScheme = nextMode ? 'dark' : 'light';
     }
-
-    window.localStorage.setItem(THEME_STORAGE_KEY, isDarkMode ? 'dark' : 'light');
-    document.documentElement.classList.toggle('dark', isDarkMode);
-    document.documentElement.style.colorScheme = isDarkMode ? 'dark' : 'light';
-  }, [isDarkMode]);
-
-  const toggleDarkMode = () => setIsDarkMode((current) => !current);
+  };
 
   return { isDarkMode, setIsDarkMode, toggleDarkMode };
 }
