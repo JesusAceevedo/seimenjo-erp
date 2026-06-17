@@ -300,7 +300,7 @@ export default function AdminMonitor() {
           {/* HEADER GENERAL */}
           <div className="mb-6 flex justify-between items-start md:items-center flex-col md:flex-row gap-4 shrink-0">
             <h2 className="text-2xl font-bold flex items-center gap-2">
-              {vistaActiva === 'ventas' ? 'Monitor Maestro de Pedidos' : 'Catálogo Fiscal de Clientes'}
+              {vistaActiva === 'ventas' ? 'Monitor Maestro de Pedidos' : 'Catálogo de Clientes'}
             </h2>
             <div className="flex items-center gap-3">
               <button onClick={toggleDarkMode} className="p-2 rounded-lg bg-gray-200 dark:bg-gray-800 text-gray-600 dark:text-amber-400 hover:bg-gray-300 dark:hover:bg-gray-700 transition-colors">

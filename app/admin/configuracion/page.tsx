@@ -504,15 +504,6 @@ export default function ConfigPage() {
             <FolderOpen size={16} /> Módulo de Gastos
           </button>
           <button
-            onClick={() => setActiveTab('productos')}
-            className={`px-5 py-2.5 rounded-xl text-sm font-semibold transition-all duration-300 flex items-center gap-2 ${activeTab === 'productos'
-                ? 'bg-amber-600 text-white shadow-md'
-                : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-200/50 dark:hover:bg-gray-800/50'
-              }`}
-          >
-            <Package size={16} /> Productos y Precios Especiales
-          </button>
-          <button
             onClick={() => setActiveTab('tickets')}
             className={`px-5 py-2.5 rounded-xl text-sm font-semibold transition-all duration-300 flex items-center gap-2 ${activeTab === 'tickets'
                 ? 'bg-amber-600 text-white shadow-md'

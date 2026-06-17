@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
-import { Soup, LayoutDashboard, Users, FileDown, Settings, LogOut } from 'lucide-react';
+import { Soup, LayoutDashboard, Users, FileDown, Settings, LogOut, Package } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import OnboardingWizard from './components/OnboardingWizard';
 
@@ -92,7 +92,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         setLoadingOnboarding(false);
       }
     };
-    
+
     checkOnboarding();
   }, [pathname]);
 
@@ -128,12 +128,12 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   return (
     <div className="flex h-screen bg-gray-50 dark:bg-gray-900 overflow-hidden">
       {needsOnboarding && empresaId && (
-        <OnboardingWizard 
-          empresaId={empresaId} 
+        <OnboardingWizard
+          empresaId={empresaId}
           onSuccess={() => {
             setNeedsOnboarding(false);
             window.location.reload();
-          }} 
+          }}
         />
       )}
       <aside className="w-64 bg-white dark:bg-gray-950 border-r border-gray-200 dark:border-gray-800 flex flex-col shrink-0">
@@ -144,7 +144,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             <Soup className="text-amber-500 w-8 h-8" />
           )}
           <div>
-            <h1 className="font-bold text-lg leading-tight">SEIMENJO</h1>
+            <h1 className="font-bold text-lg leading-tight">Playa Seimenjo</h1>
             {empresaNombre ? (
               <span className="text-[10px] bg-amber-500/10 text-amber-600 dark:text-amber-400 px-1.5 py-0.5 rounded font-semibold uppercase tracking-wide block w-fit mt-0.5">
                 {empresaNombre}
@@ -163,7 +163,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
               className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${isSelected('/admin/monitor') ? 'bg-amber-600 text-white font-semibold' : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white'
                 }`}
             >
-              <LayoutDashboard size={18} /> Monitor de Ventas
+              <LayoutDashboard size={18} /> Pedidos
             </button>
           )}
 
@@ -174,10 +174,17 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
               className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${isSelected('/admin/Clientes') ? 'bg-amber-600 text-white font-semibold' : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white'
                 }`}
             >
-              <Users size={18} /> Catálogo de Clientes
+              <Users size={18} /> Clientes
             </button>
           )}
-          
+          {hasModule('productos') && (
+            <button
+              onClick={() => router.push('/admin/productos')}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${isSelected('/admin/productos') ? 'bg-amber-600 text-white font-semibold' : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white'}`}
+            >
+              <Package size={18} /> Productos
+            </button>
+          )}
           {/* BOTÓN GASTOS */}
           {hasModule('gastos') && (
             <button
@@ -185,10 +192,10 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
               className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${isSelected('/admin/egresos') ? 'bg-amber-600 text-white font-semibold' : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white'
                 }`}
             >
-              <FileDown size={18} /> Registro de Egresos
+              <FileDown size={18} /> Egresos
             </button>
           )}
-          
+
           {/* BOTÓN CONCILIACIÓN */}
           {hasModule('gastos') && (
             <button
@@ -196,7 +203,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
               className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${isSelected('/admin/gastos') ? 'bg-amber-600 text-white font-semibold' : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white'
                 }`}
             >
-              <FileDown size={18} /> Conciliación XML (SAT)
+              <FileDown size={18} /> Facturación
             </button>
           )}
 
@@ -207,7 +214,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
               className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${isSelected('/admin/staff') ? 'bg-amber-600 text-white font-semibold' : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white'
                 }`}
             >
-              <Users size={18} /> Gestión de Personal
+              <Users size={18} /> Personal
             </button>
           )}
 
@@ -218,10 +225,12 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
               className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${isSelected('/admin/configuracion') ? 'bg-amber-600 text-white font-semibold' : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white'
                 }`}
             >
-              <Settings size={18} /> Configuración ERP
+              <Settings size={18} /> Configuración
             </button>
           )}
+
         </nav>
+
 
         {/* SECCIÓN USUARIO Y LOGOUT AL INFERIOR */}
         {usuarioEmail && (
@@ -251,7 +260,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         )}
       </aside>
 
-      <main className="flex-1 h-full overflow-hidden flex flex-col">
+      <main className="flex-1 h-full overflow-auto flex flex-col">
         {children}
       </main>
     </div>

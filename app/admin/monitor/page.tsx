@@ -352,9 +352,9 @@ export default function AdminMonitor() {
 
       // Items table rows
       const itemsHtml = pedido.pedido_detalles?.map((d: DetallePedido) => {
-          const prodNombre = d.producto_variantes?.productos?.nombre || 'Producto';
-          const gramaje = d.producto_variantes?.gramaje || '';
-          return `
+        const prodNombre = d.producto_variantes?.productos?.nombre || 'Producto';
+        const gramaje = d.producto_variantes?.gramaje || '';
+        return `
             <tr>
               <td style="padding: 4px 0; max-width: 180px; word-wrap: break-word;">
                 ${d.cantidad}x ${prodNombre} ${gramaje ? `(${gramaje})` : ''}
@@ -364,7 +364,7 @@ export default function AdminMonitor() {
               </td>
             </tr>
           `;
-        }).join('') || '<tr><td colspan="2">Sin productos</td></tr>';
+      }).join('') || '<tr><td colspan="2">Sin productos</td></tr>';
 
       // Promo section
       let promoHtml = '';
@@ -489,7 +489,7 @@ export default function AdminMonitor() {
 
           {/* HEADER */}
           <div className="mb-6 flex justify-between items-start md:items-center flex-col md:flex-row gap-4">
-            <h2 className="text-2xl font-bold flex items-center gap-2">Monitor Maestro de Pedidos</h2>
+            <h2 className="text-2xl font-bold flex items-center gap-2">Gestión Pedidos</h2>
             <div className="flex items-center gap-3">
               <button onClick={toggleDarkMode} className="p-2 rounded-lg bg-gray-200 dark:bg-gray-800 text-gray-600 dark:text-amber-400 hover:bg-gray-300 dark:hover:bg-gray-700 transition-colors">
                 {isDarkMode ? <Sun size={20} /> : <Moon size={20} />}
@@ -621,8 +621,8 @@ export default function AdminMonitor() {
                       <td className="p-4 space-y-1">
                         <div className="bg-gray-50 dark:bg-gray-900/60 p-2 rounded border border-gray-200 dark:border-gray-800 space-y-1 text-gray-900 dark:text-white">
                           {p.pedido_detalles?.map((d: DetallePedido) => (
-            <div key={d.id}>📦 <span className="font-semibold">{d.producto_variantes?.productos?.nombre} ({d.producto_variantes?.gramaje}):</span> {d.cantidad} un.</div>
-          ))}
+                            <div key={d.id}>📦 <span className="font-semibold">{d.producto_variantes?.productos?.nombre} ({d.producto_variantes?.gramaje}):</span> {d.cantidad} un.</div>
+                          ))}
                         </div>
                       </td>
                       <td className="p-4 space-y-1 text-gray-900 dark:text-white">
