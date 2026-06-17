@@ -18,24 +18,38 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const [esSuperusuario, setEsSuperusuario] = useState(false);
   const [usuarioEmail, setUsuarioEmail] = useState<string | null>(null);
   const [empresaNombre, setEmpresaNombre] = useState<string | null>(null);
+  const [switchableCompanies, setSwitchableCompanies] = useState<{ id: string; nombre: string }[]>([]);
+  const [isSwitching, setIsSwitching] = useState(false);
 
-  useEffect(() => {
-    const fetchLogo = async () => {
-      try {
-        const { data } = await supabase
-          .from('configuracion_ticket')
-          .select('logo_url')
-          .limit(1)
-          .maybeSingle();
-        if (data?.logo_url) {
-          setLogoUrl(data.logo_url);
-        }
-      } catch (err) {
-        console.error('Error fetching logo for sidebar:', err);
+  const handleSwitchCompany = async (newEmpresaId: string) => {
+    if (!newEmpresaId || newEmpresaId === empresaId) return;
+    setIsSwitching(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) return;
+
+      const { error: dbError } = await supabase
+        .from('usuarios_staff')
+        .update({ empresa_id: newEmpresaId })
+        .eq('supabase_auth_id', session.user.id);
+
+      if (dbError) throw dbError;
+
+      const sesionGuardada = localStorage.getItem('seimenjo_session');
+      if (sesionGuardada) {
+        const datosSesion = JSON.parse(sesionGuardada);
+        datosSesion.empresa_id = newEmpresaId;
+        localStorage.setItem('seimenjo_session', JSON.stringify(datosSesion));
       }
-    };
-    fetchLogo();
-  }, []);
+
+      window.location.reload();
+    } catch (err) {
+      console.error('Error al cambiar de empresa:', err);
+      alert('No se pudo cambiar de empresa: ' + (err instanceof Error ? err.message : 'Error desconocido'));
+    } finally {
+      setIsSwitching(false);
+    }
+  };
 
   useEffect(() => {
     const checkOnboarding = async () => {
@@ -52,7 +66,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           setEsSuperusuario(isSuper);
           setUsuarioEmail(datosSesion.email || 'Usuario Staff');
 
-          if (!isSuper && datosSesion.empresa_id) {
+          if (datosSesion.empresa_id) {
             setEmpresaId(datosSesion.empresa_id);
 
             // Consultar si la empresa ya tiene RFC o Razón Social registrada
@@ -70,7 +84,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
               setLogoUrl(empresaData.logo_url);
             }
 
-            if (!empresaError && (!empresaData?.rfc || !empresaData?.razon_social)) {
+            if (!isSuper && !empresaError && (!empresaData?.rfc || !empresaData?.razon_social)) {
               setNeedsOnboarding(true);
             }
 
@@ -83,6 +97,41 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
             if (modulosData) {
               setActiveModules(modulosData.map(m => m.modulo.toLowerCase()));
+            }
+          }
+
+          // Cargar catálogo de empresas para cambio de contexto
+          if (isSuper) {
+            const { data: emps } = await supabase.from('empresas').select('id, nombre').order('nombre');
+            if (emps) {
+              setSwitchableCompanies(emps);
+            }
+          } else {
+            // Obtener el registro de staff para encontrar su id
+            const { data: staffUser } = await supabase
+              .from('usuarios_staff')
+              .select('id')
+              .eq('supabase_auth_id', datosSesion.id)
+              .maybeSingle();
+
+            if (staffUser) {
+              const { data: pivotEmps } = await supabase
+                .from('empresas_usuario_pivot')
+                .select('empresa_id, empresas(id, nombre)')
+                .eq('usuario_id', staffUser.id);
+              
+              const list = (pivotEmps?.map((p: any) => {
+                const emp = p.empresas;
+                if (Array.isArray(emp)) return emp[0];
+                return emp;
+              }).filter(Boolean) as unknown as { id: string; nombre: string }[]) || [];
+              
+              // Asegurar que la empresa actual esté en la lista
+              if (datosSesion.empresa_id && !list.some(e => e.id === datosSesion.empresa_id)) {
+                const { data: curEmp } = await supabase.from('empresas').select('id, nombre').eq('id', datosSesion.empresa_id).maybeSingle();
+                if (curEmp) list.push(curEmp);
+              }
+              setSwitchableCompanies(list);
             }
           }
         }
@@ -143,9 +192,24 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           ) : (
             <Soup className="text-amber-500 w-8 h-8" />
           )}
-          <div>
-            <h1 className="font-bold text-lg leading-tight">Playa Seimenjo</h1>
-            {empresaNombre ? (
+          <div className="min-w-0 flex-1">
+            <h1 className="font-bold text-lg leading-tight truncate">Playa Seimenjo</h1>
+            {switchableCompanies.length > 1 ? (
+              <div className="mt-1 relative">
+                <select
+                  disabled={isSwitching}
+                  value={empresaId || ''}
+                  onChange={(e) => handleSwitchCompany(e.target.value)}
+                  className="w-full text-[10px] bg-amber-500/10 text-amber-600 dark:text-amber-400 px-1.5 py-0.5 rounded font-semibold uppercase tracking-wide border-none outline-none cursor-pointer focus:ring-1 focus:ring-amber-500/50 appearance-none bg-[url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22292.4%22%20height%3D%22292.4%22%3E%3Cpath%20fill%3D%22%23b45309%22%20d%3D%22M287%2069.4a17.6%2017.6%200%200%200-13-5.4H18.4c-5%200-9.3%201.8-12.9%205.4A17.6%2017.6%200%200%200%200%2082.2c0%205%201.8%209.3%205.4%2012.9l128%20127.9c3.6%203.6%207.8%205.4%2012.8%205.4s9.2-1.8%2012.8-5.4L287%2095c3.5-3.5%205.4-7.8%205.4-12.8%200-5-1.9-9.2-5.5-12.8z%22%2F%3E%3C%2Fsvg%3E')] bg-[length:8px_8px] bg-[right_8px_center] bg-no-repeat pr-6"
+                >
+                  {switchableCompanies.map(c => (
+                    <option key={c.id} value={c.id} className="text-gray-900 bg-white dark:bg-gray-950 dark:text-white text-xs">
+                      {c.nombre}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : empresaNombre ? (
               <span className="text-[10px] bg-amber-500/10 text-amber-600 dark:text-amber-400 px-1.5 py-0.5 rounded font-semibold uppercase tracking-wide block w-fit mt-0.5">
                 {empresaNombre}
               </span>

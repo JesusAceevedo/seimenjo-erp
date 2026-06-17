@@ -130,8 +130,15 @@ export default function AdminGastos() {
         .from('pedidos')
         .select('precio_total, created_at, estatus_pago');
 
-      if (startDateStr) {
-        salesQuery = salesQuery.gte('created_at', `${startDateStr}T00:00:00.000Z`);
+      // Si no se aplica filtro (rango todo), solo consideramos el mes en curso para los ingresos
+      let salesStartDateStr = startDateStr;
+      if (filtroRango === 'todo') {
+        const inicioMes = new Date(hoy.getFullYear(), hoy.getMonth(), 1);
+        salesStartDateStr = inicioMes.toISOString().split('T')[0];
+      }
+
+      if (salesStartDateStr) {
+        salesQuery = salesQuery.gte('created_at', `${salesStartDateStr}T00:00:00.000Z`);
       }
       if (endDateStr) {
         salesQuery = salesQuery.lte('created_at', `${endDateStr}T23:59:59.999Z`);
@@ -224,7 +231,38 @@ export default function AdminGastos() {
     let total = 0;
     const breakdown: Record<string, number> = {};
 
+    // Determinar rango para el KPI
+    let kpiStartDate: Date | null = null;
+    let kpiEndDate: Date | null = null;
+
+    const hoy = new Date();
+    if (filtroRango === 'todo') {
+      kpiStartDate = new Date(hoy.getFullYear(), hoy.getMonth(), 1);
+    } else if (filtroRango === 'semana') {
+      const haceUnaSemana = new Date();
+      haceUnaSemana.setDate(hoy.getDate() - 7);
+      haceUnaSemana.setHours(0, 0, 0, 0);
+      kpiStartDate = haceUnaSemana;
+    } else if (filtroRango === 'mes') {
+      const haceUnMes = new Date();
+      haceUnMes.setMonth(hoy.getMonth() - 1);
+      haceUnMes.setHours(0, 0, 0, 0);
+      kpiStartDate = haceUnMes;
+    } else if (filtroRango === 'rango' && fechaInicio) {
+      kpiStartDate = new Date(fechaInicio + 'T00:00:00');
+      if (fechaFin) {
+        kpiEndDate = new Date(fechaFin + 'T23:59:59');
+      }
+    }
+
     gastos.forEach(g => {
+      if (g.fecha_gasto) {
+        const fechaG = new Date(g.fecha_gasto + 'T00:00:00');
+        // Validar si entra en el rango del KPI
+        if (kpiStartDate && fechaG < kpiStartDate) return;
+        if (kpiEndDate && fechaG > kpiEndDate) return;
+      }
+
       const monto = Number(g.monto || 0);
       total += monto;
       const metodo = g.metodo_pago || 'Efectivo';
@@ -234,7 +272,7 @@ export default function AdminGastos() {
     const balance = totalVentasPeriodo - total;
 
     return { total, breakdown, balance };
-  }, [gastos, totalVentasPeriodo]);
+  }, [gastos, totalVentasPeriodo, filtroRango, fechaInicio, fechaFin]);
 
   // Gastos filtrados por método de pago y búsqueda
   const gastosFiltrados = useMemo(() => {

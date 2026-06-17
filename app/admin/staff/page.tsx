@@ -70,7 +70,14 @@ export default function StaffPage() {
   });
   const [selectedPerfilId, setSelectedPerfilId] = useState('');
   const [selectedSucursales, setSelectedSucursales] = useState<string[]>([]);
+  const [selectedEmpresas, setSelectedEmpresas] = useState<string[]>([]);
   const [guardandoUsuario, setGuardandoUsuario] = useState(false);
+
+  const toggleEmpresaSeleccionada = (empId: string) => {
+    setSelectedEmpresas(prev =>
+      prev.includes(empId) ? prev.filter(id => id !== empId) : [...prev, empId]
+    );
+  };
 
   // --- CARGA DE DATOS ---
   const loadData = useCallback(async (empId: string | null, isSuper: boolean) => {
@@ -78,12 +85,39 @@ export default function StaffPage() {
     try {
       let targetEmpresa = empId;
 
-      // Si es Superusuario, cargar catálogo de empresas
-      if (isSuper) {
-        const { data: emps } = await supabase.from('empresas').select('*').order('nombre');
-        const empsList = (emps as Empresa[]) || [];
-        setEmpresas(empsList);
-        targetEmpresa = selectedEmpresaId || empsList[0]?.id || null;
+      // Cargar catálogo de empresas
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session) {
+        if (isSuper) {
+          const { data: emps } = await supabase.from('empresas').select('*').order('nombre');
+          const empsList = (emps as Empresa[]) || [];
+          setEmpresas(empsList);
+          targetEmpresa = selectedEmpresaId || empsList[0]?.id || null;
+        } else {
+          // Obtener el registro de staff para encontrar su id
+          const { data: staffUser } = await supabase
+            .from('usuarios_staff')
+            .select('id')
+            .eq('supabase_auth_id', session.user.id)
+            .maybeSingle();
+
+          if (staffUser) {
+            const { data: pivotEmps } = await supabase
+              .from('empresas_usuario_pivot')
+              .select('empresa_id, empresas(id, nombre)')
+              .eq('usuario_id', staffUser.id);
+            
+            const empsList = pivotEmps?.map(p => p.empresas).filter(Boolean) as unknown as Empresa[] || [];
+            
+            // Asegurar que la empresa actual esté en la lista
+            if (empId && !empsList.some(e => e.id === empId)) {
+              const { data: curEmp } = await supabase.from('empresas').select('*').eq('id', empId).maybeSingle();
+              if (curEmp) empsList.push(curEmp as unknown as Empresa);
+            }
+            setEmpresas(empsList);
+            targetEmpresa = empId;
+          }
+        }
       }
 
       if (!targetEmpresa) {
@@ -226,13 +260,19 @@ export default function StaffPage() {
 
     setGuardandoUsuario(true);
     try {
+      // Garantizar que la empresa de origen del perfil esté agregada a las asignadas
+      const companies = selectedEmpresas.includes(targetEmpresa)
+        ? selectedEmpresas
+        : [...selectedEmpresas, targetEmpresa];
+
       const res = await crearUsuarioStaffAdmin({
         email: nuevoStaff.email,
         passwordTemporal: nuevoStaff.password,
         nombre: nuevoStaff.nombre,
         empresaId: targetEmpresa,
         perfilId: selectedPerfilId,
-        sucursalesPermitidas: selectedSucursales
+        sucursalesPermitidas: selectedSucursales,
+        empresasPermitidas: companies
       });
 
       if (!res.success) throw new Error(res.error);
@@ -241,6 +281,7 @@ export default function StaffPage() {
       setNuevoStaff({ nombre: '', email: '', password: '' });
       setSelectedPerfilId('');
       setSelectedSucursales([]);
+      setSelectedEmpresas([]);
       await loadData(empresaId, esSuperusuario);
     } catch (err: unknown) {
       if (err instanceof Error) {
@@ -343,7 +384,9 @@ export default function StaffPage() {
                   <div className="space-y-3 bg-white dark:bg-gray-950 p-3 rounded-lg border border-gray-200 dark:border-gray-800">
                     {(['ventas', 'clientes', 'gastos', 'facturacion'] as const).map(mod => (
                       <div key={mod} className="flex justify-between items-center text-xs">
-                        <span className="font-semibold capitalize text-gray-700 dark:text-gray-300">{mod}</span>
+                        <span className="font-semibold text-gray-700 dark:text-gray-300">
+                          {mod === 'ventas' ? 'Pedidos' : mod === 'gastos' ? 'Egresos' : mod === 'facturacion' ? 'Facturación' : 'Clientes'}
+                        </span>
                         <div className="flex gap-4">
                           <button
                             onClick={() => togglePermiso(mod, 'read')}
@@ -398,7 +441,9 @@ export default function StaffPage() {
                         <td className="p-3 text-[10px] space-y-0.5">
                           {Object.entries(perf.permisos || {}).map(([mod, rules]: [string, {read:boolean; write:boolean}]) => (
                             <div key={mod}>
-                              <span className="font-bold text-gray-500 uppercase">{mod}:</span>{' '}
+                              <span className="font-bold text-gray-500 uppercase">
+                                {mod === 'ventas' ? 'Pedidos' : mod === 'gastos' ? 'Egresos' : mod === 'facturacion' ? 'Facturación' : mod}:
+                              </span>{' '}
                               <span className="text-gray-400">
                                 {rules.read ? 'Lectura' : ''}
                                 {rules.read && rules.write ? ' + ' : ''}
@@ -513,6 +558,30 @@ export default function StaffPage() {
                     )}
                   </div>
                 </div>
+
+                {/* Selector Multi-Empresa */}
+                {empresas.length > 1 && (
+                  <div>
+                    <label className="text-[10px] font-bold text-gray-500 uppercase block mb-2">Empresas Permitidas (Opcional)</label>
+                    <div className="grid grid-cols-2 gap-2 bg-white dark:bg-gray-950 p-3 rounded-lg border border-gray-200 dark:border-gray-800 max-h-36 overflow-y-auto">
+                      {empresas.map(emp => (
+                        <button
+                          key={emp.id}
+                          type="button"
+                          onClick={() => toggleEmpresaSeleccionada(emp.id)}
+                          className="flex items-center gap-1.5 text-xs text-left hover:text-amber-500 transition-colors"
+                        >
+                          {selectedEmpresas.includes(emp.id) ? (
+                            <CheckSquare size={14} className="text-amber-500 shrink-0" />
+                          ) : (
+                            <Square size={14} className="shrink-0" />
+                          )}
+                          <span className="truncate">{emp.nombre}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 <button
                   type="submit"

@@ -45,7 +45,7 @@ export default function OnboardingWizard({ empresaId, onSuccess }: OnboardingWiz
   const [keyFile, setKeyFile] = useState<File | null>(null);
 
   // Paso 4: Módulos y Parámetros
-  const [modulos, setModulos] = useState<string[]>(['ventas', 'gastos', 'clientes', 'personal']);
+  const [modulos, setModulos] = useState<string[]>(['ventas', 'gastos', 'clientes', 'personal', 'productos', 'produccion']);
 
   useEffect(() => {
     const fetchRegimenes = async () => {
@@ -453,7 +453,9 @@ export default function OnboardingWizard({ empresaId, onSuccess }: OnboardingWiz
                     { id: 'gastos', label: 'Gastos' },
                     { id: 'clientes', label: 'Clientes' },
                     { id: 'personal', label: 'Personal (Staff)' },
-                    { id: 'configuracion', label: 'Configuración ERP' }
+                    { id: 'configuracion', label: 'Configuración ERP' },
+                    { id: 'productos', label: 'Productos' },
+                    { id: 'produccion', label: 'Producción' }
                   ].map((mod) => {
                     const isSelected = modulos.includes(mod.id);
                     return (

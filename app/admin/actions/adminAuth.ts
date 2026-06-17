@@ -25,6 +25,7 @@ export async function crearUsuarioStaffAdmin(params: {
   empresaId: string;
   perfilId: string;
   sucursalesPermitidas: string[];
+  empresasPermitidas?: string[];
 }) {
   const supabaseAdmin = getAdminClient();
 
@@ -84,6 +85,28 @@ export async function crearUsuarioStaffAdmin(params: {
         await supabaseAdmin.auth.admin.deleteUser(userId);
         throw pivotError;
       }
+    }
+
+    // 4. Registrar los permisos multiempresa en la tabla pivot empresas_usuario_pivot
+    const empresasAInsertar = params.empresasPermitidas && params.empresasPermitidas.length > 0
+      ? params.empresasPermitidas
+      : [params.empresaId];
+
+    const empresasPivots = empresasAInsertar.map((empId) => ({
+      usuario_id: userId,
+      empresa_id: empId
+    }));
+
+    const { error: empPivotError } = await supabaseAdmin
+      .from('empresas_usuario_pivot')
+      .insert(empresasPivots);
+
+    if (empPivotError) {
+      // En caso de error, limpiar todo lo anterior
+      await supabaseAdmin.from('sucursales_usuario_pivot').delete().eq('usuario_id', userId);
+      await supabaseAdmin.from('usuarios_staff').delete().eq('supabase_auth_id', userId);
+      await supabaseAdmin.auth.admin.deleteUser(userId);
+      throw empPivotError;
     }
 
     return { success: true, userId };
@@ -318,7 +341,9 @@ export async function provisionarAdminEmpresa(params: {
             ventas: { read: true, write: true },
             clientes: { read: true, write: true },
             gastos: { read: true, write: true },
-            facturacion: { read: true, write: true }
+            facturacion: { read: true, write: true },
+            productos: { read: true, write: true },
+            produccion: { read: true, write: true }
           }
         })
         .select('id')
