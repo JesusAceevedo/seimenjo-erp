@@ -1,32 +1,6 @@
 'use server';
 
-import { createClient } from '@supabase/supabase-js';
-
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
-
-const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
-  auth: {
-    persistSession: false,
-    autoRefreshToken: false
-  }
-});
-
-// Helper to validate user token and return company ID and user ID
-async function getUserEmpresaId(token: string): Promise<{ empresaId: string; userId: string }> {
-  if (!token) throw new Error('Usuario no autenticado (Token no proporcionado).');
-  const { data: { user }, error: authErr } = await supabaseAdmin.auth.getUser(token);
-  if (authErr || !user) throw new Error('Sesión de usuario inválida o expirada.');
-
-  const { data: staff, error: staffErr } = await supabaseAdmin
-    .from('usuarios_staff')
-    .select('empresa_id')
-    .eq('supabase_auth_id', user.id)
-    .single();
-
-  if (staffErr || !staff) throw new Error('No se encontró el perfil de staff asociado a tu cuenta.');
-  return { empresaId: staff.empresa_id, userId: user.id };
-}
+import { supabaseAdmin, getUserEmpresaId } from '../../../lib/supabaseAdmin';
 
 // Helper to extract RFC from bank description (SAT CFDI RFC Regex)
 function extraerRfcDeConcepto(concepto: string): string | null {

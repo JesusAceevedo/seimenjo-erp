@@ -8,27 +8,14 @@ import { supabase } from '../../../lib/supabase';
 import { useThemeMode } from '../../../lib/useThemeMode';
 import { Plus, Search, Sun, Moon, ChevronLeft, ChevronRight, Edit3, Trash2, Key, Users, Save } from 'lucide-react';
 import { habilitarPortalClienteAdmin } from '../actions/adminAuth';
+import {
+  CATALOGO_REGIMEN_FISCAL,
+  CATALOGO_USO_CFDI,
+  getDescripcionRegimenFiscal,
+  getDescripcionUsoCfdi
+} from '../../../lib/sat-catalogs';
 
-// --- CATÁLOGOS MAESTROS DEL SAT (CFDI 4.0) ---
-const CATALOGO_REGIMEN_FISCAL = [
-  { clave: '601', descripcion: 'General de Ley Personas Morales' },
-  { clave: '603', descripcion: 'Personas Morales con Fines no Lucrativos' },
-  { clave: '605', descripcion: 'Sueldos y Salarios e Ingresos Asimilados a Salarios' },
-  { clave: '606', descripcion: 'Arrendamiento' },
-  { clave: '608', descripcion: 'Demás ingresos' },
-  { clave: '612', descripcion: 'Personas Físicas con Actividades Empresariales y Profesionales' },
-  { clave: '621', descripcion: 'Incorporación Fiscal' },
-  { clave: '626', descripcion: 'Régimen Simplificado de Confianza (RESICO)' }
-];
 
-const CATALOGO_USO_CFDI = [
-  { clave: 'G01', descripcion: 'Adquisición de mercancías' },
-  { clave: 'G03', descripcion: 'Gastos en general' },
-  { clave: 'D01', descripcion: 'Honorarios médicos, dentales y gastos hospitalarios' },
-  { clave: 'I01', descripcion: 'Construcciones' },
-  { clave: 'S01', descripcion: 'Sin efectos fiscales' },
-  { clave: 'P01', descripcion: 'Por definir' }
-];
 
 const PEDIDO_INICIAL = {
   cliente_id: '', cliente_nombre: '', cliente_telefono: '',
@@ -390,10 +377,10 @@ export default function AdminMonitor() {
                             <div className="text-gray-400 font-mono text-[11px]">{c.rfc}</div>
                           </td>
                           <td className="p-4 font-medium text-gray-700 dark:text-gray-300">
-                            {c.regimen_fiscal ? `${c.regimen_fiscal} - ${CATALOGO_REGIMEN_FISCAL.find(r => r.clave === c.regimen_fiscal)?.descripcion || ''}` : 'No definido'}
+                            {c.regimen_fiscal ? `${c.regimen_fiscal} - ${getDescripcionRegimenFiscal(c.regimen_fiscal)}` : 'No definido'}
                           </td>
                           <td className="p-4 font-medium text-gray-700 dark:text-gray-300">
-                            {c.uso_cfdi ? `${c.uso_cfdi} - ${CATALOGO_USO_CFDI.find(u => u.clave === c.uso_cfdi)?.descripcion || ''}` : 'No definido'}
+                            {c.uso_cfdi ? `${c.uso_cfdi} - ${getDescripcionUsoCfdi(c.uso_cfdi)}` : 'No definido'}
                           </td>
                           <td className="p-4 space-y-0.5">
                             <div className="font-mono text-gray-900 dark:text-white">CP: {c.codigo_postal || 'N/A'}</div>

@@ -1,11 +1,40 @@
-// Shared type definitions for the admin panel
+// app/admin/types.ts
+// Definiciones de tipos compartidas en el panel de administración.
+
+// ---------------------------------------------------------------------------
+// Entidades base
+// ---------------------------------------------------------------------------
 
 export interface Cliente {
   id: string;
   nombre_local?: string;
+  razon_social?: string;
   telefono?: string;
   rfc?: string;
-  // Add any other fields you use from the 'clientes' table
+  codigo_postal?: string;
+  regimen_fiscal?: string;
+  uso_cfdi?: string;
+  email_facturacion?: string;
+  es_anonimo?: boolean;
+}
+
+export interface Proveedor {
+  id: string;
+  nombre_comercial?: string;
+  rfc?: string;
+  razon_social?: string;
+  telefono?: string;
+  email?: string;
+  alias?: string | null;
+  portal_facturacion?: string | null;
+  sitio_web?: string | null;
+  direccion?: string | null;
+  comentarios?: string | null;
+  banco_nombre?: string | null;
+  cuenta_clabe?: string | null;
+  cuenta_numero?: string | null;
+  convenio_numero?: string | null;
+  referencia_bancaria?: string | null;
 }
 
 export interface ProductoVariante {
@@ -44,52 +73,19 @@ export interface Pedido {
   comentarios?: string;
   comentarios_generales?: string;
   folio_factura?: string;
-  // any other fields you need
+  movimiento_bancario_id?: string | null;
 }
 
 export interface Repartidor {
   id: string;
   nombre: string;
-  // other fields
 }
 
-export interface FormaPago {
-  id: string;
-  nombre: string;
-  // other fields
-}
+// ---------------------------------------------------------------------------
+// Catálogos
+// ---------------------------------------------------------------------------
 
-export interface PrecioEspecialMap {
-  [varianteId: string]: number;
-}
-// Additional shared interfaces
-
-export interface Proveedor {
-  id: string;
-  nombre_comercial?: string;
-  rfc?: string;
-  razon_social?: string;
-  telefono?: string;
-  email?: string;
-  alias?: string | null;
-  portal_facturacion?: string | null;
-  sitio_web?: string | null;
-  direccion?: string | null;
-  comentarios?: string | null;
-  banco_nombre?: string | null;
-  cuenta_clabe?: string | null;
-  cuenta_numero?: string | null;
-  convenio_numero?: string | null;
-  referencia_bancaria?: string | null;
-}
-
-export interface CategoriaGasto {
-  id: string;
-  nombre: string;
-  tipo?: string;
-  descripcion?: string;
-}
-
+/** Única declaración de FormaPago — elimina el duplicado anterior. */
 export interface FormaPago {
   id: string;
   nombre: string;
@@ -98,6 +94,13 @@ export interface FormaPago {
 export interface EstatusFactura {
   id: string;
   nombre: string;
+}
+
+export interface CategoriaGasto {
+  id: string;
+  nombre: string;
+  tipo?: string;
+  descripcion?: string;
 }
 
 export interface RegimenFiscal {
@@ -114,21 +117,123 @@ export interface UsoCfdi {
   descripcion?: string;
 }
 
+// ---------------------------------------------------------------------------
+// Organización
+// ---------------------------------------------------------------------------
+
 export interface Empresa {
   id: string;
   nombre: string;
   rfc?: string;
-  // other fields as needed
+  razon_social?: string;
 }
 
 export interface Sucursal {
   id: string;
   nombre: string;
-  // other fields as needed
 }
 
 export interface Modulo {
   id: string;
   nombre: string;
-  // other fields as needed
+}
+
+// ---------------------------------------------------------------------------
+// Módulo de precios especiales
+// ---------------------------------------------------------------------------
+
+export interface PrecioEspecialMap {
+  [varianteId: string]: number;
+}
+
+// ---------------------------------------------------------------------------
+// Módulo de Gastos / Facturación
+// ---------------------------------------------------------------------------
+
+export interface GastoFacturado {
+  id: string;
+  fecha_timbrado?: string;
+  fecha_gasto?: string;
+  uuid_fiscal?: string;
+  concepto: string;
+  monto: number;
+  subtotal?: number;
+  iva_acreditable?: number;
+  proveedores?: { nombre_comercial: string; rfc: string };
+  categorias_gasto?: { nombre: string };
+  xml_url?: string;
+  pdf_url?: string;
+  ticket_url?: string;
+  gasto_padre_id?: string | null;
+  padre?: { concepto: string } | null;
+}
+
+export interface VentaFacturada {
+  id: string;
+  numero_pedido: string;
+  precio_total: number;
+  cliente_nombre?: string;
+  fecha_pedido?: string;
+  estatus_pago?: string;
+  clientes?: { nombre_local: string; rfc: string; email_facturacion?: string };
+  facturas_clientes?: {
+    uuid_fiscal?: string;
+    xml_url?: string;
+    pdf_url?: string;
+    ticket_url?: string;
+    total?: number;
+    iva_trasladado?: number;
+    fecha_emision?: string;
+    serie_folio?: string;
+  }[];
+}
+
+export interface GastoPendiente {
+  id: string;
+  concepto: string;
+  monto: number;
+  fecha_gasto?: string;
+}
+
+export interface GastoReconciliable {
+  id: string;
+  concepto: string;
+  monto: number;
+  fecha_gasto?: string;
+  xml_url?: string;
+  pdf_url?: string;
+  ticket_url?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Módulo de Conciliación Bancaria
+// ---------------------------------------------------------------------------
+
+export interface MovimientoBancario {
+  id: string;
+  fecha: string;
+  concepto: string;
+  monto: number;
+  retiro?: number;
+  deposito?: number;
+  tipo_movimiento: 'Retiro' | 'Deposito';
+  referencia?: string | null;
+  rfc_proveedor?: string | null;
+  visible_egresos?: boolean;
+  visible_ingresos?: boolean;
+  estatus_conciliacion_id?: string | null;
+  estatus_conciliacion_bancaria?: EstatusConciliacion | null;
+  xml_url?: string | null;
+  pdf_factura_url?: string | null;
+  pdf_ticket_url?: string | null;
+  storage_provider?: 'Supabase' | 'GoogleDrive';
+  empresa_id?: string;
+}
+
+export interface EstatusConciliacion {
+  id: string;
+  clave: string;
+  nombre: string;
+  color?: string;
+  descripcion?: string;
 }
