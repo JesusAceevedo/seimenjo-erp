@@ -28,6 +28,11 @@ export const dynamic = 'force-dynamic';
 export default function AdminMonitor() {
   const router = useRouter();
 
+  const getSessionToken = async (): Promise<string> => {
+    const { data: { session } } = await supabase.auth.getSession();
+    return session?.access_token || '';
+  };
+
   // Helper de Formato Contable
   const formatCurrency = (val: unknown) => {
     const num = Number(val) || 0;
@@ -408,7 +413,8 @@ export default function AdminMonitor() {
   const handleResendInvoice = async (pedidoId: string) => {
     setIsSendingEmail(true);
     try {
-      const res = await enviarFacturaPorCorreo(pedidoId);
+      const token = await getSessionToken();
+      const res = await enviarFacturaPorCorreo(pedidoId, token);
       if (res.success) {
         setEmailModal({ open: true, details: res });
       } else {

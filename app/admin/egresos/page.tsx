@@ -8,8 +8,9 @@ import { supabase } from '../../../lib/supabase';
 import { useThemeMode } from '../../../lib/useThemeMode';
 import { 
   Plus, Users, Sun, Moon, Eye, ChevronLeft, ChevronRight, FileText, Save, X, Receipt, Search,
-  TrendingUp, TrendingDown, Scale, CreditCard, Calendar, Filter
+  TrendingUp, TrendingDown, Scale, CreditCard, Calendar, Filter, Trash2
 } from 'lucide-react';
+import { toggleMovimientoVisibilidad } from '../gastos/reconciliationActions';
 
 export const dynamic = 'force-dynamic';
 
@@ -37,10 +38,24 @@ interface Gasto {
   concepto?: string | null;
   metodo_pago?: string | null;
   monto: number;
+  movimiento_bancario_id?: string | null;
 }
 
 export default function AdminGastos() {
   const router = useRouter();
+
+  const handleQuitarMovimiento = async (movimientoId: string, gastoId: string) => {
+    if (confirm('¿Deseas quitar este movimiento de egresos? Esto eliminará el gasto y lo desmarcará de la lista del banco.')) {
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token || '';
+      const res = await toggleMovimientoVisibilidad(movimientoId, 'egresos', false, token);
+      if (res.success) {
+        setGastos(prev => prev.filter(g => g.id !== gastoId));
+      } else {
+        alert(res.error || 'Error al quitar movimiento.');
+      }
+    }
+  };
 
   // Helper de Formato Contable
   const formatCurrency = (val: string | number) => {
@@ -528,6 +543,7 @@ export default function AdminGastos() {
                     <th className="p-4">Concepto / Categoría</th>
                     <th className="p-4 text-center">Método</th>
                     <th className="p-4 text-right">Monto</th>
+                    <th className="p-4 text-center">Acciones</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100 dark:divide-gray-800/50 text-xs">
@@ -542,9 +558,16 @@ export default function AdminGastos() {
                       </td>
                       <td className="p-4 space-y-1">
                         <div className="font-medium text-sm">{g.concepto || 'Sin descripción'}</div>
-                        <span className="inline-block px-2 py-0.5 rounded text-[10px] font-medium bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 border border-blue-200 dark:border-blue-800/50">
-                          {g.categorias_gasto?.nombre || 'Sin Categoría'}
-                        </span>
+                        <div className="flex gap-1.5 flex-wrap">
+                          <span className="inline-block px-2 py-0.5 rounded text-[10px] font-medium bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 border border-blue-200 dark:border-blue-800/50">
+                            {g.categorias_gasto?.nombre || 'Sin Categoría'}
+                          </span>
+                          {g.movimiento_bancario_id && (
+                            <span className="inline-block px-2 py-0.5 rounded text-[10px] font-medium bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-450 border border-amber-200 dark:border-amber-800/50">
+                              Banco
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="p-4 text-center">
                         <span className="px-2 py-1 bg-gray-100 dark:bg-gray-800 rounded-md text-gray-600 dark:text-gray-400">
@@ -554,11 +577,24 @@ export default function AdminGastos() {
                       <td className="p-4 text-right font-bold text-sm text-red-600 dark:text-red-400">
                         - {formatCurrency(g.monto)}
                       </td>
+                      <td className="p-4 text-center">
+                        {g.movimiento_bancario_id ? (
+                          <button
+                            onClick={() => handleQuitarMovimiento(g.movimiento_bancario_id!, g.id)}
+                            className="p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 rounded transition-colors"
+                            title="Quitar de egresos y desmarcar del banco"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        ) : (
+                          <span className="text-gray-400 italic font-mono">-</span>
+                        )}
+                      </td>
                     </tr>
                   ))}
                   {gastosFiltrados.length === 0 && (
                     <tr>
-                      <td colSpan={5} className="p-8 text-center text-gray-500 dark:text-gray-400">
+                      <td colSpan={6} className="p-8 text-center text-gray-500 dark:text-gray-400">
                         {isLoading ? 'Cargando egresos...' : gastos.length === 0 ? 'No hay gastos registrados en este período.' : 'Ningún gasto coincide con los filtros aplicados.'}
                       </td>
                     </tr>

@@ -7,15 +7,30 @@ import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../../lib/supabase';
 import { useThemeMode } from '../../../lib/useThemeMode';
+import * as XLSX from 'xlsx';
 import {
   obtenerSignedUrl,
   enviarFacturaPorCorreo,
   guardarFacturaEnBaseDatos,
-  comprobarEgresoConFacturas
+  comprobarEgresoConFacturas,
+  guardarProveedor,
+  eliminarProveedor,
+  obtenerFacturasPorProveedor
 } from './actions';
 import {
+  importarMovimientosBancarios,
+  toggleMovimientoVisibilidad,
+  autoConciliarMovimientos,
+  guardarConciliacionManual,
+  getEstatusCatalog,
+  guardarEstatusCatalogItem,
+  eliminarEstatusCatalogItem
+} from './reconciliationActions';
+import {
   UploadCloud, FileText, Send, Eye, RefreshCw, AlertTriangle, CheckCircle,
-  FileCode, Download, Trash2, Calendar, DollarSign, Layers, Plus, Mail, Sun, Moon
+  FileCode, Download, Trash2, Calendar, DollarSign, Layers, Plus, Mail, Sun, Moon,
+  CreditCard, List, Scale, Settings, Check, CheckSquare, Square, ExternalLink,
+  FileSpreadsheet, Play, ArrowRightLeft, Users, Search, X, Save
 } from 'lucide-react';
 interface GastoFacturado {
   id: string;
@@ -29,6 +44,7 @@ interface GastoFacturado {
   categorias_gasto?: { nombre: string };
   xml_url?: string;
   pdf_url?: string;
+  ticket_url?: string;
   gasto_padre_id?: string | null;
   padre?: { concepto: string } | null;
 }
@@ -45,6 +61,7 @@ interface VentaFacturada {
     uuid_fiscal?: string; 
     xml_url?: string; 
     pdf_url?: string;
+    ticket_url?: string;
     total?: number;
     iva_trasladado?: number;
     fecha_emision?: string;
@@ -67,6 +84,16 @@ interface GastoPendiente {
   fecha_gasto?: string;
 }
 
+interface GastoReconciliable {
+  id: string;
+  concepto: string;
+  monto: number;
+  fecha_gasto?: string;
+  xml_url?: string;
+  pdf_url?: string;
+  ticket_url?: string;
+}
+
 interface Cliente {
   id: string;
   nombre_local: string;
@@ -87,18 +114,137 @@ export default function AdvancedBillingModule() {
     }).format(num);
   };
 
+  const getSessionToken = async (): Promise<string> => {
+    const { data: { session } } = await supabase.auth.getSession();
+    return session?.access_token || '';
+  };
+
   const { isDarkMode, toggleDarkMode } = useThemeMode();
 
   // --- TAB ACTIVAS EN LA VISUALIZACIÓN ---
-  const [activeTab, setActiveTab] = useState<'egresos' | 'ingresos'>('egresos');
+  const [activeTab, setActiveTab] = useState<'egresos' | 'ingresos' | 'banco' | 'proveedores'>('egresos');
+
+  // --- ESTADOS DE PROVEEDORES ---
+  const [proveedores, setProveedores] = useState<any[]>([]);
+  const [busquedaProveedor, setBusquedaProveedor] = useState<string>('');
+  const [selectedProveedor, setSelectedProveedor] = useState<any | null>(null);
+  const [proveedorFacturas, setProveedorFacturas] = useState<any[]>([]);
+  const [cargandoFacturasProveedor, setCargandoFacturasProveedor] = useState<boolean>(false);
+  const [proveedorModal, setProveedorModal] = useState<{
+    open: boolean;
+    proveedor: any | null;
+    loading: boolean;
+    error: string;
+  }>({
+    open: false,
+    proveedor: null,
+    loading: false,
+    error: ''
+  });
+
+  // --- ESTADOS DE CONCILIACIÓN BANCARIA ---
+  const [movimientos, setMovimientos] = useState<any[]>([]);
+  const [estatusCatalog, setEstatusCatalog] = useState<any[]>([]);
+  const [formasPago, setFormasPago] = useState<any[]>([]);
+  const [bancoSubTab, setBancoSubTab] = useState<'movimientos' | 'global' | 'catalogo' | 'formas_pago'>('movimientos');
+
+  const [formasPagoModal, setFormasPagoModal] = useState<{
+    open: boolean;
+    id?: string;
+    nombre: string;
+    loading: boolean;
+  }>({
+    open: false,
+    nombre: '',
+    loading: false
+  });
+  
+  // Filtros de movimientos bancarios
+  const [filtroBancoTipo, setFiltroBancoTipo] = useState<string>('');
+  const [filtroBancoEstatus, setFiltroBancoEstatus] = useState<string>('');
+  const [filtroBancoVisibilidad, setFiltroBancoVisibilidad] = useState<string>('todos');
+  const [busquedaBanco, setBusquedaBanco] = useState<string>('');
+  
+  // Paginación de movimientos
+  const [bancoPage, setBancoPage] = useState<number>(0);
+  const [bancoPageSize, setBancoPageSize] = useState<number>(10);
+
+  // Estados de carga e importación de Excel
+  const [excelFile, setExcelFile] = useState<File | null>(null);
+  const [excelData, setExcelData] = useState<any[]>([]);
+  const [excelHeaders, setExcelHeaders] = useState<string[]>([]);
+  const [showMappingModal, setShowMappingModal] = useState<boolean>(false);
+  const [columnMapping, setColumnMapping] = useState<{
+    fecha: string;
+    concepto: string;
+    retiro: string;
+    deposito: string;
+    referencia: string;
+  }>({
+    fecha: '',
+    concepto: '',
+    retiro: '',
+    deposito: '',
+    referencia: ''
+  });
+
+  // Modal de conciliación manual
+  const [reconcileModal, setReconcileModal] = useState<{
+    open: boolean;
+    movimiento: any | null;
+    xmlUrl: string;
+    pdfFacturaUrl: string;
+    pdfTicketUrl: string;
+    storageProvider: 'Supabase' | 'GoogleDrive';
+    gastosSeleccionados: string[];
+    pedidosSeleccionados: string[];
+    estatusClave: string;
+    loading: boolean;
+    error: string;
+  }>({
+    open: false,
+    movimiento: null,
+    xmlUrl: '',
+    pdfFacturaUrl: '',
+    pdfTicketUrl: '',
+    storageProvider: 'Supabase',
+    gastosSeleccionados: [],
+    pedidosSeleccionados: [],
+    estatusClave: '',
+    loading: false,
+    error: ''
+  });
+
+  const [manualMatchSearch, setManualMatchSearch] = useState<string>('');
+
+  // Modal para agregar/editar estatus del catálogo
+  const [catalogEditModal, setCatalogEditModal] = useState<{
+    open: boolean;
+    id?: string;
+    clave: string;
+    nombre: string;
+    descripcion: string;
+    color: string;
+    loading: boolean;
+  }>({
+    open: false,
+    clave: '',
+    nombre: '',
+    descripcion: '',
+    color: '#9CA3AF',
+    loading: false
+  });
 
   // --- ESTADOS DE DATOS ---
   const [gastosFacturados, setGastosFacturados] = useState<GastoFacturado[]>([]);
   const [ventasFacturadas, setVentasFacturadas] = useState<VentaFacturada[]>([]);
   const [pedidosPendientes, setPedidosPendientes] = useState<PedidoPendiente[]>([]);
   const [gastosPendientes, setGastosPendientes] = useState<GastoPendiente[]>([]);
+  const [gastosReconciliables, setGastosReconciliables] = useState<GastoReconciliable[]>([]);
   const [clientes, setClientes] = useState<Cliente[]>([]);
   const [facturasSueltas, setFacturasSueltas] = useState<any[]>([]);
+  const [selectedGlobalDepositId, setSelectedGlobalDepositId] = useState<string | null>(null);
+  const [selectedGlobalPedidosIds, setSelectedGlobalPedidosIds] = useState<string[]>([]);
   const [comprobacionAcumuladaModal, setComprobacionAcumuladaModal] = useState({
     open: false,
     egresoPadreId: '',
@@ -120,7 +266,14 @@ export default function AdvancedBillingModule() {
 
   // --- ESTADOS DE CARGA DE ARCHIVOS ---
   const [xmlFile, setXmlFile] = useState<File | null>(null);
+  const [xmlUrlInput, setXmlUrlInput] = useState<string>('');
+  const [xmlStorageProvider, setXmlStorageProvider] = useState<'Supabase' | 'GoogleDrive'>('Supabase');
   const [pdfFile, setPdfFile] = useState<File | null>(null);
+  const [pdfUrlInput, setPdfUrlInput] = useState<string>('');
+  const [pdfStorageProvider, setPdfStorageProvider] = useState<'Supabase' | 'GoogleDrive'>('Supabase');
+  const [ticketFile, setTicketFile] = useState<File | null>(null);
+  const [ticketUrlInput, setTicketUrlInput] = useState<string>('');
+  const [ticketStorageProvider, setTicketStorageProvider] = useState<'Supabase' | 'GoogleDrive'>('Supabase');
   const [invoiceType, setInvoiceType] = useState<'gasto' | 'venta'>('gasto');
   const [asociarExistente, setAsociarExistente] = useState<boolean>(false);
   const [asociarRegistroId, setAsociarRegistroId] = useState<string>('');
@@ -172,6 +325,15 @@ export default function AdvancedBillingModule() {
         .order('fecha_gasto', { ascending: false });
       setGastosPendientes(gPend || []);
 
+      // 10. Gastos sin conciliar (para conciliación manual bancaria: con o sin XML, pero sin movimiento bancario enlazado)
+      const { data: gReconcile } = await supabase
+        .from('gastos')
+        .select('id, concepto, monto, fecha_gasto, xml_url, pdf_url, ticket_url')
+        .is('movimiento_bancario_id', null)
+        .is('gasto_padre_id', null)
+        .order('fecha_gasto', { ascending: false });
+      setGastosReconciliables(gReconcile || []);
+
       // 5. Facturas XML de gastos sueltas (para comprobación acumulada)
       const { data: fSueltas } = await supabase
         .from('gastos')
@@ -188,6 +350,34 @@ export default function AdvancedBillingModule() {
         .order('nombre_local', { ascending: true });
       setClientes(cliData || []);
 
+      // 11. Proveedores
+      const { data: provs } = await supabase
+        .from('proveedores')
+        .select('*')
+        .order('nombre_comercial', { ascending: true });
+      setProveedores(provs || []);
+
+      // 7. Movimientos bancarios (con catálogo enlazado)
+      const { data: movs } = await supabase
+        .from('movimientos_bancarios')
+        .select('*, estatus_conciliacion_bancaria(*)')
+        .order('fecha', { ascending: false });
+      setMovimientos(movs || []);
+
+      // 8. Catálogo de estatus
+      const token = await getSessionToken();
+      const { catalog: catalogData } = await getEstatusCatalog(token);
+      if (catalogData) {
+        setEstatusCatalog(catalogData);
+      }
+
+      // 9. Métodos de Pago
+      const { data: fpData } = await supabase
+        .from('formas_pago')
+        .select('*')
+        .order('nombre', { ascending: true });
+      setFormasPago(fpData || []);
+
     } catch (err: unknown) {
       console.error('Error fetching data:', err);
     }
@@ -201,6 +391,452 @@ export default function AdvancedBillingModule() {
     };
     init();
   }, [router]);
+
+  // --- LÓGICA DE CONCILIACIÓN BANCARIA ---
+  const handleExcelUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setExcelFile(file);
+
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const bstr = evt.target?.result;
+        const workbook = XLSX.read(bstr, { type: 'binary' });
+        const sheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[sheetName];
+        const rawData = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as any[];
+        
+        if (rawData.length === 0) {
+          alert('El archivo está vacío.');
+          return;
+        }
+
+        // Auto-find header index
+        let headerIndex = 0;
+        for (let i = 0; i < Math.min(15, rawData.length); i++) {
+          const row = rawData[i];
+          if (row && row.some((cell: any) => typeof cell === 'string' && (cell.toLowerCase().includes('fecha') || cell.toLowerCase().includes('concepto') || cell.toLowerCase().includes('descripcion')))) {
+            headerIndex = i;
+            break;
+          }
+        }
+
+        const headers = (rawData[headerIndex] || []).map((h: any) => String(h || '').trim());
+        const rows = rawData.slice(headerIndex + 1).filter((row: any) => row && row.length > 0);
+
+        setExcelHeaders(headers);
+
+        const objectsData = rows.map((row: any) => {
+          const obj: any = {};
+          headers.forEach((h: string, idx: number) => {
+            obj[h] = row[idx];
+          });
+          return obj;
+        });
+
+        setExcelData(objectsData);
+
+        // Auto-detect columns mapping
+        const mapping = { fecha: '', concepto: '', retiro: '', deposito: '', referencia: '' };
+        headers.forEach((h: string) => {
+          const hl = h.toLowerCase();
+          if (hl.includes('fecha') || hl.includes('date')) mapping.fecha = h;
+          else if (hl.includes('concepto') || hl.includes('descrip') || hl.includes('detalle')) mapping.concepto = h;
+          else if (hl.includes('retiro') || hl.includes('cargo') || hl.includes('egreso') || hl.includes('salida')) mapping.retiro = h;
+          else if (hl.includes('deposito') || hl.includes('abono') || hl.includes('ingreso') || hl.includes('entrada')) mapping.deposito = h;
+          else if (hl.includes('ref') || hl.includes('nota') || hl.includes('id')) mapping.referencia = h;
+        });
+        setColumnMapping(mapping);
+        setShowMappingModal(true);
+      } catch (err) {
+        console.error('Error reading file:', err);
+        alert('Error al leer el archivo. Asegúrate de subir un archivo Excel (.xlsx) o CSV válido.');
+      }
+    };
+    reader.readAsBinaryString(file);
+  };
+
+  const handleConfirmImport = async () => {
+    if (!columnMapping.fecha || !columnMapping.concepto) {
+      alert('Debes asignar al menos Fecha y Concepto.');
+      return;
+    }
+
+    setIsUploading(true);
+    setMessage({ text: 'Importando movimientos bancarios...', type: 'info' });
+    setShowMappingModal(false);
+
+    try {
+      const formatted = excelData.map(row => {
+        return {
+          fecha: String(row[columnMapping.fecha] || ''),
+          concepto: String(row[columnMapping.concepto] || ''),
+          retiro: row[columnMapping.retiro] !== undefined ? String(row[columnMapping.retiro]) : '0',
+          deposito: row[columnMapping.deposito] !== undefined ? String(row[columnMapping.deposito]) : '0',
+          referencia: columnMapping.referencia ? String(row[columnMapping.referencia] || '') : ''
+        };
+      }).filter(m => m.fecha && m.concepto);
+
+      const token = await getSessionToken();
+      const res = await importarMovimientosBancarios(formatted, token);
+      if (res.success) {
+        setMessage({ text: `Importados ${res.count} movimientos bancarios correctamente.`, type: 'success' });
+        await fetchData();
+      } else {
+        throw new Error(res.error);
+      }
+    } catch (err: any) {
+      setMessage({ text: err.message || 'Error al importar', type: 'error' });
+    } finally {
+      setIsUploading(false);
+      setExcelFile(null);
+    }
+  };
+
+  const handleAutoReconcile = async () => {
+    setIsUploading(true);
+    setMessage({ text: 'Ejecutando conciliación inteligente...', type: 'info' });
+    try {
+      const token = await getSessionToken();
+      const res = await autoConciliarMovimientos(token);
+      if (res.success) {
+        setMessage({ text: `Conciliación finalizada. Se auto-conciliaron ${res.matchedCount} movimientos con registros en el sistema.`, type: 'success' });
+        await fetchData();
+      } else {
+        throw new Error(res.error);
+      }
+    } catch (err: any) {
+      setMessage({ text: err.message || 'Error al conciliar', type: 'error' });
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  const handleToggleVisibility = async (movimientoId: string, modulo: 'egresos' | 'ingresos', visible: boolean) => {
+    try {
+      const token = await getSessionToken();
+      const res = await toggleMovimientoVisibilidad(movimientoId, modulo, visible, token);
+      if (res.success) {
+        setMovimientos(prev => prev.map(m => m.id === movimientoId ? { ...m, [`visible_${modulo}`]: visible } : m));
+        await fetchData();
+      } else {
+        alert(res.error || 'Error al cambiar visibilidad.');
+      }
+    } catch (err: any) {
+      console.error(err);
+      alert('Error de red al actualizar visibilidad.');
+    }
+  };
+
+  const cargarDetallesProveedor = async (proveedor: any) => {
+    setSelectedProveedor(proveedor);
+    setProveedorFacturas([]);
+    setCargandoFacturasProveedor(true);
+    try {
+      const token = await getSessionToken();
+      const res = await obtenerFacturasPorProveedor(proveedor.id, token);
+      if (res.success && res.data) {
+        setProveedorFacturas(res.data);
+      } else {
+        console.error('Error fetching supplier invoices:', res.error);
+      }
+    } catch (err) {
+      console.error('Error in cargarDetallesProveedor:', err);
+    } finally {
+      setCargandoFacturasProveedor(false);
+    }
+  };
+
+  const handleSaveProveedor = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!proveedorModal.proveedor?.nombre_comercial?.trim() || !proveedorModal.proveedor?.rfc?.trim()) {
+      setProveedorModal(p => ({ ...p, error: 'Nombre comercial y RFC son obligatorios.' }));
+      return;
+    }
+
+    setProveedorModal(p => ({ ...p, loading: true, error: '' }));
+    try {
+      const token = await getSessionToken();
+      const res = await guardarProveedor(proveedorModal.proveedor, token);
+      if (res.success) {
+        setProveedorModal({ open: false, proveedor: null, loading: false, error: '' });
+        await fetchData();
+        // Update selectedProveedor if we edited the current one
+        if (selectedProveedor && selectedProveedor.id === res.data.id) {
+          // Merge details to keep existing variables or refetch
+          await cargarDetallesProveedor(res.data);
+        }
+      } else {
+        throw new Error(res.error);
+      }
+    } catch (err: any) {
+      setProveedorModal(p => ({ ...p, loading: false, error: err.message || 'Error al guardar el proveedor' }));
+    }
+  };
+
+  const handleDeleteProveedor = async (id: string) => {
+    if (!confirm('¿Estás seguro de que deseas eliminar este proveedor?')) return;
+    try {
+      const token = await getSessionToken();
+      const res = await eliminarProveedor(id, token);
+      if (res.success) {
+        setSelectedProveedor(null);
+        setProveedorFacturas([]);
+        await fetchData();
+      } else {
+        alert(res.error || 'Error al eliminar el proveedor.');
+      }
+    } catch (err: any) {
+      alert(err.message || 'Error al eliminar el proveedor.');
+    }
+  };
+
+  const handleOpenReconcileModal = async (mov: any) => {
+    const { data: existingMappings } = await supabase
+      .from('conciliaciones_bancarias')
+      .select('*')
+      .eq('movimiento_id', mov.id);
+
+    const linkedGastos = existingMappings?.map(m => m.gasto_id).filter(Boolean) as string[] || [];
+    const linkedPedidos = existingMappings?.map(m => m.pedido_id).filter(Boolean) as string[] || [];
+
+    setReconcileModal({
+      open: true,
+      movimiento: mov,
+      xmlUrl: mov.xml_url || '',
+      pdfFacturaUrl: mov.pdf_factura_url || '',
+      pdfTicketUrl: mov.pdf_ticket_url || '',
+      storageProvider: mov.storage_provider || 'Supabase',
+      gastosSeleccionados: linkedGastos,
+      pedidosSeleccionados: linkedPedidos,
+      estatusClave: mov.estatus_conciliacion_bancaria?.clave || 'pendiente',
+      loading: false,
+      error: ''
+    });
+  };
+
+  const handleCrearGastoRapido = async () => {
+    if (!reconcileModal.movimiento) return;
+    const mov = reconcileModal.movimiento;
+    
+    try {
+      const { data: newGasto, error } = await supabase.from('gastos').insert({
+        fecha_gasto: mov.fecha,
+        concepto: mov.concepto,
+        monto: Math.abs(mov.monto),
+        metodo_pago: esMovimientoEfectivo(mov.concepto) ? 'Efectivo' : 'Transferencia',
+        movimiento_bancario_id: mov.id,
+        estatus_facturado: false,
+        empresa_id: mov.empresa_id
+      }).select().single();
+
+      if (error) throw error;
+      
+      setReconcileModal(prev => ({
+        ...prev,
+        gastosSeleccionados: [...prev.gastosSeleccionados, newGasto.id]
+      }));
+
+      await fetchData();
+    } catch (err: any) {
+      alert('Error al crear gasto: ' + err.message);
+    }
+  };
+
+  const handleUploadReconciliationFile = async (e: React.ChangeEvent<HTMLInputElement>, field: 'xml' | 'pdf' | 'ticket') => {
+    const file = e.target.files?.[0];
+    if (!file || !reconcileModal.movimiento) return;
+
+    setReconcileModal(prev => ({ ...prev, loading: true, error: '' }));
+    try {
+      const timestamp = Date.now();
+      const yearMonth = new Date(reconcileModal.movimiento.fecha).toISOString().substring(0, 7);
+      const filePath = `reconciliation/${yearMonth}/${timestamp}_${file.name.replace(/\s+/g, '_')}`;
+
+      const { error } = await supabase.storage.from('facturas').upload(filePath, file);
+      if (error) throw error;
+
+      const urlField = field === 'xml' ? 'xmlUrl' : field === 'pdf' ? 'pdfFacturaUrl' : 'pdfTicketUrl';
+      setReconcileModal(prev => ({
+        ...prev,
+        [urlField]: prev[urlField] ? `${prev[urlField]},${filePath}` : filePath
+      }));
+    } catch (err: any) {
+      setReconcileModal(prev => ({ ...prev, error: 'Error al subir archivo: ' + err.message }));
+    } finally {
+      setReconcileModal(prev => ({ ...prev, loading: false }));
+    }
+  };
+
+  const handleRemoveReconciliationFile = (field: 'xml' | 'pdf' | 'ticket', indexToRemove: number) => {
+    const urlField = field === 'xml' ? 'xmlUrl' : field === 'pdf' ? 'pdfFacturaUrl' : 'pdfTicketUrl';
+    setReconcileModal(prev => {
+      const paths = prev[urlField] ? prev[urlField].split(',') : [];
+      const newPaths = paths.filter((_, idx) => idx !== indexToRemove).join(',');
+      return {
+        ...prev,
+        [urlField]: newPaths
+      };
+    });
+  };
+
+  const renderFileList = (field: 'xml' | 'pdf' | 'ticket') => {
+    const urlField = field === 'xml' ? 'xmlUrl' : field === 'pdf' ? 'pdfFacturaUrl' : 'pdfTicketUrl';
+    const pathsStr = reconcileModal[urlField];
+    if (!pathsStr) return null;
+    const paths = pathsStr.split(',').filter(Boolean);
+
+    return (
+      <div className="space-y-1.5 w-full mt-1.5 font-sans">
+        {paths.map((path, idx) => {
+          const fileName = path.split('/').pop() || '';
+          return (
+            <div key={idx} className="flex justify-between items-center bg-white dark:bg-gray-900/60 p-2 rounded-lg border border-gray-200 dark:border-gray-800 text-[11px]">
+              <span className="truncate max-w-[200px] font-semibold text-gray-700 dark:text-gray-300" title={fileName}>
+                {idx + 1}. {fileName.length > 28 ? fileName.substring(0, 25) + '...' : fileName}
+              </span>
+              <div className="flex gap-1.5 items-center font-bold">
+                <button
+                  type="button"
+                  onClick={() => handleDownloadFile(path)}
+                  className="text-blue-500 hover:text-blue-600 text-[9px] uppercase hover:underline"
+                >
+                  Ver
+                </button>
+                <span className="text-gray-300 dark:text-gray-700">|</span>
+                <button
+                  type="button"
+                  onClick={() => handleRemoveReconciliationFile(field, idx)}
+                  className="text-red-500 hover:text-red-600 text-[9px] uppercase hover:underline"
+                >
+                  Eliminar
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
+  const handleSaveManualReconcile = async () => {
+    if (!reconcileModal.movimiento) return;
+    setReconcileModal(prev => ({ ...prev, loading: true, error: '' }));
+    try {
+      const token = await getSessionToken();
+      const res = await guardarConciliacionManual(reconcileModal.movimiento.id, {
+        gastosIds: reconcileModal.gastosSeleccionados,
+        pedidosIds: reconcileModal.pedidosSeleccionados,
+        xmlUrl: reconcileModal.xmlUrl,
+        pdfFacturaUrl: reconcileModal.pdfFacturaUrl,
+        pdfTicketUrl: reconcileModal.pdfTicketUrl,
+        storageProvider: reconcileModal.storageProvider,
+        estatusClave: reconcileModal.estatusClave
+      }, token);
+
+      if (res.success) {
+        setReconcileModal(prev => ({ ...prev, open: false }));
+        setMessage({ text: 'Conciliación manual guardada correctamente.', type: 'success' });
+        await fetchData();
+      } else {
+        throw new Error(res.error);
+      }
+    } catch (err: any) {
+      setReconcileModal(prev => ({ ...prev, error: err.message || 'Error al guardar conciliación', loading: false }));
+    }
+  };
+
+  const handleSaveCatalogItem = async () => {
+    if (!catalogEditModal.nombre) {
+      alert('El nombre es obligatorio.');
+      return;
+    }
+    setCatalogEditModal(prev => ({ ...prev, loading: true }));
+    try {
+      const token = await getSessionToken();
+      const res = await guardarEstatusCatalogItem({
+        id: catalogEditModal.id,
+        clave: catalogEditModal.clave || catalogEditModal.nombre,
+        nombre: catalogEditModal.nombre,
+        descripcion: catalogEditModal.descripcion,
+        color: catalogEditModal.color
+      }, token);
+
+      if (res.success) {
+        setCatalogEditModal(prev => ({ ...prev, open: false }));
+        await fetchData();
+      } else {
+        alert(res.error || 'Error al guardar estatus.');
+      }
+    } catch (err: any) {
+      alert('Error: ' + err.message);
+    } finally {
+      setCatalogEditModal(prev => ({ ...prev, loading: false }));
+    }
+  };
+
+  const handleDeleteCatalogItem = async (id: string) => {
+    if (confirm('¿Deseas eliminar este estatus del catálogo?')) {
+      try {
+        const token = await getSessionToken();
+        const res = await eliminarEstatusCatalogItem(id, token);
+        if (res.success) {
+          await fetchData();
+        } else {
+          alert(res.error || 'No se pudo eliminar el estatus.');
+        }
+      } catch (err: any) {
+        alert('Error: ' + err.message);
+      }
+    }
+  };
+
+  const handleSaveFormaPago = async () => {
+    if (!formasPagoModal.nombre.trim()) {
+      alert('El nombre es obligatorio.');
+      return;
+    }
+    setFormasPagoModal(prev => ({ ...prev, loading: true }));
+    try {
+      if (formasPagoModal.id) {
+        const { error } = await supabase
+          .from('formas_pago')
+          .update({ nombre: formasPagoModal.nombre })
+          .eq('id', formasPagoModal.id);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase
+          .from('formas_pago')
+          .insert({ nombre: formasPagoModal.nombre });
+        if (error) throw error;
+      }
+      setFormasPagoModal(prev => ({ ...prev, open: false }));
+      await fetchData();
+    } catch (err: any) {
+      alert('Error al guardar método de pago: ' + err.message);
+    } finally {
+      setFormasPagoModal(prev => ({ ...prev, loading: false }));
+    }
+  };
+
+  const handleDeleteFormaPago = async (id: string) => {
+    if (confirm('¿Deseas eliminar este método de pago del catálogo?')) {
+      try {
+        const { error } = await supabase.from('formas_pago').delete().eq('id', id);
+        if (error) throw error;
+        await fetchData();
+      } catch (err: any) {
+        alert('Error al eliminar: ' + err.message);
+      }
+    }
+  };
+
+  const esMovimientoEfectivo = (concepto: string): boolean => {
+    if (!concepto) return false;
+    const c = concepto.toUpperCase();
+    return c.includes('EFECTIVO') || c.includes('CAJERO') || c.includes('RETIRO CAJERO') || c.includes('DEPOSITO CAJERO');
+  };
 
   // --- LÓGICA DE FACTURACIÓN ACUMULADA ---
   const handleClientChangeFacturacionAcumulada = async (cId: string) => {
@@ -340,7 +976,8 @@ export default function AdvancedBillingModule() {
 
     setComprobacionAcumuladaModal(prev => ({ ...prev, loading: true, error: '' }));
     try {
-      const res = await comprobarEgresoConFacturas(egresoPadreId, seleccionados, comentario);
+      const token = await getSessionToken();
+      const res = await comprobarEgresoConFacturas(egresoPadreId, seleccionados, comentario, token);
       if (!res.success) {
         throw new Error(res.error);
       }
@@ -388,12 +1025,66 @@ export default function AdvancedBillingModule() {
           throw new Error('No es un CFDI de factura del SAT válido (Falta elemento cfdi:Comprobante).');
         }
 
-        const total = parseFloat(comprobante.getAttribute('Total') || comprobante.getAttribute('total') || '0');
-        const subtotal = parseFloat(comprobante.getAttribute('SubTotal') || comprobante.getAttribute('subtotal') || '0');
-        const fecha = comprobante.getAttribute('Fecha') || comprobante.getAttribute('fecha') || '';
-        const serie = comprobante.getAttribute('Serie') || comprobante.getAttribute('serie') || '';
-        const folio = comprobante.getAttribute('Folio') || comprobante.getAttribute('folio') || '';
-        const formaPagoCode = comprobante.getAttribute('FormaPago') || comprobante.getAttribute('formaPago') || '';
+        const tipoDeComprobante = comprobante.getAttribute('TipoDeComprobante') || comprobante.getAttribute('tipoDeComprobante') || 'I';
+
+        let total = parseFloat(comprobante.getAttribute('Total') || comprobante.getAttribute('total') || '0');
+        let subtotal = parseFloat(comprobante.getAttribute('SubTotal') || comprobante.getAttribute('subtotal') || '0');
+        let fecha = comprobante.getAttribute('Fecha') || comprobante.getAttribute('fecha') || '';
+        let serie = comprobante.getAttribute('Serie') || comprobante.getAttribute('serie') || '';
+        let folio = comprobante.getAttribute('Folio') || comprobante.getAttribute('folio') || '';
+        let formaPagoCode = comprobante.getAttribute('FormaPago') || comprobante.getAttribute('formaPago') || '';
+
+        // Check if it is a Complemento de Pago (REP)
+        const pagoNodes = xmlDoc.getElementsByTagName('pago20:Pago').length > 0
+          ? xmlDoc.getElementsByTagName('pago20:Pago')
+          : xmlDoc.getElementsByTagName('pago10:Pago').length > 0
+            ? xmlDoc.getElementsByTagName('pago10:Pago')
+            : xmlDoc.getElementsByTagName('Pago');
+
+        let isComplementoPago = false;
+        let uuidsRelacionados: string[] = [];
+
+        if (tipoDeComprobante === 'P' || pagoNodes.length > 0) {
+          isComplementoPago = true;
+          let totalPago = 0;
+          let fechaPago = '';
+          let formaPagoPago = '';
+
+          for (let i = 0; i < pagoNodes.length; i++) {
+            const pNode = pagoNodes[i];
+            totalPago += parseFloat(pNode.getAttribute('Monto') || pNode.getAttribute('monto') || '0');
+            if (!fechaPago) {
+              fechaPago = pNode.getAttribute('FechaPago') || pNode.getAttribute('fechaPago') || '';
+            }
+            if (!formaPagoPago) {
+              formaPagoPago = pNode.getAttribute('FormaDePagoP') || pNode.getAttribute('formaDePagoP') || '';
+            }
+          }
+
+          total = totalPago;
+          subtotal = totalPago;
+          if (fechaPago) {
+            fecha = fechaPago;
+          }
+          if (formaPagoPago) {
+            formaPagoCode = formaPagoPago;
+          }
+
+          // Extract DoctoRelacionado UUIDs
+          const docRelNodes = xmlDoc.getElementsByTagName('pago20:DoctoRelacionado').length > 0
+            ? xmlDoc.getElementsByTagName('pago20:DoctoRelacionado')
+            : xmlDoc.getElementsByTagName('pago10:DoctoRelacionado').length > 0
+              ? xmlDoc.getElementsByTagName('pago10:DoctoRelacionado')
+              : xmlDoc.getElementsByTagName('DoctoRelacionado');
+
+          for (let i = 0; i < docRelNodes.length; i++) {
+            const dNode = docRelNodes[i];
+            const refUuid = dNode.getAttribute('IdDocumento') || dNode.getAttribute('idDocumento') || '';
+            if (refUuid && !uuidsRelacionados.includes(refUuid.toUpperCase())) {
+              uuidsRelacionados.push(refUuid.toUpperCase());
+            }
+          }
+        }
 
         // 2. Nodo Emisor
         const emisor = xmlDoc.getElementsByTagName('cfdi:Emisor')[0] || xmlDoc.getElementsByTagName('Emisor')[0];
@@ -417,16 +1108,18 @@ export default function AdvancedBillingModule() {
 
         // 5. Impuestos -> Traslados (IVA 002 Global)
         let globalIva = 0;
-        const cfdiImpuestos = xmlDoc.querySelector('Comprobante > Impuestos, cfdi\\:Comprobante > cfdi\\:Impuestos');
-        if (cfdiImpuestos) {
-          const traslados = cfdiImpuestos.getElementsByTagName('cfdi:Traslado').length > 0
-            ? cfdiImpuestos.getElementsByTagName('cfdi:Traslado')
-            : cfdiImpuestos.getElementsByTagName('Traslado');
+        if (!isComplementoPago) {
+          const cfdiImpuestos = xmlDoc.querySelector('Comprobante > Impuestos, cfdi\\:Comprobante > cfdi\\:Impuestos');
+          if (cfdiImpuestos) {
+            const traslados = cfdiImpuestos.getElementsByTagName('cfdi:Traslado').length > 0
+              ? cfdiImpuestos.getElementsByTagName('cfdi:Traslado')
+              : cfdiImpuestos.getElementsByTagName('Traslado');
 
-          for (let i = 0; i < traslados.length; i++) {
-            const t = traslados[i];
-            if (t.getAttribute('Impuesto') === '002') {
-              globalIva += parseFloat(t.getAttribute('Importe') || '0');
+            for (let i = 0; i < traslados.length; i++) {
+              const t = traslados[i];
+              if (t.getAttribute('Impuesto') === '002') {
+                globalIva += parseFloat(t.getAttribute('Importe') || '0');
+              }
             }
           }
         }
@@ -445,7 +1138,9 @@ export default function AdvancedBillingModule() {
           emisorNombre,
           receptorRfc,
           receptorNombre,
-          usoCfdi
+          usoCfdi,
+          isComplementoPago,
+          uuidsRelacionados
         });
         setParseError(null);
       } catch (err: any) {
@@ -476,6 +1171,13 @@ export default function AdvancedBillingModule() {
   const resetUploadForm = () => {
     setXmlFile(null);
     setPdfFile(null);
+    setTicketFile(null);
+    setTicketUrlInput('');
+    setTicketStorageProvider('Supabase');
+    setXmlUrlInput('');
+    setXmlStorageProvider('Supabase');
+    setPdfUrlInput('');
+    setPdfStorageProvider('Supabase');
     setParsedXmlData(null);
     setParseError(null);
     setAsociarExistente(false);
@@ -485,10 +1187,27 @@ export default function AdvancedBillingModule() {
   // --- SUBIDA DE ARCHIVOS A SUPABASE STORAGE Y REGISTRO ATÓMICO ---
   const handleUploadAndProcess = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!xmlFile || !pdfFile) {
-      setMessage({ text: 'Debes seleccionar tanto el archivo XML como el PDF correspondiente.', type: 'error' });
+    
+    // Validar XML
+    if (!xmlFile) {
+      setMessage({ text: 'Debes seleccionar el archivo XML local para analizar los metadatos.', type: 'error' });
       return;
     }
+    if (xmlStorageProvider === 'GoogleDrive' && !xmlUrlInput.trim()) {
+      setMessage({ text: 'Debes ingresar el enlace de Google Drive para el XML.', type: 'error' });
+      return;
+    }
+
+    // Validar PDF
+    if (pdfStorageProvider === 'Supabase' && !pdfFile) {
+      setMessage({ text: 'Debes seleccionar el archivo PDF correspondiente para subir.', type: 'error' });
+      return;
+    }
+    if (pdfStorageProvider === 'GoogleDrive' && !pdfUrlInput.trim()) {
+      setMessage({ text: 'Debes ingresar el enlace de Google Drive para el PDF.', type: 'error' });
+      return;
+    }
+
     if (!parsedXmlData) {
       setMessage({ text: 'El XML no pudo ser analizado. Verifica su estructura.', type: 'error' });
       return;
@@ -524,39 +1243,91 @@ export default function AdvancedBillingModule() {
     setMessage({ text: 'Subiendo archivos y registrando en base de datos...', type: 'info' });
 
     try {
-      // 1. Organizar rutas en el storage: facturas/YYYY-MM/timestamp_name
       const dateStr = parsedXmlData.fecha || new Date().toISOString();
       const yearMonth = dateStr.substring(0, 7); // '2026-06'
       const timestamp = Date.now();
 
-      const xmlPath = `facturas/${yearMonth}/${timestamp}_${xmlFile.name.replace(/\s+/g, '_')}`;
-      const pdfPath = `facturas/${yearMonth}/${timestamp}_${pdfFile.name.replace(/\s+/g, '_')}`;
+      let finalXmlUrl = '';
+      let finalPdfUrl = '';
 
-      // 2. Subir al Bucket 'facturas' en Supabase Storage
-      const [xmlUp, pdfUp] = await Promise.all([
-        supabase.storage.from('facturas').upload(xmlPath, xmlFile),
-        supabase.storage.from('facturas').upload(pdfPath, pdfFile)
-      ]);
+      const filesToUpload: Promise<any>[] = [];
+      let xmlPath = '';
+      let pdfPath = '';
 
-      if (xmlUp.error) throw new Error(`Fallo al subir XML: ${xmlUp.error.message}`);
-      if (pdfUp.error) throw new Error(`Fallo al subir PDF: ${pdfUp.error.message}`);
+      if (xmlStorageProvider === 'Supabase') {
+        xmlPath = `facturas/${yearMonth}/${timestamp}_${xmlFile.name.replace(/\s+/g, '_')}`;
+        filesToUpload.push(supabase.storage.from('facturas').upload(xmlPath, xmlFile));
+        finalXmlUrl = xmlPath;
+      } else {
+        finalXmlUrl = xmlUrlInput.trim();
+      }
+
+      if (pdfStorageProvider === 'Supabase') {
+        if (pdfFile) {
+          pdfPath = `facturas/${yearMonth}/${timestamp}_${pdfFile.name.replace(/\s+/g, '_')}`;
+          filesToUpload.push(supabase.storage.from('facturas').upload(pdfPath, pdfFile));
+          finalPdfUrl = pdfPath;
+        }
+      } else {
+        finalPdfUrl = pdfUrlInput.trim();
+      }
+
+      let ticketPath = '';
+      let finalTicketUrl: string | null = null;
+
+      if (ticketStorageProvider === 'Supabase' && ticketFile) {
+        ticketPath = `facturas/${yearMonth}/${timestamp}_ticket_${ticketFile.name.replace(/\s+/g, '_')}`;
+        filesToUpload.push(supabase.storage.from('facturas').upload(ticketPath, ticketFile));
+        finalTicketUrl = ticketPath;
+      } else if (ticketStorageProvider === 'GoogleDrive' && ticketUrlInput.trim()) {
+        finalTicketUrl = ticketUrlInput.trim();
+      }
+
+      // Execute all uploads
+      if (filesToUpload.length > 0) {
+        const uploadResults = await Promise.all(filesToUpload);
+        const errorResult = uploadResults.find(res => res.error);
+        if (errorResult) {
+          // If any upload fails, delete all files that were successfully uploaded in this batch to keep storage clean
+          const filesToRemove: string[] = [];
+          if (xmlStorageProvider === 'Supabase' && xmlPath) filesToRemove.push(xmlPath);
+          if (pdfStorageProvider === 'Supabase' && pdfPath) filesToRemove.push(pdfPath);
+          if (ticketStorageProvider === 'Supabase' && ticketPath) filesToRemove.push(ticketPath);
+          
+          if (filesToRemove.length > 0) {
+            await supabase.storage.from('facturas').remove(filesToRemove);
+          }
+          throw new Error(`Fallo al subir archivos: ${errorResult.error.message}`);
+        }
+      }
 
       // 3. Registrar en Postgres usando Server Actions
+      const token = await getSessionToken();
       const result = await guardarFacturaEnBaseDatos({
         isGasto: invoiceType === 'gasto',
         asociarExistente,
         existenteId: asociarRegistroId || undefined,
         xmlData: parsedXmlData,
-        xmlUrl: xmlPath,
-        pdfUrl: pdfPath
-      });
+        xmlUrl: finalXmlUrl,
+        pdfUrl: finalPdfUrl,
+        ticketUrl: finalTicketUrl
+      }, token);
 
       if (!result.success) {
         // En caso de error, intentar borrar los archivos subidos para mantener limpio el Storage
-        await Promise.all([
-          supabase.storage.from('facturas').remove([xmlPath]),
-          supabase.storage.from('facturas').remove([pdfPath])
-        ]);
+        const filesToRemove: string[] = [];
+        if (xmlStorageProvider === 'Supabase' && finalXmlUrl) {
+          filesToRemove.push(finalXmlUrl);
+        }
+        if (pdfStorageProvider === 'Supabase' && finalPdfUrl) {
+          filesToRemove.push(finalPdfUrl);
+        }
+        if (ticketStorageProvider === 'Supabase' && finalTicketUrl) {
+          filesToRemove.push(finalTicketUrl);
+        }
+        if (filesToRemove.length > 0) {
+          await supabase.storage.from('facturas').remove(filesToRemove);
+        }
         throw new Error(result.error || 'Error al procesar base de datos');
       }
 
@@ -577,8 +1348,13 @@ export default function AdvancedBillingModule() {
   // --- DESCARGA FIRMADA (SIGNED URL) ---
   const handleDownloadFile = async (path: string) => {
     if (!path) return;
+    if (path.startsWith('http://') || path.startsWith('https://')) {
+      window.open(path, '_blank');
+      return;
+    }
     try {
-      const res = await obtenerSignedUrl(path);
+      const token = await getSessionToken();
+      const res = await obtenerSignedUrl(path, token);
       if (res.success && res.url) {
         window.open(res.url, '_blank');
       } else {
@@ -593,7 +1369,8 @@ export default function AdvancedBillingModule() {
   // --- ENVÍO DE CORREO SIMULADO ---
   const handleSendEmail = async (pedidoId: string) => {
     try {
-      const res = await enviarFacturaPorCorreo(pedidoId);
+      const token = await getSessionToken();
+      const res = await enviarFacturaPorCorreo(pedidoId, token);
       if (res.success) {
         setEmailModal({ open: true, details: res });
       } else {
@@ -658,205 +1435,397 @@ export default function AdvancedBillingModule() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 flex-1 overflow-hidden min-h-0">
 
           {/* COLUMNA IZQUIERDA: PANEL DE INGESTA */}
-          <div className="lg:col-span-1 bg-white dark:bg-gray-950 p-6 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-xl space-y-6 overflow-y-auto h-full">
-            <div>
-              <h3 className="text-lg font-bold flex items-center gap-2">
-                <FileCode size={20} className="text-blue-500" /> Ingesta de Factura
-              </h3>
-              <p className="text-xs text-gray-400 mt-1 font-sans">
-                Sube el XML y PDF emitidos por el SAT para procesar.
-              </p>
-            </div>
-
-            <form onSubmit={handleUploadAndProcess} className="space-y-4">
-
-              {/* SELECTOR DE TIPO (GASTO VS VENTA) */}
+          {activeTab !== 'banco' && (
+            <div className="lg:col-span-1 bg-white dark:bg-gray-950 p-6 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-xl space-y-6 overflow-y-auto h-full">
               <div>
-                <label className="text-xs font-bold text-gray-500 uppercase">Tipo de Factura</label>
-                <div className="grid grid-cols-2 gap-2 mt-2 font-sans">
-                  <button
-                    type="button"
-                    onClick={() => { setInvoiceType('gasto'); resetUploadForm(); }}
-                    className={`py-2 rounded-xl text-xs font-bold border transition-all ${invoiceType === 'gasto'
-                        ? 'bg-red-600/10 text-red-500 border-red-500/40'
-                        : 'bg-transparent text-gray-400 border-gray-200 dark:border-gray-800'
-                      }`}
-                  >
-                    Gasto (Proveedor)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => { setInvoiceType('venta'); resetUploadForm(); }}
-                    className={`py-2 rounded-xl text-xs font-bold border transition-all ${invoiceType === 'venta'
-                        ? 'bg-emerald-600/10 text-emerald-500 border-emerald-500/40'
-                        : 'bg-transparent text-gray-400 border-gray-200 dark:border-gray-800'
-                      }`}
-                  >
-                    Venta (Cliente)
-                  </button>
-                </div>
+                <h3 className="text-lg font-bold flex items-center gap-2">
+                  <FileCode size={20} className="text-blue-500" /> Ingesta de Factura
+                </h3>
+                <p className="text-xs text-gray-400 mt-1 font-sans">
+                  Sube el XML y PDF emitidos por el SAT para procesar.
+                </p>
               </div>
 
-              {/* LÓGICA DUAL DE CARGA DE ARCHIVOS */}
-              <div className="grid grid-cols-1 gap-3 font-sans">
-                {/* XML Input */}
-                <div className="relative border border-dashed border-gray-300 dark:border-gray-700 rounded-xl p-4 text-center hover:bg-gray-50 dark:hover:bg-gray-900 transition-colors">
-                  <input
-                    type="file"
-                    accept=".xml"
-                    onChange={handleXmlChange}
-                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                  />
-                  <FileCode className={`mx-auto h-8 w-8 mb-2 ${xmlFile ? 'text-blue-500' : 'text-gray-400'}`} />
-                  <p className="text-xs font-semibold text-gray-700 dark:text-gray-300">
-                    {xmlFile ? xmlFile.name : 'Seleccionar XML (.xml)'}
-                  </p>
-                  <p className="text-[10px] text-gray-400 mt-1">Obligatorio para lectura de metadatos</p>
-                </div>
+              <form onSubmit={handleUploadAndProcess} className="space-y-4">
 
-                {/* PDF Input */}
-                <div className="relative border border-dashed border-gray-300 dark:border-gray-700 rounded-xl p-4 text-center hover:bg-gray-50 dark:hover:bg-gray-900 transition-colors">
-                  <input
-                    type="file"
-                    accept=".pdf"
-                    onChange={handlePdfChange}
-                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                  />
-                  <FileText className={`mx-auto h-8 w-8 mb-2 ${pdfFile ? 'text-red-500' : 'text-gray-400'}`} />
-                  <p className="text-xs font-semibold text-gray-700 dark:text-gray-300">
-                    {pdfFile ? pdfFile.name : 'Seleccionar Representación PDF (.pdf)'}
-                  </p>
-                  <p className="text-[10px] text-gray-400 mt-1">Obligatorio para almacenamiento</p>
-                </div>
-              </div>
-
-              {/* DATOS EXTRAÍDOS DEL XML (FRONTEND PREVIEW) */}
-              {parsedXmlData && (
-                <div className="p-3.5 bg-gray-50 dark:bg-gray-900/60 rounded-xl border border-gray-100 dark:border-gray-800 text-xs space-y-2 font-mono">
-                  <div className="font-bold text-blue-500 font-sans border-b border-gray-200 dark:border-gray-800 pb-1 flex justify-between">
-                    <span>Resumen de Factura</span>
-                    <span>SAT 4.0</span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-x-2 gap-y-1">
-                    <div>
-                      <span className="text-[10px] text-gray-400 uppercase">UUID</span>
-                      <p className="truncate font-semibold text-gray-800 dark:text-gray-200" title={parsedXmlData.uuid}>
-                        {parsedXmlData.uuid.substring(0, 18)}...
-                      </p>
-                    </div>
-                    <div>
-                      <span className="text-[10px] text-gray-400 uppercase">Folio Fiscal</span>
-                      <p className="font-semibold text-gray-800 dark:text-gray-200">
-                        {parsedXmlData.serie || ''}{parsedXmlData.folio || 'S/F'}
-                      </p>
-                    </div>
-                    <div>
-                      <span className="text-[10px] text-gray-400 uppercase">RFC Emisor</span>
-                      <p className="font-semibold text-gray-800 dark:text-gray-200">{parsedXmlData.emisorRfc}</p>
-                    </div>
-                    <div>
-                      <span className="text-[10px] text-gray-400 uppercase">RFC Receptor</span>
-                      <p className="font-semibold text-gray-800 dark:text-gray-200">{parsedXmlData.receptorRfc}</p>
-                    </div>
-                    <div className="col-span-2 border-t border-dashed border-gray-200 dark:border-gray-800 pt-1.5 mt-1"></div>
-                    <div>
-                      <span className="text-[10px] text-gray-400 uppercase">Subtotal</span>
-                      <p className="font-bold text-gray-800 dark:text-gray-200">{formatCurrency(parsedXmlData.subtotal)}</p>
-                    </div>
-                    <div>
-                      <span className="text-[10px] text-gray-400 uppercase">IVA (002)</span>
-                      <p className="font-bold text-gray-800 dark:text-gray-200">{formatCurrency(parsedXmlData.iva)}</p>
-                    </div>
-                    <div className="col-span-2">
-                      <span className="text-[10px] text-gray-400 uppercase">Total XML</span>
-                      <p className="text-base font-extrabold text-blue-500">{formatCurrency(parsedXmlData.total)}</p>
-                    </div>
+                {/* SELECTOR DE TIPO (GASTO VS VENTA) */}
+                <div>
+                  <label className="text-xs font-bold text-gray-500 uppercase">Tipo de Factura</label>
+                  <div className="grid grid-cols-2 gap-2 mt-2 font-sans">
+                    <button
+                      type="button"
+                      onClick={() => { setInvoiceType('gasto'); resetUploadForm(); }}
+                      className={`py-2 rounded-xl text-xs font-bold border transition-all ${invoiceType === 'gasto'
+                          ? 'bg-red-600/10 text-red-500 border-red-500/40'
+                          : 'bg-transparent text-gray-400 border-gray-200 dark:border-gray-800'
+                        }`}
+                    >
+                      Gasto (Proveedor)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setInvoiceType('venta'); resetUploadForm(); }}
+                      className={`py-2 rounded-xl text-xs font-bold border transition-all ${invoiceType === 'venta'
+                          ? 'bg-emerald-600/10 text-emerald-500 border-emerald-500/40'
+                          : 'bg-transparent text-gray-400 border-gray-200 dark:border-gray-800'
+                        }`}
+                    >
+                      Venta (Cliente)
+                    </button>
                   </div>
                 </div>
-              )}
 
-              {/* PARSE ERROR INDICATOR */}
-              {parseError && (
-                <div className="p-3 bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-400 rounded-xl border border-red-200 dark:border-red-900/50 text-xs flex items-start gap-2">
-                  <AlertTriangle size={15} className="shrink-0 mt-0.5" />
-                  <p>{parseError}</p>
-                </div>
-              )}
-
-              {/* SECTOR DE CONCILIACIÓN / ASOCIACIÓN */}
-              {parsedXmlData && (
-                <div className="p-4 bg-gray-50 dark:bg-gray-900/40 rounded-xl border border-gray-200 dark:border-gray-800 space-y-3 font-sans">
-                  <div className="flex justify-between items-center">
-                    <label className="text-xs font-bold text-gray-500 uppercase">¿Asociar a existente?</label>
-                    <input
-                      type="checkbox"
-                      checked={asociarExistente}
-                      className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 bg-white dark:bg-gray-950"
-                      onChange={e => { setAsociarExistente(e.target.checked); setAsociarRegistroId(''); }}
-                    />
-                  </div>
-
-                  {asociarExistente && (
-                    <div className="space-y-1.5 animate-in slide-in-from-top-1.5 duration-200">
-                      <label className="text-[11px] font-semibold text-gray-500">
-                        {invoiceType === 'gasto' ? 'Gasto Pendiente de Facturar' : 'Pedido de Venta Pendiente'}
+                {/* LÓGICA DUAL DE CARGA DE ARCHIVOS */}
+                <div className="space-y-4">
+                  {/* XML Input Container */}
+                  <div className="space-y-2.5">
+                    <div className="flex justify-between items-center">
+                      <label className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase">
+                        CFDI XML (Obligatorio)
                       </label>
-                      <select
-                        value={asociarRegistroId}
-                        className="w-full bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs text-gray-900 dark:text-white"
-                        onChange={e => setAsociarRegistroId(e.target.value)}
-                        required
-                      >
-                        <option value="">Selecciona...</option>
-                        {invoiceType === 'gasto' ? (
-                          gastosPendientes.map(g => (
-                            <option key={g.id} value={g.id}>
-                              {g.concepto.substring(0, 18)}... - ${g.monto} ({new Date(g.fecha_gasto || '').toLocaleDateString()})
-                            </option>
-                          ))
-                        ) : (
-                          pedidosPendientes.map(p => (
-                            <option key={p.id} value={p.id}>
-                              Ped #{p.numero_pedido} - {(p.cliente_nombre || '').substring(0, 12)} - ${p.precio_total}
-                            </option>
-                          ))
-                        )}
-                      </select>
+                      <div className="flex bg-gray-100 dark:bg-gray-900 rounded-lg p-0.5 border border-gray-250 dark:border-gray-800 text-[10px]">
+                        <button
+                          type="button"
+                          onClick={() => setXmlStorageProvider('Supabase')}
+                          className={`px-2.5 py-1 rounded-md font-bold transition-all ${
+                            xmlStorageProvider === 'Supabase'
+                              ? 'bg-white dark:bg-gray-800 shadow-sm text-gray-900 dark:text-white'
+                              : 'text-gray-400'
+                          }`}
+                        >
+                          Subir Archivo
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setXmlStorageProvider('GoogleDrive')}
+                          className={`px-2.5 py-1 rounded-md font-bold transition-all ${
+                            xmlStorageProvider === 'GoogleDrive'
+                              ? 'bg-white dark:bg-gray-800 shadow-sm text-gray-900 dark:text-white'
+                              : 'text-gray-400'
+                          }`}
+                        >
+                          Enlace Drive
+                        </button>
+                      </div>
                     </div>
-                  )}
 
-                  {!asociarExistente && (
-                    <div className="text-[11px] text-gray-400 italic font-sans flex items-start gap-1">
-                      <CheckCircle size={12} className="text-emerald-500 mt-0.5 shrink-0" />
-                      <span>
-                        Se creará un nuevo registro y el sistema buscará un pago pendiente por el mismo monto para conciliar de forma automática.
-                      </span>
+                    {xmlStorageProvider === 'Supabase' ? (
+                      <div className="relative border border-dashed border-gray-300 dark:border-gray-700 rounded-xl p-4 text-center hover:bg-gray-55/40 dark:hover:bg-gray-900 transition-colors font-sans">
+                        <input
+                          type="file"
+                          accept=".xml"
+                          onChange={handleXmlChange}
+                          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                        />
+                        <FileCode className={`mx-auto h-8 w-8 mb-2 ${xmlFile ? 'text-blue-500' : 'text-gray-400'}`} />
+                        <p className="text-xs font-semibold text-gray-700 dark:text-gray-300">
+                          {xmlFile ? xmlFile.name : 'Seleccionar XML (.xml)'}
+                        </p>
+                        <p className="text-[10px] text-gray-400 mt-1">Obligatorio para lectura de metadatos</p>
+                      </div>
+                    ) : (
+                      <div className="space-y-2 font-sans">
+                        <div className="relative border border-dashed border-gray-300 dark:border-gray-700 rounded-xl p-4 text-center hover:bg-gray-55/40 dark:hover:bg-gray-900 transition-colors">
+                          <input
+                            type="file"
+                            accept=".xml"
+                            onChange={handleXmlChange}
+                            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                          />
+                          <FileCode className={`mx-auto h-8 w-8 mb-2 ${xmlFile ? 'text-blue-500' : 'text-gray-400'}`} />
+                          <p className="text-xs font-semibold text-gray-700 dark:text-gray-300">
+                            {xmlFile ? xmlFile.name : '1. Cargar XML local para análisis'}
+                          </p>
+                          <p className="text-[10px] text-gray-400 mt-1">Requerido para extraer metadatos</p>
+                        </div>
+                        <input
+                          type="text"
+                          placeholder="2. Pegar enlace de Google Drive del XML..."
+                          value={xmlUrlInput}
+                          onChange={(e) => setXmlUrlInput(e.target.value)}
+                          className="w-full bg-white dark:bg-gray-955 border border-gray-305 dark:border-gray-700 p-2 rounded-lg text-xs text-gray-900 dark:text-white focus:ring-1 focus:ring-amber-500 outline-none"
+                        />
+                      </div>
+                    )}
+                  </div>
+
+                  {/* PDF Input Container */}
+                  <div className="space-y-2.5">
+                    <div className="flex justify-between items-center">
+                      <label className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase">
+                        Representación PDF (Obligatorio)
+                      </label>
+                      <div className="flex bg-gray-100 dark:bg-gray-900 rounded-lg p-0.5 border border-gray-250 dark:border-gray-800 text-[10px]">
+                        <button
+                          type="button"
+                          onClick={() => setPdfStorageProvider('Supabase')}
+                          className={`px-2.5 py-1 rounded-md font-bold transition-all ${
+                            pdfStorageProvider === 'Supabase'
+                              ? 'bg-white dark:bg-gray-800 shadow-sm text-gray-900 dark:text-white'
+                              : 'text-gray-400'
+                          }`}
+                        >
+                          Subir Archivo
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setPdfStorageProvider('GoogleDrive')}
+                          className={`px-2.5 py-1 rounded-md font-bold transition-all ${
+                            pdfStorageProvider === 'GoogleDrive'
+                              ? 'bg-white dark:bg-gray-800 shadow-sm text-gray-900 dark:text-white'
+                              : 'text-gray-400'
+                          }`}
+                        >
+                          Enlace Drive
+                        </button>
+                      </div>
                     </div>
+
+                    {pdfStorageProvider === 'Supabase' ? (
+                      <div className="relative border border-dashed border-gray-300 dark:border-gray-700 rounded-xl p-4 text-center hover:bg-gray-55/40 dark:hover:bg-gray-900 transition-colors font-sans">
+                        <input
+                          type="file"
+                          accept=".pdf"
+                          onChange={handlePdfChange}
+                          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                        />
+                        <FileText className={`mx-auto h-8 w-8 mb-2 ${pdfFile ? 'text-red-500' : 'text-gray-400'}`} />
+                        <p className="text-xs font-semibold text-gray-700 dark:text-gray-300">
+                          {pdfFile ? pdfFile.name : 'Seleccionar Representación PDF (.pdf)'}
+                        </p>
+                        <p className="text-[10px] text-gray-400 mt-1">Obligatorio para almacenamiento</p>
+                      </div>
+                    ) : (
+                      <input
+                        type="text"
+                        placeholder="Pegar enlace de Google Drive de la Factura PDF..."
+                        value={pdfUrlInput}
+                        onChange={(e) => setPdfUrlInput(e.target.value)}
+                        className="w-full bg-white dark:bg-gray-955 border border-gray-305 dark:border-gray-700 p-2 rounded-lg text-xs text-gray-900 dark:text-white focus:ring-1 focus:ring-amber-500 outline-none font-sans"
+                      />
+                    )}
+                  </div>
+                </div>
+
+                {/* TICKET COMPROBANTE - OPCIONAL */}
+                <div className="space-y-2.5 pt-2 border-t border-gray-150 dark:border-gray-800">
+                  <div className="flex justify-between items-center">
+                    <label className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase">
+                      Ticket / Nota / Foto (Opcional)
+                    </label>
+                    <div className="flex bg-gray-100 dark:bg-gray-900 rounded-lg p-0.5 border border-gray-250 dark:border-gray-800 text-[10px]">
+                      <button
+                        type="button"
+                        onClick={() => setTicketStorageProvider('Supabase')}
+                        className={`px-2.5 py-1 rounded-md font-bold transition-all ${
+                          ticketStorageProvider === 'Supabase'
+                            ? 'bg-white dark:bg-gray-800 shadow-sm text-gray-900 dark:text-white'
+                            : 'text-gray-400'
+                        }`}
+                      >
+                        Subir Archivo
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setTicketStorageProvider('GoogleDrive')}
+                        className={`px-2.5 py-1 rounded-md font-bold transition-all ${
+                          ticketStorageProvider === 'GoogleDrive'
+                            ? 'bg-white dark:bg-gray-800 shadow-sm text-gray-900 dark:text-white'
+                            : 'text-gray-400'
+                        }`}
+                      >
+                        Enlace Drive
+                      </button>
+                    </div>
+                  </div>
+
+                  {ticketStorageProvider === 'Supabase' ? (
+                    <div className="relative border border-dashed border-gray-300 dark:border-gray-700 rounded-xl p-3.5 text-center hover:bg-gray-55/40 dark:hover:bg-gray-900 transition-colors">
+                      <input
+                        type="file"
+                        accept=".pdf,image/*"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) setTicketFile(file);
+                        }}
+                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                      />
+                      <CreditCard className={`mx-auto h-6 w-6 mb-1.5 ${ticketFile ? 'text-amber-500' : 'text-gray-400'}`} />
+                      <p className="text-xs font-semibold text-gray-700 dark:text-gray-300">
+                        {ticketFile ? ticketFile.name : 'Seleccionar Ticket (.pdf, imagen)'}
+                      </p>
+                      {ticketFile && (
+                        <button
+                          type="button"
+                          onClick={(e) => { e.preventDefault(); e.stopPropagation(); setTicketFile(null); }}
+                          className="mt-1 text-[10px] text-red-500 font-bold hover:underline relative z-10"
+                        >
+                          Quitar ticket
+                        </button>
+                      )}
+                    </div>
+                  ) : (
+                    <input
+                      type="text"
+                      placeholder="Pegar enlace de Google Drive del ticket..."
+                      value={ticketUrlInput}
+                      onChange={(e) => setTicketUrlInput(e.target.value)}
+                      className="w-full bg-white dark:bg-gray-955 border border-gray-305 dark:border-gray-700 p-2 rounded-lg text-xs text-gray-900 dark:text-white focus:ring-1 focus:ring-amber-500 outline-none"
+                    />
                   )}
                 </div>
-              )}
 
-              {/* BOTÓN DE SUBIDA */}
-              <button
-                type="submit"
-                disabled={isUploading || !xmlFile || !pdfFile || !!parseError}
-                className="w-full py-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-sm shadow-md disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2"
-              >
-                {isUploading ? (
-                  <>
-                    <RefreshCw className="w-4 h-4 animate-spin" /> Procesando...
-                  </>
-                ) : (
-                  <>
-                    <UploadCloud size={16} /> Subir y Conciliar Factura
-                  </>
+                {/* DATOS EXTRAÍDOS DEL XML (FRONTEND PREVIEW) */}
+                {parsedXmlData && (
+                  <div className="p-3.5 bg-gray-55/40 dark:bg-gray-900/60 rounded-xl border border-gray-100 dark:border-gray-800 text-xs space-y-2 font-mono">
+                    <div className="font-bold text-blue-500 font-sans border-b border-gray-200 dark:border-gray-800 pb-1 flex justify-between">
+                      <span>{parsedXmlData.isComplementoPago ? 'Complemento de Pago (REP)' : 'Resumen de Factura'}</span>
+                      <span>SAT 4.0</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-x-2 gap-y-1">
+                      <div>
+                        <span className="text-[10px] text-gray-400 uppercase">UUID</span>
+                        <p className="truncate font-semibold text-gray-800 dark:text-gray-200" title={parsedXmlData.uuid}>
+                          {parsedXmlData.uuid.substring(0, 18)}...
+                        </p>
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-gray-400 uppercase">Folio Fiscal</span>
+                        <p className="font-semibold text-gray-800 dark:text-gray-200">
+                          {parsedXmlData.serie || ''}{parsedXmlData.folio || 'S/F'}
+                        </p>
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-gray-400 uppercase">RFC Emisor</span>
+                        <p className="font-semibold text-gray-800 dark:text-gray-200">{parsedXmlData.emisorRfc}</p>
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-gray-400 uppercase">RFC Receptor</span>
+                        <p className="font-semibold text-gray-800 dark:text-gray-200">{parsedXmlData.receptorRfc}</p>
+                      </div>
+                      
+                      {parsedXmlData.isComplementoPago ? (
+                        <div className="col-span-2 bg-amber-500/10 border border-amber-500/30 text-amber-700 dark:text-amber-400 p-2.5 rounded-lg mt-1 font-sans">
+                          <span className="font-bold block uppercase mb-1 text-[9px] tracking-wider text-amber-600">
+                            Facturas PPD Relacionadas
+                          </span>
+                          {parsedXmlData.uuidsRelacionados && parsedXmlData.uuidsRelacionados.length > 0 ? (
+                            <ul className="list-disc pl-4 mt-0.5 font-mono text-[10px] space-y-0.5">
+                              {parsedXmlData.uuidsRelacionados.map((u: string) => (
+                                <li key={u} className="truncate" title={u}>{u}</li>
+                              ))}
+                            </ul>
+                          ) : (
+                            <span className="text-[10px] italic">Sin facturas relacionadas detectadas</span>
+                          )}
+                        </div>
+                      ) : (
+                        <>
+                          <div className="col-span-2 border-t border-dashed border-gray-200 dark:border-gray-800 pt-1.5 mt-1"></div>
+                          <div>
+                            <span className="text-[10px] text-gray-400 uppercase">Subtotal</span>
+                            <p className="font-bold text-gray-800 dark:text-gray-200">{formatCurrency(parsedXmlData.subtotal)}</p>
+                          </div>
+                          <div>
+                            <span className="text-[10px] text-gray-400 uppercase">IVA (002)</span>
+                            <p className="font-bold text-gray-800 dark:text-gray-200">{formatCurrency(parsedXmlData.iva)}</p>
+                          </div>
+                        </>
+                      )}
+
+                      <div className="col-span-2 border-t border-dashed border-gray-200 dark:border-gray-800 pt-1.5 mt-1 font-sans">
+                        <span className="text-[10px] text-gray-400 uppercase block font-sans">
+                          {parsedXmlData.isComplementoPago ? 'Monto del Pago' : 'Total XML'}
+                        </span>
+                        <p className="text-base font-extrabold text-blue-500">{formatCurrency(parsedXmlData.total)}</p>
+                      </div>
+                    </div>
+                  </div>
                 )}
-              </button>
-            </form>
-          </div>
+
+                {/* PARSE ERROR INDICATOR */}
+                {parseError && (
+                  <div className="p-3 bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-400 rounded-xl border border-red-200 dark:border-red-900/50 text-xs flex items-start gap-2">
+                    <AlertTriangle size={15} className="shrink-0 mt-0.5" />
+                    <p>{parseError}</p>
+                  </div>
+                )}
+
+                {/* SECTOR DE CONCILIACIÓN / ASOCIACIÓN */}
+                {parsedXmlData && (
+                  <div className="p-4 bg-gray-55/40 dark:bg-gray-900/40 rounded-xl border border-gray-200 dark:border-gray-800 space-y-3 font-sans">
+                    <div className="flex justify-between items-center">
+                      <label className="text-xs font-bold text-gray-500 uppercase">¿Asociar a existente?</label>
+                      <input
+                        type="checkbox"
+                        checked={asociarExistente}
+                        className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 bg-white dark:bg-gray-950"
+                        onChange={e => { setAsociarExistente(e.target.checked); setAsociarRegistroId(''); }}
+                      />
+                    </div>
+
+                    {asociarExistente && (
+                      <div className="space-y-1.5 animate-in slide-in-from-top-1.5 duration-200">
+                        <label className="text-[11px] font-semibold text-gray-500">
+                          {invoiceType === 'gasto' ? 'Gasto Pendiente de Facturar' : 'Pedido de Venta Pendiente'}
+                        </label>
+                        <select
+                          value={asociarRegistroId}
+                          className="w-full bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs text-gray-900 dark:text-white"
+                          onChange={e => setAsociarRegistroId(e.target.value)}
+                          required
+                        >
+                          <option value="">Selecciona...</option>
+                          {invoiceType === 'gasto' ? (
+                            gastosPendientes.map(g => (
+                              <option key={g.id} value={g.id}>
+                                {g.concepto.substring(0, 18)}... - ${g.monto} ({new Date(g.fecha_gasto || '').toLocaleDateString()})
+                              </option>
+                            ))
+                          ) : (
+                            pedidosPendientes.map(p => (
+                              <option key={p.id} value={p.id}>
+                                Ped #{p.numero_pedido} - {(p.cliente_nombre || '').substring(0, 12)} - ${p.precio_total}
+                              </option>
+                            ))
+                          )}
+                        </select>
+                      </div>
+                    )}
+
+                    {!asociarExistente && (
+                      <div className="text-[11px] text-gray-400 italic font-sans flex items-start gap-1">
+                        <CheckCircle size={12} className="text-emerald-500 mt-0.5 shrink-0" />
+                        <span>
+                          Se creará un nuevo registro y el sistema buscará un pago pendiente por el mismo monto para conciliar de forma automática.
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* BOTÓN DE SUBIDA */}
+                <button
+                  type="submit"
+                  disabled={isUploading || !xmlFile || !pdfFile || !!parseError}
+                  className="w-full py-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-sm shadow-md disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2"
+                >
+                  {isUploading ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" /> Procesando...
+                    </>
+                  ) : (
+                    <>
+                      <UploadCloud size={16} /> Subir y Conciliar Factura
+                    </>
+                  )}
+                </button>
+              </form>
+            </div>
+          )}
 
           {/* COLUMNA DERECHA: PESTAÑAS DE VISUALIZACIÓN */}
-          <div className="lg:col-span-2 bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-2xl shadow-xl flex flex-col overflow-hidden h-full">
+          <div className={`${(activeTab === 'banco' || activeTab === 'proveedores') ? 'lg:col-span-3' : 'lg:col-span-2'} bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-2xl shadow-xl flex flex-col overflow-hidden h-full`}>
 
             {/* PESTAÑAS */}
             <div className="flex border-b border-gray-200 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-900/30">
@@ -867,7 +1836,7 @@ export default function AdvancedBillingModule() {
                     : 'border-transparent text-gray-400 hover:text-gray-900 dark:hover:text-white'
                   }`}
               >
-                <DollarSign size={16} /> Egresos Facturados (Gastos)
+                <DollarSign size={16} /> Egresos (Gastos)
               </button>
               <button
                 onClick={() => setActiveTab('ingresos')}
@@ -876,7 +1845,25 @@ export default function AdvancedBillingModule() {
                     : 'border-transparent text-gray-400 hover:text-gray-900 dark:hover:text-white'
                   }`}
               >
-                <Layers size={16} /> Ingresos Facturados (Ventas)
+                <Layers size={16} /> Ingresos (Ventas)
+              </button>
+              <button
+                onClick={() => setActiveTab('banco')}
+                className={`flex-1 py-4 text-sm font-bold border-b-2 transition-all flex items-center justify-center gap-2 ${activeTab === 'banco'
+                    ? 'border-amber-500 text-amber-500'
+                    : 'border-transparent text-gray-400 hover:text-gray-900 dark:hover:text-white'
+                  }`}
+              >
+                <CreditCard size={16} /> Conciliación Bancaria
+              </button>
+              <button
+                onClick={() => setActiveTab('proveedores')}
+                className={`flex-1 py-4 text-sm font-bold border-b-2 transition-all flex items-center justify-center gap-2 ${activeTab === 'proveedores'
+                    ? 'border-indigo-500 text-indigo-500'
+                    : 'border-transparent text-gray-400 hover:text-gray-900 dark:hover:text-white'
+                  }`}
+              >
+                <Users size={16} /> Proveedores
               </button>
             </div>
 
@@ -934,28 +1921,41 @@ export default function AdvancedBillingModule() {
                           <div className="font-bold text-red-500">-{formatCurrency(g.monto)}</div>
                           <div className="text-[10px] text-gray-400">IVA: {formatCurrency(g.iva_acreditable || 0)}</div>
                         </td>
-                        <td className="p-4 text-center">
-                          <div className="flex gap-1 justify-center">
-                            {g.xml_url && (
+                          <div className="flex gap-1 justify-center flex-wrap">
+                            {g.xml_url && g.xml_url.split(',').filter(Boolean).map((url, idx, arr) => (
                               <button
-                                onClick={() => handleDownloadFile(g.xml_url || '')}
-                                className="p-1.5 bg-blue-50 dark:bg-blue-900/20 hover:bg-blue-100 dark:hover:bg-blue-900/40 rounded border border-blue-200 dark:border-blue-900/50 text-blue-500"
-                                title="Descargar XML"
+                                key={idx}
+                                onClick={() => handleDownloadFile(url)}
+                                className="p-1.5 bg-blue-50 dark:bg-blue-900/20 hover:bg-blue-100 dark:hover:bg-blue-900/40 rounded border border-blue-200 dark:border-blue-900/50 text-blue-500 flex items-center gap-0.5"
+                                title={`Descargar XML ${idx + 1}`}
                               >
                                 <FileCode size={14} />
+                                {arr.length > 1 && <span className="text-[9px] font-bold font-mono">{idx + 1}</span>}
                               </button>
-                            )}
-                            {g.pdf_url && (
+                            ))}
+                            {g.pdf_url && g.pdf_url.split(',').filter(Boolean).map((url, idx, arr) => (
                               <button
-                                onClick={() => handleDownloadFile(g.pdf_url || '')}
-                                className="p-1.5 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/40 rounded border border-red-200 dark:border-red-900/50 text-red-500"
-                                title="Descargar PDF"
+                                key={idx}
+                                onClick={() => handleDownloadFile(url)}
+                                className="p-1.5 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/40 rounded border border-red-200 dark:border-red-900/50 text-red-500 flex items-center gap-0.5"
+                                title={`Descargar PDF ${idx + 1}`}
                               >
                                 <FileText size={14} />
+                                {arr.length > 1 && <span className="text-[9px] font-bold font-mono">{idx + 1}</span>}
                               </button>
-                            )}
+                            ))}
+                            {g.ticket_url && g.ticket_url.split(',').filter(Boolean).map((url, idx, arr) => (
+                              <button
+                                key={idx}
+                                onClick={() => handleDownloadFile(url)}
+                                className="p-1.5 bg-amber-50 dark:bg-amber-900/20 hover:bg-amber-100 dark:hover:bg-amber-900/40 rounded border border-amber-200 dark:border-amber-900/50 text-amber-500 flex items-center gap-0.5"
+                                title={`Descargar Ticket ${idx + 1}`}
+                              >
+                                <CreditCard size={14} />
+                                {arr.length > 1 && <span className="text-[9px] font-bold font-mono">{idx + 1}</span>}
+                              </button>
+                            ))}
                           </div>
-                        </td>
                       </tr>
                     ))}
                     {gastosFacturados.length === 0 && (
@@ -1004,25 +2004,42 @@ export default function AdvancedBillingModule() {
                         const invoice = (v.facturas_clientes && v.facturas_clientes.length > 0) ? v.facturas_clientes[0] : null;
                         const clientName = v.clientes?.nombre_local || v.cliente_nombre || 'Cliente Ocasional';
                         const clientRfc = v.clientes?.rfc || 'S/N';
-                        const totalAmount = invoice ? (invoice.total || 0) : v.precio_total;
-                        const ivaAmount = invoice ? (invoice.iva_trasladado || 0) : (Number(v.precio_total) * 0.16);
-                        const fechaDisplay = invoice?.fecha_emision || v.fecha_pedido;
-
+                        const totalAmount = (v.facturas_clientes && v.facturas_clientes.length > 0)
+                          ? v.facturas_clientes.reduce((acc, f) => acc + (f.total || 0), 0)
+                          : v.precio_total;
+                        const ivaAmount = (v.facturas_clientes && v.facturas_clientes.length > 0)
+                          ? v.facturas_clientes.reduce((acc, f) => acc + (f.iva_trasladado || 0), 0)
+                          : (Number(v.precio_total) * 0.16);
+                        
                         return (
                           <tr key={v.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/20 transition-colors">
                             <td className="p-4 font-mono text-gray-600 dark:text-gray-400">
-                              {fechaDisplay ? new Date(fechaDisplay).toLocaleDateString() : 'N/A'}
+                              {v.facturas_clientes && v.facturas_clientes.length > 0 ? (
+                                <div className="space-y-1">
+                                  {v.facturas_clientes.map((invoice, idx) => (
+                                    <div key={idx}>
+                                      {invoice.fecha_emision ? new Date(invoice.fecha_emision).toLocaleDateString() : 'N/A'}
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                v.fecha_pedido ? new Date(v.fecha_pedido).toLocaleDateString() : 'N/A'
+                              )}
                             </td>
                             <td className="p-4 font-mono">
-                              {invoice ? (
-                                <>
-                                  <div className="text-gray-800 dark:text-gray-200 font-bold" title={invoice.uuid_fiscal}>
-                                    {(invoice.uuid_fiscal || '').substring(0, 18)}...
-                                  </div>
-                                  <div className="text-[10px] text-gray-400">
-                                    Folio: {invoice.serie_folio || 'S/N'} | Pedido #{v.numero_pedido}
-                                  </div>
-                                </>
+                              {v.facturas_clientes && v.facturas_clientes.length > 0 ? (
+                                <div className="space-y-2">
+                                  {v.facturas_clientes.map((invoice, idx) => (
+                                    <div key={idx} className="border-b border-gray-100 dark:border-gray-800/40 last:border-0 pb-1 last:pb-0">
+                                      <div className="text-gray-800 dark:text-gray-200 font-bold" title={invoice.uuid_fiscal}>
+                                        {(invoice.uuid_fiscal || '').substring(0, 18)}...
+                                      </div>
+                                      <div className="text-[10px] text-gray-400">
+                                        Folio: {invoice.serie_folio || 'S/N'} | Pedido #{v.numero_pedido}
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
                               ) : (
                                 <div className="space-y-1">
                                   <div>
@@ -1051,26 +2068,48 @@ export default function AdvancedBillingModule() {
                               <div className="text-[10px] text-gray-400">IVA: {formatCurrency(ivaAmount)}</div>
                             </td>
                             <td className="p-4 text-center">
-                              {invoice ? (
-                                <div className="flex gap-1 justify-center">
-                                  {invoice.xml_url && (
-                                    <button
-                                      onClick={() => handleDownloadFile(invoice.xml_url || '')}
-                                      className="p-1.5 bg-blue-50 dark:bg-blue-900/20 hover:bg-blue-100 dark:hover:bg-blue-900/40 rounded border border-blue-200 dark:border-blue-900/50 text-blue-500"
-                                      title="Descargar XML"
-                                    >
-                                      <FileCode size={14} />
-                                    </button>
-                                  )}
-                                  {invoice.pdf_url && (
-                                    <button
-                                      onClick={() => handleDownloadFile(invoice.pdf_url || '')}
-                                      className="p-1.5 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/40 rounded border border-red-200 dark:border-red-900/50 text-red-500"
-                                      title="Descargar PDF"
-                                    >
-                                      <FileText size={14} />
-                                    </button>
-                                  )}
+                              {v.facturas_clientes && v.facturas_clientes.length > 0 ? (
+                                <div className="space-y-2">
+                                  {v.facturas_clientes.map((invoice, idx) => (
+                                    <div key={idx} className="flex gap-1 justify-center items-center flex-wrap">
+                                      {v.facturas_clientes!.length > 1 && (
+                                        <span className="text-[9px] font-extrabold text-gray-400 mr-1">Doc #{idx + 1}:</span>
+                                      )}
+                                      {invoice.xml_url && invoice.xml_url.split(',').filter(Boolean).map((url, subIdx, subArr) => (
+                                        <button
+                                          key={subIdx}
+                                          onClick={() => handleDownloadFile(url)}
+                                          className="p-1.5 bg-blue-50 dark:bg-blue-900/20 hover:bg-blue-100 dark:hover:bg-blue-900/40 rounded border border-blue-200 dark:border-blue-900/50 text-blue-500 flex items-center gap-0.5"
+                                          title={`Descargar XML ${subIdx + 1}`}
+                                        >
+                                          <FileCode size={14} />
+                                          {subArr.length > 1 && <span className="text-[8px] font-bold font-mono">{subIdx + 1}</span>}
+                                        </button>
+                                      ))}
+                                      {invoice.pdf_url && invoice.pdf_url.split(',').filter(Boolean).map((url, subIdx, subArr) => (
+                                        <button
+                                          key={subIdx}
+                                          onClick={() => handleDownloadFile(url)}
+                                          className="p-1.5 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/40 rounded border border-red-200 dark:border-red-900/50 text-red-500 flex items-center gap-0.5"
+                                          title={`Descargar PDF ${subIdx + 1}`}
+                                        >
+                                          <FileText size={14} />
+                                          {subArr.length > 1 && <span className="text-[8px] font-bold font-mono">{subIdx + 1}</span>}
+                                        </button>
+                                      ))}
+                                      {invoice.ticket_url && invoice.ticket_url.split(',').filter(Boolean).map((url, subIdx, subArr) => (
+                                        <button
+                                          key={subIdx}
+                                          onClick={() => handleDownloadFile(url)}
+                                          className="p-1.5 bg-amber-50 dark:bg-amber-900/20 hover:bg-amber-100 dark:hover:bg-amber-900/40 rounded border border-amber-200 dark:border-amber-900/50 text-amber-500 flex items-center gap-0.5"
+                                          title={`Descargar Ticket ${subIdx + 1}`}
+                                        >
+                                          <CreditCard size={14} />
+                                          {subArr.length > 1 && <span className="text-[8px] font-bold font-mono">{subIdx + 1}</span>}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  ))}
                                 </div>
                               ) : (
                                 <span className="text-gray-400 italic">No disponible</span>
@@ -1104,11 +2143,2335 @@ export default function AdvancedBillingModule() {
               </div>
             )}
 
+            {/* CONTENIDO TAB 3: CONCILIACIÓN BANCARIA */}
+            {activeTab === 'banco' && (
+              <div className="flex flex-col flex-1 font-sans overflow-hidden">
+                {/* SUB-PESTAÑAS BANCO */}
+                <div className="flex border-b border-gray-200 dark:border-gray-800 bg-gray-50/20 dark:bg-gray-900/10 p-2 gap-2 shrink-0">
+                  <button
+                    onClick={() => setBancoSubTab('movimientos')}
+                    className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                      bancoSubTab === 'movimientos'
+                        ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30'
+                        : 'text-gray-400 hover:text-gray-700 dark:hover:text-white'
+                    }`}
+                  >
+                    <List size={14} /> Movimientos de Cuenta
+                  </button>
+                  <button
+                    onClick={() => {
+                      setBancoSubTab('global');
+                      setSelectedGlobalDepositId(null);
+                      setSelectedGlobalPedidosIds([]);
+                    }}
+                    className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                      bancoSubTab === 'global'
+                        ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30'
+                        : 'text-gray-400 hover:text-gray-700 dark:hover:text-white'
+                    }`}
+                  >
+                    <Scale size={14} /> Facturación Global (Ingresos)
+                  </button>
+                  <button
+                    onClick={() => setBancoSubTab('catalogo')}
+                    className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                      bancoSubTab === 'catalogo'
+                        ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30'
+                        : 'text-gray-400 hover:text-gray-700 dark:hover:text-white'
+                    }`}
+                  >
+                    <Settings size={14} /> Catálogo de Estatus
+                  </button>
+                  <button
+                    onClick={() => setBancoSubTab('formas_pago')}
+                    className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                      bancoSubTab === 'formas_pago'
+                        ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30'
+                        : 'text-gray-400 hover:text-gray-700 dark:hover:text-white'
+                    }`}
+                  >
+                    <CreditCard size={14} /> Métodos de Pago
+                  </button>
+                </div>
+
+                {/* CONTENIDO INTERNO SUB-PESTAÑAS */}
+                <div className="flex-1 overflow-hidden flex flex-col min-h-0">
+                  {/* SUB-TAB 1: LISTA DE MOVIMIENTOS BANCARIOS */}
+                  {bancoSubTab === 'movimientos' && (
+                    <div className="flex-1 flex flex-col md:flex-row gap-6 p-4 overflow-hidden min-h-0">
+                      {/* ACCIONES E INGESTA (LADO IZQUIERDO) */}
+                      <div className="w-full md:w-80 flex flex-col gap-4 shrink-0 overflow-y-auto pr-1">
+                        {/* BOX CARGA DE EXCEL */}
+                        <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4 space-y-3 shadow-sm">
+                          <h4 className="text-xs font-extrabold uppercase tracking-wide text-gray-500">
+                            Cargar Estado de Cuenta
+                          </h4>
+                          <div className="relative border border-dashed border-gray-300 dark:border-gray-700 rounded-xl p-4 text-center hover:bg-gray-50 dark:hover:bg-gray-900/60 transition-all cursor-pointer">
+                            <input
+                              type="file"
+                              accept=".xlsx, .xls, .csv"
+                              onChange={handleExcelUpload}
+                              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                            />
+                            <FileSpreadsheet className="mx-auto h-8 w-8 text-amber-500 mb-2" />
+                            <p className="text-xs font-semibold">
+                              {excelFile ? excelFile.name : 'Subir Excel / CSV'}
+                            </p>
+                            <p className="text-[10px] text-gray-400 mt-1">Formatos .xlsx, .xls o .csv</p>
+                          </div>
+                        </div>
+
+                        {/* BOX CONCILIACIÓN AUTOMÁTICA */}
+                        <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4 space-y-3 shadow-sm">
+                          <h4 className="text-xs font-extrabold uppercase tracking-wide text-gray-500">
+                            Acciones Inteligentes
+                          </h4>
+                          <button
+                            onClick={handleAutoReconcile}
+                            disabled={isUploading}
+                            className="w-full py-2.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-md transition-all flex items-center justify-center gap-1.5"
+                          >
+                            {isUploading ? (
+                              <RefreshCw size={14} className="animate-spin" />
+                            ) : (
+                              <Play size={14} />
+                            )}
+                            Conciliación Inteligente
+                          </button>
+                          <p className="text-[10px] text-gray-400 italic">
+                            Cruza automáticamente por Monto, RFC y proximidad de fecha. Aprueba transacciones en efectivo sin requerir factura.
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* DATATABLE DE MOVIMIENTOS */}
+                      <div className="flex-1 flex flex-col min-h-0 bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden shadow-sm">
+                        {/* FILTROS */}
+                        <div className="p-3 bg-gray-50/50 dark:bg-gray-900/40 border-b border-gray-200 dark:border-gray-800 flex flex-wrap gap-2.5 items-center shrink-0">
+                          <input
+                            type="text"
+                            placeholder="Buscar concepto, ref, rfc..."
+                            value={busquedaBanco}
+                            onChange={(e) => {
+                              setBusquedaBanco(e.target.value);
+                              setBancoPage(0);
+                            }}
+                            className="flex-1 min-w-[150px] bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 px-3 py-1.5 rounded-lg text-xs outline-none focus:ring-1 focus:ring-amber-500 focus:border-amber-500 transition-all font-mono"
+                          />
+                          <select
+                            value={filtroBancoTipo}
+                            onChange={(e) => {
+                              setFiltroBancoTipo(e.target.value);
+                              setBancoPage(0);
+                            }}
+                            className="bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 px-2 py-1.5 rounded-lg text-xs outline-none focus:ring-1 focus:ring-amber-500 transition-all"
+                          >
+                            <option value="">Todos los tipos</option>
+                            <option value="Deposito">Depósitos (+)</option>
+                            <option value="Retiro">Retiros (-)</option>
+                          </select>
+                          <select
+                            value={filtroBancoEstatus}
+                            onChange={(e) => {
+                              setFiltroBancoEstatus(e.target.value);
+                              setBancoPage(0);
+                            }}
+                            className="bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 px-2 py-1.5 rounded-lg text-xs outline-none focus:ring-1 focus:ring-amber-500 transition-all"
+                          >
+                            <option value="">Todos los estatus</option>
+                            {estatusCatalog.map((e) => (
+                              <option key={e.id} value={e.clave}>
+                                {e.nombre}
+                              </option>
+                            ))}
+                          </select>
+                          <select
+                            value={filtroBancoVisibilidad}
+                            onChange={(e) => {
+                              setFiltroBancoVisibilidad(e.target.value);
+                              setBancoPage(0);
+                            }}
+                            className="bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 px-2 py-1.5 rounded-lg text-xs outline-none focus:ring-1 focus:ring-amber-500 transition-all"
+                          >
+                            <option value="todos">Toda visibilidad</option>
+                            <option value="visibles_egresos">Ver en Egresos</option>
+                            <option value="visibles_ingresos">Ver en Ingresos</option>
+                            <option value="ocultos">Ocultos en ERP</option>
+                          </select>
+                        </div>
+
+                        {/* TABLA */}
+                        <div className="flex-1 overflow-auto">
+                          <table className="w-full text-left border-collapse text-xs min-w-[800px]">
+                            <thead>
+                              <tr className="bg-gray-50 dark:bg-gray-900/50 border-b border-gray-200 dark:border-gray-800 text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+                                <th className="p-3 w-24">Fecha</th>
+                                <th className="p-3">Detalle / Concepto</th>
+                                <th className="p-3 text-right w-28">Monto</th>
+                                <th className="p-3 text-center w-36">Estatus</th>
+                                <th className="p-3 text-center w-28">ERP Egreso/Ingreso</th>
+                                <th className="p-3 text-center w-24">Archivos</th>
+                                <th className="p-3 text-center w-20">Acción</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-150 dark:divide-gray-800/60 font-sans">
+                              {(() => {
+                                const filtered = movimientos.filter((m) => {
+                                  if (busquedaBanco.trim()) {
+                                    const b = busquedaBanco.toLowerCase();
+                                    const matchesConcepto = m.concepto?.toLowerCase().includes(b);
+                                    const matchesReferencia = m.referencia?.toLowerCase().includes(b);
+                                    const matchesMonto = String(m.monto).includes(b);
+                                    const matchesRfc = m.rfc_proveedor?.toLowerCase().includes(b);
+                                    if (!matchesConcepto && !matchesReferencia && !matchesMonto && !matchesRfc)
+                                      return false;
+                                  }
+                                  if (filtroBancoTipo && m.tipo_movimiento !== filtroBancoTipo) return false;
+                                  if (filtroBancoEstatus && m.estatus_conciliacion_bancaria?.clave !== filtroBancoEstatus)
+                                    return false;
+                                  if (filtroBancoVisibilidad === 'visibles_egresos' && !m.visible_egresos)
+                                    return false;
+                                  if (filtroBancoVisibilidad === 'visibles_ingresos' && !m.visible_ingresos)
+                                    return false;
+                                  if (filtroBancoVisibilidad === 'ocultos' && (m.visible_egresos || m.visible_ingresos))
+                                    return false;
+                                  return true;
+                                });
+
+                                const paginated = filtered.slice(
+                                  bancoPage * bancoPageSize,
+                                  (bancoPage + 1) * bancoPageSize
+                                );
+
+                                if (paginated.length === 0) {
+                                  return (
+                                    <tr>
+                                      <td colSpan={7} className="p-8 text-center text-gray-400 italic">
+                                        No se encontraron movimientos bancarios
+                                      </td>
+                                    </tr>
+                                  );
+                                }
+
+                                return paginated.map((m) => {
+                                  const color = m.estatus_conciliacion_bancaria?.color || '#9CA3AF';
+                                  const dateStr = new Date(m.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' });
+                                  const isRetiro = m.tipo_movimiento === 'Retiro';
+
+                                  return (
+                                    <tr
+                                      key={m.id}
+                                      className="hover:bg-gray-50 dark:hover:bg-gray-900/10 transition-colors"
+                                    >
+                                      <td className="p-3 font-mono text-gray-500">{dateStr}</td>
+                                      <td className="p-3">
+                                        <div className="font-bold text-gray-800 dark:text-gray-150">
+                                          {m.concepto}
+                                        </div>
+                                        <div className="text-[10px] text-gray-400 flex items-center gap-1.5">
+                                          {m.referencia && <span>Ref: {m.referencia}</span>}
+                                          {m.rfc_proveedor && (
+                                            <span className="font-mono text-[9px] bg-gray-100 dark:bg-gray-800 px-1 py-0.5 rounded text-gray-500">
+                                              RFC: {m.rfc_proveedor}
+                                            </span>
+                                          )}
+                                        </div>
+                                      </td>
+                                      <td className="p-3 text-right font-mono font-bold">
+                                        {isRetiro ? (
+                                          <span className="text-red-500">-{formatCurrency(m.retiro)}</span>
+                                        ) : (
+                                          <span className="text-emerald-500">+{formatCurrency(m.deposito)}</span>
+                                        )}
+                                      </td>
+                                      <td className="p-3 text-center">
+                                        <span
+                                          className="px-2 py-0.5 rounded-full text-[9px] font-bold border"
+                                          style={{
+                                            backgroundColor: `${color}15`,
+                                            borderColor: `${color}40`,
+                                            color: color
+                                          }}
+                                        >
+                                          {m.estatus_conciliacion_bancaria?.nombre || 'Pendiente'}
+                                        </span>
+                                      </td>
+                                      <td className="p-3 text-center">
+                                        {isRetiro ? (
+                                          <label className="inline-flex items-center gap-1 cursor-pointer">
+                                            <input
+                                              type="checkbox"
+                                              checked={m.visible_egresos}
+                                              onChange={() =>
+                                                handleToggleVisibility(m.id, 'egresos', !m.visible_egresos)
+                                              }
+                                              className="w-3.5 h-3.5 rounded text-amber-500 border-gray-300 focus:ring-amber-500 bg-white dark:bg-gray-950"
+                                            />
+                                            <span className="text-[10px] text-gray-500">En Egresos</span>
+                                          </label>
+                                        ) : (
+                                          <label className="inline-flex items-center gap-1 cursor-pointer">
+                                            <input
+                                              type="checkbox"
+                                              checked={m.visible_ingresos}
+                                              onChange={() =>
+                                                handleToggleVisibility(m.id, 'ingresos', !m.visible_ingresos)
+                                              }
+                                              className="w-3.5 h-3.5 rounded text-amber-500 border-gray-300 focus:ring-amber-500 bg-white dark:bg-gray-950"
+                                            />
+                                            <span className="text-[10px] text-gray-500">En Ingresos</span>
+                                          </label>
+                                        )}
+                                      </td>
+                                      <td className="p-3 text-center">
+                                        <div className="flex gap-1 justify-center flex-wrap max-w-[150px] mx-auto">
+                                          {/* XML files */}
+                                          {m.xml_url ? (
+                                            m.xml_url.split(',').filter(Boolean).map((url: string, idx: number, arr: string[]) => (
+                                              <button
+                                                key={idx}
+                                                onClick={() => handleDownloadFile(url)}
+                                                className="p-1 rounded text-[10px] text-blue-500 hover:bg-blue-500/10 flex items-center gap-0.5"
+                                                title={`XML Factura ${idx + 1}`}
+                                              >
+                                                <FileCode size={13} />
+                                                {arr.length > 1 && <span className="text-[8px] font-bold font-mono">{idx + 1}</span>}
+                                              </button>
+                                            ))
+                                          ) : (
+                                            <button
+                                              disabled
+                                              className="p-1 rounded text-[10px] text-gray-300 dark:text-gray-750 cursor-not-allowed"
+                                              title="Sin XML"
+                                            >
+                                              <FileCode size={13} />
+                                            </button>
+                                          )}
+
+                                          {/* PDF Factura files */}
+                                          {m.pdf_factura_url ? (
+                                            m.pdf_factura_url.split(',').filter(Boolean).map((url: string, idx: number, arr: string[]) => (
+                                              <button
+                                                key={idx}
+                                                onClick={() => handleDownloadFile(url)}
+                                                className="p-1 rounded text-[10px] text-red-500 hover:bg-red-500/10 flex items-center gap-0.5"
+                                                title={`PDF Factura ${idx + 1}`}
+                                              >
+                                                <FileText size={13} />
+                                                {arr.length > 1 && <span className="text-[8px] font-bold font-mono">{idx + 1}</span>}
+                                              </button>
+                                            ))
+                                          ) : (
+                                            <button
+                                              disabled
+                                              className="p-1 rounded text-[10px] text-gray-300 dark:text-gray-750 cursor-not-allowed"
+                                              title="Sin PDF Factura"
+                                            >
+                                              <FileText size={13} />
+                                            </button>
+                                          )}
+
+                                          {/* PDF Ticket files */}
+                                          {m.pdf_ticket_url ? (
+                                            m.pdf_ticket_url.split(',').filter(Boolean).map((url: string, idx: number, arr: string[]) => (
+                                              <button
+                                                key={idx}
+                                                onClick={() => handleDownloadFile(url)}
+                                                className="p-1 rounded text-[10px] text-amber-500 hover:bg-amber-500/10 flex items-center gap-0.5"
+                                                title={`PDF Ticket ${idx + 1}`}
+                                              >
+                                                <CreditCard size={13} />
+                                                {arr.length > 1 && <span className="text-[8px] font-bold font-mono">{idx + 1}</span>}
+                                              </button>
+                                            ))
+                                          ) : (
+                                            <button
+                                              disabled
+                                              className="p-1 rounded text-[10px] text-gray-300 dark:text-gray-750 cursor-not-allowed"
+                                              title="Sin Ticket"
+                                            >
+                                              <CreditCard size={13} />
+                                            </button>
+                                          )}
+                                        </div>
+                                      </td>
+                                      <td className="p-3 text-center">
+                                        <button
+                                          onClick={() => handleOpenReconcileModal(m)}
+                                          className="p-1 rounded text-amber-500 hover:bg-amber-500/15"
+                                          title="Conciliación Manual"
+                                        >
+                                          <ArrowRightLeft size={13} />
+                                        </button>
+                                      </td>
+                                    </tr>
+                                  );
+                                });
+                              })()}
+                            </tbody>
+                          </table>
+                        </div>
+
+                        {/* PAGINACIÓN */}
+                        {(() => {
+                          const filteredCount = movimientos.filter((m) => {
+                            if (busquedaBanco.trim()) {
+                              const b = busquedaBanco.toLowerCase();
+                              const matchesConcepto = m.concepto?.toLowerCase().includes(b);
+                              const matchesReferencia = m.referencia?.toLowerCase().includes(b);
+                              const matchesMonto = String(m.monto).includes(b);
+                              const matchesRfc = m.rfc_proveedor?.toLowerCase().includes(b);
+                              if (!matchesConcepto && !matchesReferencia && !matchesMonto && !matchesRfc)
+                                return false;
+                            }
+                            if (filtroBancoTipo && m.tipo_movimiento !== filtroBancoTipo) return false;
+                            if (filtroBancoEstatus && m.estatus_conciliacion_bancaria?.clave !== filtroBancoEstatus)
+                              return false;
+                            if (filtroBancoVisibilidad === 'visibles_egresos' && !m.visible_egresos)
+                              return false;
+                            if (filtroBancoVisibilidad === 'visibles_ingresos' && !m.visible_ingresos)
+                              return false;
+                            if (filtroBancoVisibilidad === 'ocultos' && (m.visible_egresos || m.visible_ingresos))
+                              return false;
+                            return true;
+                          }).length;
+
+                          const totalPages = Math.ceil(filteredCount / bancoPageSize);
+
+                          return (
+                            <div className="p-3 bg-gray-55/50 dark:bg-gray-900/40 border-t border-gray-200 dark:border-gray-800 flex justify-between items-center text-xs shrink-0 select-none">
+                              <span className="text-gray-500">
+                                Mostrando {bancoPage * bancoPageSize + 1} -{' '}
+                                {Math.min((bancoPage + 1) * bancoPageSize, filteredCount)} de {filteredCount}{' '}
+                                movimientos
+                              </span>
+                              <div className="flex gap-1">
+                                <button
+                                  disabled={bancoPage === 0}
+                                  onClick={() => setBancoPage((p) => p - 1)}
+                                  className="px-2.5 py-1 rounded bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 disabled:opacity-50 hover:bg-gray-100 dark:hover:bg-gray-900 transition-all font-semibold"
+                                >
+                                  Anterior
+                                </button>
+                                <button
+                                  disabled={bancoPage >= totalPages - 1}
+                                  onClick={() => setBancoPage((p) => p + 1)}
+                                  className="px-2.5 py-1 rounded bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 disabled:opacity-50 hover:bg-gray-100 dark:hover:bg-gray-900 transition-all font-semibold"
+                                >
+                                  Siguiente
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })()}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* SUB-TAB 2: FACTURACIÓN GLOBAL */}
+                  {bancoSubTab === 'global' && (
+                    <div className="flex-1 flex flex-col p-4 overflow-hidden min-h-0">
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 flex-1 min-h-0 overflow-hidden">
+                        {/* COLUMNA IZQUIERDA: DEPÓSITOS BANCARIOS */}
+                        <div className="flex flex-col min-h-0 bg-white dark:bg-gray-955 border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden shadow-sm">
+                          <div className="p-3 bg-gray-55/50 dark:bg-gray-900/40 border-b border-gray-200 dark:border-gray-800 shrink-0">
+                            <h4 className="text-xs font-extrabold uppercase text-amber-500 flex items-center gap-1.5">
+                              <CreditCard size={14} /> 1. Selecciona un Depósito Bancario
+                            </h4>
+                          </div>
+
+                          <div className="flex-1 overflow-auto">
+                            <table className="w-full text-left border-collapse text-xs">
+                              <thead>
+                                <tr className="bg-gray-50 dark:bg-gray-900/50 border-b border-gray-200 dark:border-gray-800 text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+                                  <th className="p-3 w-12 text-center"></th>
+                                  <th className="p-3">Fecha</th>
+                                  <th className="p-3">Concepto</th>
+                                  <th className="p-3 text-right">Depósito</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-gray-150 dark:divide-gray-800/60 font-sans">
+                                {movimientos
+                                  .filter(
+                                    (m) =>
+                                      m.tipo_movimiento === 'Deposito' &&
+                                      m.estatus_conciliacion_bancaria?.clave !== 'comprobado'
+                                  )
+                                  .map((m) => {
+                                    const dateStr = new Date(m.fecha).toLocaleDateString('es-MX', {
+                                      timeZone: 'UTC'
+                                    });
+                                    return (
+                                      <tr
+                                        key={m.id}
+                                        onClick={() => {
+                                          setSelectedGlobalDepositId(m.id);
+                                          setSelectedGlobalPedidosIds([]);
+                                        }}
+                                        className={`cursor-pointer hover:bg-gray-55/40 dark:hover:bg-gray-900/20 transition-all ${
+                                          selectedGlobalDepositId === m.id
+                                            ? 'bg-amber-500/10 hover:bg-amber-500/15'
+                                            : ''
+                                        }`}
+                                      >
+                                        <td className="p-3 text-center">
+                                          <input
+                                            type="radio"
+                                            name="global_deposit"
+                                            checked={selectedGlobalDepositId === m.id}
+                                            onChange={() => {
+                                              setSelectedGlobalDepositId(m.id);
+                                              setSelectedGlobalPedidosIds([]);
+                                            }}
+                                            className="w-3.5 h-3.5 text-amber-500 focus:ring-amber-500 bg-white dark:bg-gray-950 border-gray-300"
+                                          />
+                                        </td>
+                                        <td className="p-3 font-mono text-gray-500">{dateStr}</td>
+                                        <td className="p-3">
+                                          <div className="font-bold text-gray-850 dark:text-gray-200">
+                                            {m.concepto}
+                                          </div>
+                                          {m.referencia && (
+                                            <span className="text-[10px] text-gray-400">Ref: {m.referencia}</span>
+                                          )}
+                                        </td>
+                                        <td className="p-3 text-right font-mono font-bold text-emerald-500">
+                                          +{formatCurrency(m.deposito)}
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                                {movimientos.filter(
+                                  (m) =>
+                                    m.tipo_movimiento === 'Deposito' &&
+                                    m.estatus_conciliacion_bancaria?.clave !== 'comprobado'
+                                ).length === 0 && (
+                                  <tr>
+                                    <td colSpan={4} className="p-8 text-center text-gray-400 italic">
+                                      No hay depósitos pendientes de conciliar
+                                    </td>
+                                  </tr>
+                                )}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+
+                        {/* COLUMNA DERECHA: VENTAS DEL SISTEMA PENDIENTES */}
+                        <div className="flex flex-col min-h-0 bg-white dark:bg-gray-955 border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden shadow-sm">
+                          <div className="p-3 bg-gray-55/50 dark:bg-gray-900/40 border-b border-gray-200 dark:border-gray-800 shrink-0 flex justify-between items-center">
+                            <h4 className="text-xs font-extrabold uppercase text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5">
+                              <Layers size={14} /> 2. Selecciona las Ventas a Asociar
+                            </h4>
+                            {selectedGlobalDepositId && (
+                              <button
+                                onClick={() => {
+                                  const allIds = pedidosPendientes.map((p) => p.id);
+                                  const allSelected =
+                                    selectedGlobalPedidosIds.length === pedidosPendientes.length;
+                                  setSelectedGlobalPedidosIds(allSelected ? [] : allIds);
+                                }}
+                                className="text-[10px] font-bold text-blue-500 hover:underline"
+                              >
+                                {selectedGlobalPedidosIds.length === pedidosPendientes.length
+                                  ? 'Desmarcar Todos'
+                                  : 'Seleccionar Todos'}
+                              </button>
+                            )}
+                          </div>
+
+                          <div className="flex-1 overflow-auto">
+                            {!selectedGlobalDepositId ? (
+                              <div className="h-full flex flex-col items-center justify-center p-8 text-center border border-dashed border-gray-150 dark:border-gray-850 m-4 rounded-xl">
+                                <CreditCard size={32} className="text-amber-500 mb-2.5 opacity-50" />
+                                <p className="text-xs font-semibold text-gray-650 dark:text-gray-400">
+                                  Ningún depósito seleccionado
+                                </p>
+                                <p className="text-[10px] text-gray-405 mt-1 max-w-[250px]">
+                                  Selecciona un depósito bancario de la izquierda para desplegar y relacionar los pedidos del sistema.
+                                </p>
+                              </div>
+                            ) : (
+                              <table className="w-full text-left border-collapse text-xs">
+                                <thead>
+                                  <tr className="bg-gray-50 dark:bg-gray-900/50 border-b border-gray-200 dark:border-gray-800 text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+                                    <th className="p-3 w-12 text-center"></th>
+                                    <th className="p-3">Pedido</th>
+                                    <th className="p-3">Cliente</th>
+                                    <th className="p-3 text-right">Importe</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-gray-150 dark:divide-gray-800/60 font-sans">
+                                  {pedidosPendientes.map((p) => (
+                                    <tr
+                                      key={p.id}
+                                      onClick={() => {
+                                        const idx = selectedGlobalPedidosIds.indexOf(p.id);
+                                        const newIds = [...selectedGlobalPedidosIds];
+                                        if (idx > -1) {
+                                          newIds.splice(idx, 1);
+                                        } else {
+                                          newIds.push(p.id);
+                                        }
+                                        setSelectedGlobalPedidosIds(newIds);
+                                      }}
+                                      className="cursor-pointer hover:bg-gray-55/40 dark:hover:bg-gray-900/20 transition-all"
+                                    >
+                                      <td className="p-3 text-center">
+                                        <input
+                                          type="checkbox"
+                                          checked={selectedGlobalPedidosIds.includes(p.id)}
+                                          onChange={() => {}} // Handled by row onClick
+                                          className="w-3.5 h-3.5 text-emerald-650 focus:ring-emerald-500 bg-white dark:bg-gray-950 border-gray-300 rounded"
+                                        />
+                                      </td>
+                                      <td className="p-3 font-mono font-bold">#{p.numero_pedido}</td>
+                                      <td className="p-3">
+                                        <div className="font-semibold text-gray-805 dark:text-gray-200">
+                                          {p.cliente_nombre || 'Cliente General'}
+                                        </div>
+                                        {p.fecha_pedido && (
+                                          <span className="text-[10px] text-gray-450">
+                                            {new Date(p.fecha_pedido).toLocaleDateString()}
+                                          </span>
+                                        )}
+                                      </td>
+                                      <td className="p-3 text-right font-mono font-bold text-gray-805 dark:text-gray-200">
+                                        {formatCurrency(p.precio_total)}
+                                      </td>
+                                    </tr>
+                                  ))}
+                                  {pedidosPendientes.length === 0 && (
+                                    <tr>
+                                      <td colSpan={4} className="p-8 text-center text-gray-450 italic">
+                                        No hay pedidos liquidados pendientes de asociar
+                                      </td>
+                                    </tr>
+                                  )}
+                                </tbody>
+                              </table>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* SUMMARY Y ACCIÓN */}
+                      {selectedGlobalDepositId && (
+                        <div className="mt-4 p-4 bg-amber-500/10 border border-amber-500/20 rounded-xl flex justify-between items-center flex-wrap gap-4 shrink-0 font-sans">
+                          {(() => {
+                            const dep = movimientos.find((m) => m.id === selectedGlobalDepositId);
+                            const depMonto = dep ? Number(dep.deposito || dep.monto) : 0;
+                            const totalVentas = pedidosPendientes
+                              .filter((p) => selectedGlobalPedidosIds.includes(p.id))
+                              .reduce((sum, p) => sum + Number(p.precio_total || 0), 0);
+                            const dif = depMonto - totalVentas;
+                            const match = Math.abs(dif) < 0.05;
+
+                            return (
+                              <>
+                                <div className="flex gap-6 flex-wrap text-xs">
+                                  <div>
+                                    <span className="text-gray-450 dark:text-gray-400 block">
+                                      Depósito Bancario:
+                                    </span>
+                                    <span className="text-base font-extrabold text-amber-600 dark:text-amber-400">
+                                      {formatCurrency(depMonto)}
+                                    </span>
+                                  </div>
+                                  <div>
+                                    <span className="text-gray-450 dark:text-gray-400 block">
+                                      Ventas Seleccionadas ({selectedGlobalPedidosIds.length}):
+                                    </span>
+                                    <span className="text-base font-extrabold text-emerald-600 dark:text-emerald-450">
+                                      {formatCurrency(totalVentas)}
+                                    </span>
+                                  </div>
+                                  <div>
+                                    <span className="text-gray-455 dark:text-gray-400 block">Diferencia:</span>
+                                    <span
+                                      className={`text-base font-mono font-extrabold ${
+                                        match
+                                          ? 'text-emerald-500 dark:text-emerald-400'
+                                          : 'text-amber-500'
+                                      }`}
+                                    >
+                                      {formatCurrency(dif)}
+                                    </span>
+                                  </div>
+                                </div>
+
+                                <button
+                                  disabled={selectedGlobalPedidosIds.length === 0 || isUploading}
+                                  onClick={async () => {
+                                    setIsUploading(true);
+                                    setMessage({ text: 'Asociando depósitos con ventas...', type: 'info' });
+                                    try {
+                                      const token = await getSessionToken();
+                                      const res = await guardarConciliacionManual(
+                                        selectedGlobalDepositId,
+                                        {
+                                          gastosIds: [],
+                                          pedidosIds: selectedGlobalPedidosIds,
+                                          estatusClave: 'comprobado'
+                                        },
+                                        token
+                                      );
+                                      if (res.success) {
+                                        setSelectedGlobalDepositId(null);
+                                        setSelectedGlobalPedidosIds([]);
+                                        setMessage({
+                                          text: 'Ventas asociadas al depósito bancario con éxito.',
+                                          type: 'success'
+                                        });
+                                        await fetchData();
+                                      } else {
+                                        throw new Error(res.error);
+                                      }
+                                    } catch (err: any) {
+                                      alert('Error al conciliar: ' + err.message);
+                                      setMessage({
+                                        text: err.message || 'Error al conciliar depósito',
+                                        type: 'error'
+                                      });
+                                    } finally {
+                                      setIsUploading(false);
+                                    }
+                                  }}
+                                  className="px-5 py-2.5 bg-emerald-650 hover:bg-emerald-600 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-md transition-all flex items-center gap-1.5"
+                                >
+                                  {isUploading ? (
+                                    <RefreshCw size={14} className="animate-spin" />
+                                  ) : (
+                                    <Check size={14} />
+                                  )}
+                                  Vincular y Conciliar Ventas
+                                </button>
+                              </>
+                            );
+                          })()}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* SUB-TAB 3: GESTIÓN DE CATÁLOGO */}
+                  {bancoSubTab === 'catalogo' && (
+                    <div className="flex-1 flex flex-col p-4 overflow-hidden min-h-0">
+                      <div className="flex justify-between items-center mb-4 shrink-0 font-sans">
+                        <span className="text-xs font-semibold text-gray-500 uppercase">
+                          Administrar Estatus del Catálogo
+                        </span>
+                        <button
+                          onClick={() =>
+                            setCatalogEditModal({
+                              open: true,
+                              clave: '',
+                              nombre: '',
+                              descripcion: '',
+                              color: '#3B82F6',
+                              loading: false
+                            })
+                          }
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold shadow-md transition-colors"
+                        >
+                          <Plus size={14} /> Agregar Estatus
+                        </button>
+                      </div>
+
+                      <div className="flex-1 overflow-auto bg-white dark:bg-gray-950 border border-gray-250 dark:border-gray-800 rounded-xl shadow-sm">
+                        <table className="w-full text-left border-collapse text-xs">
+                          <thead>
+                            <tr className="bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 font-semibold text-gray-550 dark:text-gray-400 uppercase tracking-wider text-[10px]">
+                              <th className="p-3 w-40">Clave / Identificador</th>
+                              <th className="p-3 w-48">Nombre</th>
+                              <th className="p-3">Descripción</th>
+                              <th className="p-3 w-28">Color</th>
+                              <th className="p-3 w-24 text-center">Acciones</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-150 dark:divide-gray-800/60 font-sans">
+                            {estatusCatalog.map((item) => (
+                              <tr
+                                key={item.id}
+                                className="hover:bg-gray-50 dark:hover:bg-gray-900/10 transition-colors"
+                              >
+                                <td className="p-3 font-mono font-bold text-gray-400">
+                                  {item.clave}
+                                </td>
+                                <td className="p-3 font-bold text-gray-850 dark:text-gray-200">
+                                  {item.nombre}
+                                </td>
+                                <td className="p-3 text-gray-550">{item.descripcion || '-'}</td>
+                                <td className="p-3">
+                                  <div className="flex items-center gap-2">
+                                    <span
+                                      className="w-3.5 h-3.5 rounded-full border border-black/10 shrink-0"
+                                      style={{ backgroundColor: item.color }}
+                                    ></span>
+                                    <span className="font-mono text-gray-400">{item.color}</span>
+                                  </div>
+                                </td>
+                                <td className="p-3 text-center">
+                                  <div className="flex gap-2 justify-center">
+                                    <button
+                                      onClick={() =>
+                                        setCatalogEditModal({
+                                          open: true,
+                                          id: item.id,
+                                          clave: item.clave,
+                                          nombre: item.nombre,
+                                          descripcion: item.descripcion || '',
+                                          color: item.color || '#9CA3AF',
+                                          loading: false
+                                        })
+                                      }
+                                      className="p-1 text-blue-500 hover:bg-blue-500/15 rounded"
+                                      title="Editar"
+                                    >
+                                      <FileText size={13} />
+                                    </button>
+                                    <button
+                                      disabled={item.empresa_id === null}
+                                      onClick={() => handleDeleteCatalogItem(item.id)}
+                                      className={`p-1 rounded ${
+                                        item.empresa_id === null
+                                          ? 'text-gray-300 dark:text-gray-800 cursor-not-allowed'
+                                          : 'text-red-500 hover:bg-red-500/15'
+                                      }`}
+                                      title={
+                                        item.empresa_id === null
+                                          ? 'No se pueden eliminar los estatus base del sistema'
+                                          : 'Eliminar'
+                                      }
+                                    >
+                                      <Trash2 size={13} />
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* SUB-TAB 4: METODOS DE PAGO */}
+                  {bancoSubTab === 'formas_pago' && (
+                    <div className="flex-1 flex flex-col p-4 overflow-hidden min-h-0">
+                      <div className="flex justify-between items-center mb-4 shrink-0 font-sans">
+                        <span className="text-xs font-semibold text-gray-500 uppercase">
+                          Administrar Métodos de Pago
+                        </span>
+                        <button
+                          onClick={() =>
+                            setFormasPagoModal({
+                              open: true,
+                              nombre: '',
+                              loading: false
+                            })
+                          }
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold shadow-md transition-colors"
+                        >
+                          <Plus size={14} /> Agregar Método
+                        </button>
+                      </div>
+
+                      <div className="flex-1 overflow-auto bg-white dark:bg-gray-950 border border-gray-250 dark:border-gray-800 rounded-xl shadow-sm">
+                        <table className="w-full text-left border-collapse text-xs">
+                          <thead>
+                            <tr className="bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 font-semibold text-gray-550 dark:text-gray-400 uppercase tracking-wider text-[10px]">
+                              <th className="p-3 w-40">ID</th>
+                              <th className="p-3">Nombre del Método de Pago</th>
+                              <th className="p-3 w-24 text-center">Acciones</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-150 dark:divide-gray-800/60 font-sans">
+                            {formasPago.map((item) => (
+                              <tr
+                                key={item.id}
+                                className="hover:bg-gray-50 dark:hover:bg-gray-900/10 transition-colors"
+                              >
+                                <td className="p-3 font-mono text-gray-400">
+                                  {item.id.split('-')[0]}...
+                                </td>
+                                <td className="p-3 font-bold text-gray-850 dark:text-gray-200">
+                                  {item.nombre}
+                                </td>
+                                <td className="p-3 text-center">
+                                  <div className="flex gap-2 justify-center">
+                                    <button
+                                      onClick={() =>
+                                        setFormasPagoModal({
+                                          open: true,
+                                          id: item.id,
+                                          nombre: item.nombre,
+                                          loading: false
+                                        })
+                                      }
+                                      className="p-1 text-blue-500 hover:bg-blue-500/15 rounded"
+                                      title="Editar"
+                                    >
+                                      <FileText size={13} />
+                                    </button>
+                                    <button
+                                      onClick={() => handleDeleteFormaPago(item.id)}
+                                      className="p-1 text-red-500 hover:bg-red-500/15 rounded"
+                                      title="Eliminar"
+                                    >
+                                      <Trash2 size={13} />
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* MODAL 1: MAPEADO DE EXCEL */}
+                {showMappingModal && (
+                  <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                    <div className="bg-white dark:bg-gray-950 rounded-2xl border border-gray-200 dark:border-gray-800 p-6 max-w-md w-full shadow-2xl space-y-4 text-gray-900 dark:text-gray-100 font-sans">
+                      <div>
+                        <h3 className="text-lg font-bold text-amber-500 flex items-center gap-1.5">
+                          <FileSpreadsheet /> Mapear Columnas de Excel
+                        </h3>
+                        <p className="text-xs text-gray-400 mt-1">
+                          Empareja los campos del sistema con las columnas detectadas en tu archivo Excel.
+                        </p>
+                      </div>
+
+                      <div className="space-y-3">
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-bold text-gray-450 uppercase">
+                            Fecha * (DD-MM-YYYY o YYYY-MM-DD)
+                          </label>
+                          <select
+                            value={columnMapping.fecha}
+                            onChange={(e) =>
+                              setColumnMapping((p) => ({ ...p, fecha: e.target.value }))
+                            }
+                            className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs"
+                          >
+                            <option value="">-- Seleccionar columna --</option>
+                            {excelHeaders.map((h) => (
+                              <option key={h} value={h}>
+                                {h}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-bold text-gray-455 uppercase">
+                            Concepto / Descripción *
+                          </label>
+                          <select
+                            value={columnMapping.concepto}
+                            onChange={(e) =>
+                              setColumnMapping((p) => ({ ...p, concepto: e.target.value }))
+                            }
+                            className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs"
+                          >
+                            <option value="">-- Seleccionar columna --</option>
+                            {excelHeaders.map((h) => (
+                              <option key={h} value={h}>
+                                {h}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-bold text-gray-450 uppercase">
+                            Retiro / Cargo / Egreso
+                          </label>
+                          <select
+                            value={columnMapping.retiro}
+                            onChange={(e) =>
+                              setColumnMapping((p) => ({ ...p, retiro: e.target.value }))
+                            }
+                            className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs"
+                          >
+                            <option value="">-- Ninguna --</option>
+                            {excelHeaders.map((h) => (
+                              <option key={h} value={h}>
+                                {h}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-bold text-gray-450 uppercase">
+                            Depósito / Abono / Ingreso
+                          </label>
+                          <select
+                            value={columnMapping.deposito}
+                            onChange={(e) =>
+                              setColumnMapping((p) => ({ ...p, deposito: e.target.value }))
+                            }
+                            className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs"
+                          >
+                            <option value="">-- Ninguna --</option>
+                            {excelHeaders.map((h) => (
+                              <option key={h} value={h}>
+                                {h}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-bold text-gray-450 uppercase font-sans">
+                            Referencia / Número de Rastreo
+                          </label>
+                          <select
+                            value={columnMapping.referencia}
+                            onChange={(e) =>
+                              setColumnMapping((p) => ({ ...p, referencia: e.target.value }))
+                            }
+                            className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs"
+                          >
+                            <option value="">-- Ninguna --</option>
+                            {excelHeaders.map((h) => (
+                              <option key={h} value={h}>
+                                {h}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+
+                      <div className="flex gap-2.5 pt-4 border-t border-gray-200 dark:border-gray-800">
+                        <button
+                          onClick={() => {
+                            setShowMappingModal(false);
+                            setExcelFile(null);
+                            setExcelData([]);
+                            setExcelHeaders([]);
+                          }}
+                          className="flex-1 py-2 border border-gray-300 dark:border-gray-700 rounded-lg text-xs font-semibold hover:bg-gray-100 dark:hover:bg-gray-800"
+                        >
+                          Cancelar
+                        </button>
+                        <button
+                          onClick={handleConfirmImport}
+                          disabled={!columnMapping.fecha || !columnMapping.concepto}
+                          className="flex-1 py-2 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-lg text-xs font-bold shadow-md"
+                        >
+                          Confirmar e Importar
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* MODAL 2: CONCILIACIÓN MANUAL (DRAWER COMPLETO) */}
+                {reconcileModal.open && reconcileModal.movimiento && (
+                  <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                    <div className="bg-white dark:bg-gray-955 border border-gray-200 dark:border-gray-800 p-6 rounded-2xl w-full max-w-4xl shadow-2xl max-h-[90vh] overflow-y-auto text-gray-900 dark:text-gray-100 flex flex-col font-sans space-y-4">
+                      {/* Cabecera */}
+                      <div className="flex justify-between items-start border-b border-gray-100 dark:border-gray-800 pb-3.5 shrink-0">
+                        <div>
+                          <h3 className="text-lg font-bold flex items-center gap-1.5 text-amber-500">
+                            <ArrowRightLeft /> Conciliación Manual de Movimiento
+                          </h3>
+                          <p className="text-xs text-gray-450 dark:text-gray-400 mt-0.5">
+                            Carga comprobantes y vincula múltiples facturas o ventas del sistema para conciliar.
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => setReconcileModal((p) => ({ ...p, open: false }))}
+                          className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 text-sm font-bold p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-900"
+                        >
+                          ✕
+                        </button>
+                      </div>
+
+                      {/* Error state */}
+                      {reconcileModal.error && (
+                        <div className="p-3 bg-red-50 dark:bg-red-955/40 text-red-800 dark:text-red-400 rounded-xl border border-red-205 dark:border-red-900/50 text-xs flex items-center gap-2">
+                          <AlertTriangle size={15} />
+                          <span>{reconcileModal.error}</span>
+                        </div>
+                      )}
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 min-h-0 flex-1">
+                        {/* SECCIÓN DOCUMENTOS Y DETALLE */}
+                        <div className="space-y-4">
+                          <div className="bg-gray-50 dark:bg-gray-900/40 p-4 rounded-xl border border-gray-200 dark:border-gray-800 space-y-2.5">
+                            <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wide">
+                              Detalle del Movimiento
+                            </h4>
+                            <div className="grid grid-cols-2 gap-3 text-xs font-mono">
+                              <div>
+                                <span className="text-[10px] text-gray-405 block">Fecha:</span>
+                                <span className="font-bold">
+                                  {new Date(reconcileModal.movimiento.fecha).toLocaleDateString('es-MX', {
+                                    timeZone: 'UTC'
+                                  })}
+                                </span>
+                              </div>
+                              <div>
+                                <span className="text-[10px] text-gray-405 block">Concepto:</span>
+                                <span className="font-bold truncate block" title={reconcileModal.movimiento.concepto}>
+                                  {reconcileModal.movimiento.concepto}
+                                </span>
+                              </div>
+                              <div>
+                                <span className="text-[10px] text-gray-405 block">Tipo:</span>
+                                <span className="font-bold">{reconcileModal.movimiento.tipo_movimiento}</span>
+                              </div>
+                              <div>
+                                <span className="text-[10px] text-gray-405 block">Monto:</span>
+                                <span className="font-extrabold text-amber-500">
+                                  {formatCurrency(Math.abs(reconcileModal.movimiento.monto))}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* PROVEEDOR DE ALMACENAMIENTO */}
+                          <div className="space-y-3 border-t border-gray-100 dark:border-gray-800 pt-3">
+                            <div className="flex justify-between items-center">
+                              <label className="text-[11px] font-bold text-gray-450 uppercase">
+                                Proveedor de Almacenamiento
+                              </label>
+                              <div className="flex bg-gray-100 dark:bg-gray-900 rounded-lg p-0.5 border border-gray-200 dark:border-gray-800 text-[10px]">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setReconcileModal((p) => ({ ...p, storageProvider: 'Supabase' }))
+                                  }
+                                  className={`px-3 py-1 rounded-md font-bold transition-all ${
+                                    reconcileModal.storageProvider === 'Supabase'
+                                      ? 'bg-white dark:bg-gray-800 shadow-sm text-gray-900 dark:text-white'
+                                      : 'text-gray-400'
+                                  }`}
+                                >
+                                  Supabase Storage
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setReconcileModal((p) => ({ ...p, storageProvider: 'GoogleDrive' }))
+                                  }
+                                  className={`px-3 py-1 rounded-md font-bold transition-all ${
+                                    reconcileModal.storageProvider === 'GoogleDrive'
+                                      ? 'bg-white dark:bg-gray-800 shadow-sm text-gray-900 dark:text-white'
+                                      : 'text-gray-400'
+                                  }`}
+                                >
+                                  Google Drive
+                                </button>
+                              </div>
+                            </div>
+
+                            {/* SUPABASE DROPZONES */}
+                            {reconcileModal.storageProvider === 'Supabase' ? (
+                              <div className="grid grid-cols-1 gap-3">
+                                {/* XML Section */}
+                                <div className="p-3 bg-gray-50/50 dark:bg-gray-900/30 rounded-xl border border-dashed border-gray-300 dark:border-gray-700 space-y-2">
+                                  <div className="flex justify-between items-center text-xs">
+                                    <div className="flex items-center gap-2 font-bold text-gray-700 dark:text-gray-300">
+                                      <FileCode size={16} className="text-blue-500" />
+                                      <span>XML de Factura / REP</span>
+                                    </div>
+                                    <label className="text-blue-500 hover:text-blue-600 font-extrabold cursor-pointer text-[10px] uppercase tracking-wider flex items-center gap-1">
+                                      + Agregar XML
+                                      <input
+                                        type="file"
+                                        accept=".xml"
+                                        onChange={(e) => handleUploadReconciliationFile(e, 'xml')}
+                                        className="hidden"
+                                      />
+                                    </label>
+                                  </div>
+                                  {renderFileList('xml')}
+                                </div>
+
+                                {/* PDF Section */}
+                                <div className="p-3 bg-gray-50/50 dark:bg-gray-900/30 rounded-xl border border-dashed border-gray-300 dark:border-gray-700 space-y-2">
+                                  <div className="flex justify-between items-center text-xs">
+                                    <div className="flex items-center gap-2 font-bold text-gray-700 dark:text-gray-300">
+                                      <FileText size={16} className="text-red-500" />
+                                      <span>Representación PDF</span>
+                                    </div>
+                                    <label className="text-blue-500 hover:text-blue-600 font-extrabold cursor-pointer text-[10px] uppercase tracking-wider flex items-center gap-1">
+                                      + Agregar PDF
+                                      <input
+                                        type="file"
+                                        accept=".pdf"
+                                        onChange={(e) => handleUploadReconciliationFile(e, 'pdf')}
+                                        className="hidden"
+                                      />
+                                    </label>
+                                  </div>
+                                  {renderFileList('pdf')}
+                                </div>
+
+                                {/* Ticket Section */}
+                                <div className="p-3 bg-gray-50/50 dark:bg-gray-900/30 rounded-xl border border-dashed border-gray-300 dark:border-gray-700 space-y-2">
+                                  <div className="flex justify-between items-center text-xs">
+                                    <div className="flex items-center gap-2 font-bold text-gray-700 dark:text-gray-300">
+                                      <CreditCard size={16} className="text-amber-500" />
+                                      <span>Ticket / Comprobante</span>
+                                    </div>
+                                    <label className="text-blue-500 hover:text-blue-600 font-extrabold cursor-pointer text-[10px] uppercase tracking-wider flex items-center gap-1">
+                                      + Agregar Ticket
+                                      <input
+                                        type="file"
+                                        accept=".pdf, image/*"
+                                        onChange={(e) => handleUploadReconciliationFile(e, 'ticket')}
+                                        className="hidden"
+                                      />
+                                    </label>
+                                  </div>
+                                  {renderFileList('ticket')}
+                                </div>
+                              </div>
+                            ) : (
+                              /* GOOGLE DRIVE INPUTS */
+                              <div className="space-y-3 font-sans">
+                                <div className="space-y-1">
+                                  <label className="text-[10px] font-bold text-gray-400 uppercase block">
+                                    Enlaces Google Drive XML
+                                  </label>
+                                  <textarea
+                                    rows={2}
+                                    placeholder="Pegar uno o más enlaces de Google Drive (uno por línea)..."
+                                    value={reconcileModal.xmlUrl ? reconcileModal.xmlUrl.replace(/,/g, '\n') : ''}
+                                    onChange={(e) => {
+                                      const val = e.target.value.split('\n').map(l => l.trim()).filter(Boolean).join(',');
+                                      setReconcileModal(p => ({ ...p, xmlUrl: val }));
+                                    }}
+                                    className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs outline-none focus:ring-1 focus:ring-amber-500"
+                                  />
+                                </div>
+                                <div className="space-y-1">
+                                  <label className="text-[10px] font-bold text-gray-400 uppercase block">
+                                    Enlaces Google Drive PDF Factura
+                                  </label>
+                                  <textarea
+                                    rows={2}
+                                    placeholder="Pegar uno o más enlaces de Google Drive (uno por línea)..."
+                                    value={reconcileModal.pdfFacturaUrl ? reconcileModal.pdfFacturaUrl.replace(/,/g, '\n') : ''}
+                                    onChange={(e) => {
+                                      const val = e.target.value.split('\n').map(l => l.trim()).filter(Boolean).join(',');
+                                      setReconcileModal(p => ({ ...p, pdfFacturaUrl: val }));
+                                    }}
+                                    className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs outline-none focus:ring-1 focus:ring-amber-500"
+                                  />
+                                </div>
+                                <div className="space-y-1">
+                                  <label className="text-[10px] font-bold text-gray-400 uppercase font-sans block">
+                                    Enlaces Google Drive PDF/Imagen Ticket
+                                  </label>
+                                  <textarea
+                                    rows={2}
+                                    placeholder="Pegar uno o más enlaces de Google Drive (uno por línea)..."
+                                    value={reconcileModal.pdfTicketUrl ? reconcileModal.pdfTicketUrl.replace(/,/g, '\n') : ''}
+                                    onChange={(e) => {
+                                      const val = e.target.value.split('\n').map(l => l.trim()).filter(Boolean).join(',');
+                                      setReconcileModal(p => ({ ...p, pdfTicketUrl: val }));
+                                    }}
+                                    className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs outline-none focus:ring-1 focus:ring-amber-500"
+                                  />
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* SECCIÓN VINCULACIÓN CON ERP */}
+                        <div className="flex flex-col min-h-0 bg-gray-50/50 dark:bg-gray-900/10 border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden p-4">
+                          <div className="flex justify-between items-center mb-3 shrink-0">
+                            <h4 className="text-xs font-bold text-gray-505 uppercase tracking-wide">
+                              Relacionar con Registros ERP
+                            </h4>
+                            {reconcileModal.movimiento.tipo_movimiento === 'Retiro' && (
+                              <button
+                                type="button"
+                                onClick={handleCrearGastoRapido}
+                                className="px-2.5 py-1 bg-amber-500/15 border border-amber-500/30 text-amber-600 dark:text-amber-400 rounded-lg text-[10px] font-bold hover:bg-amber-500/25 transition-all uppercase"
+                              >
+                                + Gasto Rápido
+                              </button>
+                            )}
+                          </div>
+
+                          <input
+                            type="text"
+                            placeholder="Buscar registros..."
+                            value={manualMatchSearch}
+                            onChange={(e) => setManualMatchSearch(e.target.value)}
+                            className="w-full bg-white dark:bg-gray-955 border border-gray-300 dark:border-gray-700 px-3 py-1.5 rounded-lg text-xs outline-none focus:ring-1 focus:ring-amber-500 shrink-0 mb-3"
+                          />
+
+                          <div className="flex-1 overflow-auto border border-gray-200 dark:border-gray-800 rounded-lg bg-white dark:bg-gray-955 max-h-[200px]">
+                            {reconcileModal.movimiento.tipo_movimiento === 'Retiro' ? (
+                              /* LISTADO GASTOS */
+                              <table className="w-full text-left border-collapse text-xs">
+                                <thead>
+                                  <tr className="bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 text-[10px] text-gray-500 font-bold uppercase tracking-wider">
+                                    <th className="p-2 w-10 text-center"></th>
+                                    <th className="p-2">Concepto</th>
+                                    <th className="p-2 text-right">Importe</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {gastosReconciliables
+                                    .filter((g) => {
+                                      const s = manualMatchSearch.toLowerCase();
+                                      return (
+                                        g.concepto?.toLowerCase().includes(s) ||
+                                        String(g.monto).includes(s)
+                                      );
+                                    })
+                                    .map((g) => (
+                                      <tr
+                                        key={g.id}
+                                        onClick={() => {
+                                          const isSelected = reconcileModal.gastosSeleccionados.includes(
+                                            g.id
+                                          );
+                                          setReconcileModal((p) => ({
+                                            ...p,
+                                            gastosSeleccionados: isSelected
+                                              ? p.gastosSeleccionados.filter((id) => id !== g.id)
+                                              : [...p.gastosSeleccionados, g.id]
+                                          }));
+                                        }}
+                                        className="hover:bg-gray-50 dark:hover:bg-gray-900/10 cursor-pointer"
+                                      >
+                                        <td className="p-2 text-center">
+                                          <input
+                                            type="checkbox"
+                                            checked={reconcileModal.gastosSeleccionados.includes(g.id)}
+                                            onChange={() => {}} // Row click handles state
+                                            className="w-3.5 h-3.5 text-amber-500 focus:ring-amber-500 bg-white dark:bg-gray-955 border-gray-300 rounded"
+                                          />
+                                        </td>
+                                        <td className="p-2 font-semibold text-gray-800 dark:text-gray-250">
+                                          <div className="flex flex-col gap-0.5">
+                                            <span>{g.concepto}</span>
+                                            <div className="flex gap-1.5 items-center">
+                                              {g.xml_url && (
+                                                <span className="text-[8px] bg-blue-100 dark:bg-blue-900/40 text-blue-600 px-1 rounded font-bold uppercase tracking-wider">
+                                                  XML
+                                                </span>
+                                              )}
+                                              {g.pdf_url && (
+                                                <span className="text-[8px] bg-red-100 dark:bg-red-900/40 text-red-500 px-1 rounded font-bold uppercase tracking-wider">
+                                                  PDF
+                                                </span>
+                                              )}
+                                              {g.ticket_url && (
+                                                <span className="text-[8px] bg-amber-100 dark:bg-amber-900/40 text-amber-600 px-1 rounded font-bold uppercase tracking-wider">
+                                                  TICKET
+                                                </span>
+                                              )}
+                                            </div>
+                                          </div>
+                                        </td>
+                                        <td className="p-2 text-right font-mono text-red-500 font-bold">
+                                          {formatCurrency(g.monto)}
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  {gastosReconciliables.length === 0 && (
+                                    <tr>
+                                      <td colSpan={3} className="p-4 text-center text-gray-400 italic">
+                                        No hay gastos sin conciliar en el sistema
+                                      </td>
+                                    </tr>
+                                  )}
+                                </tbody>
+                              </table>
+                            ) : (
+                              /* LISTADO PEDIDOS */
+                              <table className="w-full text-left border-collapse text-xs">
+                                <thead>
+                                  <tr className="bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 text-[10px] text-gray-500 font-bold uppercase tracking-wider">
+                                    <th className="p-2 w-10 text-center"></th>
+                                    <th className="p-2">Pedido / Cliente</th>
+                                    <th className="p-2 text-right">Importe</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {pedidosPendientes
+                                    .filter((p) => {
+                                      const s = manualMatchSearch.toLowerCase();
+                                      return (
+                                        p.numero_pedido?.toLowerCase().includes(s) ||
+                                        p.cliente_nombre?.toLowerCase().includes(s)
+                                      );
+                                    })
+                                    .map((p) => (
+                                      <tr
+                                        key={p.id}
+                                        onClick={() => {
+                                          const isSelected = reconcileModal.pedidosSeleccionados.includes(
+                                            p.id
+                                          );
+                                          setReconcileModal((pSub) => ({
+                                            ...pSub,
+                                            pedidosSeleccionados: isSelected
+                                              ? pSub.pedidosSeleccionados.filter((id) => id !== p.id)
+                                              : [...pSub.pedidosSeleccionados, p.id]
+                                          }));
+                                        }}
+                                        className="hover:bg-gray-55/40 dark:hover:bg-gray-900/10 cursor-pointer"
+                                      >
+                                        <td className="p-2 text-center">
+                                          <input
+                                            type="checkbox"
+                                            checked={reconcileModal.pedidosSeleccionados.includes(p.id)}
+                                            onChange={() => {}} // Row click handles state
+                                            className="w-3.5 h-3.5 text-amber-500 focus:ring-amber-500 bg-white dark:bg-gray-950 border-gray-300 rounded"
+                                          />
+                                        </td>
+                                        <td className="p-2 font-bold text-gray-800 dark:text-gray-255">
+                                          #{p.numero_pedido} - {p.cliente_nombre || 'Cliente General'}
+                                        </td>
+                                        <td className="p-2 text-right font-mono text-emerald-505 font-bold">
+                                          {formatCurrency(p.precio_total)}
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  {pedidosPendientes.length === 0 && (
+                                    <tr>
+                                      <td colSpan={3} className="p-4 text-center text-gray-400 italic">
+                                        No hay pedidos liquidados pendientes
+                                      </td>
+                                    </tr>
+                                  )}
+                                </tbody>
+                              </table>
+                            )}
+                          </div>
+
+                          {/* RESUMEN MATH */}
+                          <div className="mt-3 bg-gray-100 dark:bg-gray-900 rounded-xl p-3 border border-gray-200 dark:border-gray-800 space-y-1 text-xs">
+                            {(() => {
+                              const movMonto = Math.abs(reconcileModal.movimiento.monto);
+                              const selectedMonto =
+                                reconcileModal.movimiento.tipo_movimiento === 'Retiro'
+                                  ? gastosReconciliables
+                                      .filter((g) => reconcileModal.gastosSeleccionados.includes(g.id))
+                                      .reduce((sum, g) => sum + Number(g.monto || 0), 0)
+                                  : pedidosPendientes
+                                      .filter((p) => reconcileModal.pedidosSeleccionados.includes(p.id))
+                                      .reduce((sum, p) => sum + Number(p.precio_total || 0), 0);
+
+                              const diff = movMonto - selectedMonto;
+
+                              return (
+                                <>
+                                  <div className="flex justify-between">
+                                    <span className="text-gray-400">Total Movimiento Banco:</span>
+                                    <span className="font-bold font-mono">{formatCurrency(movMonto)}</span>
+                                  </div>
+                                  <div className="flex justify-between">
+                                    <span className="text-gray-400">Vinculado desde ERP:</span>
+                                    <span className="font-bold font-mono text-amber-500">
+                                      {formatCurrency(selectedMonto)}
+                                    </span>
+                                  </div>
+                                  <div className="flex justify-between border-t border-dashed border-gray-300 dark:border-gray-700 pt-1 font-bold">
+                                    <span className="text-gray-455 dark:text-gray-400">Diferencia:</span>
+                                    <span
+                                      className={`font-mono ${
+                                        Math.abs(diff) < 0.05
+                                          ? 'text-emerald-500'
+                                          : 'text-amber-500'
+                                      }`}
+                                    >
+                                      {formatCurrency(diff)}
+                                    </span>
+                                  </div>
+                                </>
+                              );
+                            })()}
+                          </div>
+
+                          {/* ANULAR/OVERRIDE ESTATUS */}
+                          <div className="mt-4 space-y-1">
+                            <label className="text-[10px] font-bold text-gray-405 uppercase">
+                              Sobrescribir Estatus de Conciliación
+                            </label>
+                            <select
+                              value={reconcileModal.estatusClave}
+                              onChange={(e) =>
+                                setReconcileModal((p) => ({ ...p, estatusClave: e.target.value }))
+                              }
+                              className="w-full bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs"
+                            >
+                              {estatusCatalog.map((item) => (
+                                <option key={item.id} value={item.clave}>
+                                  {item.nombre}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* ACCIONES FINALES */}
+                      <div className="flex gap-2.5 pt-4 border-t border-gray-200 dark:border-gray-800 shrink-0 font-sans">
+                        <button
+                          onClick={() => setReconcileModal((p) => ({ ...p, open: false }))}
+                          disabled={reconcileModal.loading}
+                          className="flex-1 py-2.5 border border-gray-300 dark:border-gray-700 rounded-xl text-xs font-semibold hover:bg-gray-100 dark:hover:bg-gray-800"
+                        >
+                          Cancelar
+                        </button>
+                        <button
+                          onClick={handleSaveManualReconcile}
+                          disabled={reconcileModal.loading}
+                          className="flex-1 py-2.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-md flex items-center justify-center gap-1.5"
+                        >
+                          {reconcileModal.loading ? (
+                            <RefreshCw size={14} className="animate-spin" />
+                          ) : (
+                            <Check size={14} />
+                          )}
+                          Guardar Conciliación
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* MODAL 3: GESTIÓN DE ESTATUS DEL CATÁLOGO (CRUD DIALOG) */}
+                {catalogEditModal.open && (
+                  <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                    <div className="bg-white dark:bg-gray-955 rounded-2xl border border-gray-200 dark:border-gray-800 p-6 max-w-sm w-full shadow-2xl space-y-4 text-gray-900 dark:text-gray-100 font-sans">
+                      <div>
+                        <h3 className="text-lg font-bold text-blue-500">
+                          {catalogEditModal.id ? 'Editar Estatus' : 'Agregar Estatus al Catálogo'}
+                        </h3>
+                        <p className="text-xs text-gray-405 mt-1">
+                          Los estatus personalizados ayudan a categorizar las transacciones bancarias.
+                        </p>
+                      </div>
+
+                      <div className="space-y-3">
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-bold text-gray-405 uppercase">Nombre</label>
+                          <input
+                            type="text"
+                            placeholder="Ej. Revisado por Contabilidad"
+                            value={catalogEditModal.nombre}
+                            onChange={(e) =>
+                              setCatalogEditModal((p) => ({ ...p, nombre: e.target.value }))
+                            }
+                            className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs text-gray-900 dark:text-white"
+                          />
+                        </div>
+
+                        {!catalogEditModal.id && (
+                          <div className="space-y-1">
+                            <label className="text-[10px] font-bold text-gray-405 uppercase">
+                              Clave (Única e inmutable)
+                            </label>
+                            <input
+                              type="text"
+                              placeholder="Ej. revisado_contable"
+                              value={catalogEditModal.clave}
+                              onChange={(e) =>
+                                setCatalogEditModal((p) => ({ ...p, clave: e.target.value }))
+                              }
+                              className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs text-gray-900 dark:text-white"
+                            />
+                          </div>
+                        )}
+
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-bold text-gray-405 uppercase font-sans">
+                            Descripción
+                          </label>
+                          <textarea
+                            placeholder="Propósito de este estatus..."
+                            rows={2}
+                            value={catalogEditModal.descripcion}
+                            onChange={(e) =>
+                              setCatalogEditModal((p) => ({ ...p, descripcion: e.target.value }))
+                            }
+                            className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs text-gray-900 dark:text-white"
+                          ></textarea>
+                        </div>
+
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] font-bold text-gray-405 uppercase">
+                            Color del Badge
+                          </label>
+                          <div className="flex gap-2 items-center">
+                            <input
+                              type="color"
+                              value={catalogEditModal.color}
+                              onChange={(e) =>
+                                setCatalogEditModal((p) => ({ ...p, color: e.target.value }))
+                              }
+                              className="w-8 h-8 rounded-lg border border-gray-250 cursor-pointer overflow-hidden p-0 bg-transparent shrink-0"
+                            />
+                            <input
+                              type="text"
+                              value={catalogEditModal.color}
+                              onChange={(e) =>
+                                setCatalogEditModal((p) => ({ ...p, color: e.target.value }))
+                              }
+                              className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs font-mono"
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex gap-2.5 pt-4 border-t border-gray-200 dark:border-gray-800">
+                        <button
+                          onClick={() => setCatalogEditModal((p) => ({ ...p, open: false }))}
+                          disabled={catalogEditModal.loading}
+                          className="flex-1 py-2 border border-gray-300 dark:border-gray-700 rounded-lg text-xs font-semibold hover:bg-gray-100 dark:hover:bg-gray-800"
+                        >
+                          Cancelar
+                        </button>
+                        <button
+                          onClick={handleSaveCatalogItem}
+                          disabled={catalogEditModal.loading || !catalogEditModal.nombre}
+                          className="flex-1 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-lg text-xs font-bold shadow-md"
+                        >
+                          Guardar Estatus
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* MODAL 4: CREAR/EDITAR FORMA DE PAGO */}
+                {formasPagoModal.open && (
+                  <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                    <div className="bg-white dark:bg-gray-955 rounded-2xl border border-gray-200 dark:border-gray-800 p-6 max-w-sm w-full shadow-2xl space-y-4 text-gray-900 dark:text-gray-100 font-sans">
+                      <div>
+                        <h3 className="text-lg font-bold text-blue-500">
+                          {formasPagoModal.id ? 'Editar Método de Pago' : 'Agregar Método de Pago'}
+                        </h3>
+                        <p className="text-xs text-gray-405 mt-1">
+                          Este método estará disponible al liquidar pedidos y registrar egresos.
+                        </p>
+                      </div>
+
+                      <div className="space-y-3">
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-bold text-gray-405 uppercase">Nombre</label>
+                          <input
+                            type="text"
+                            placeholder="Ej. Terminal parrot, Terminal BBVA, Efectivo"
+                            value={formasPagoModal.nombre}
+                            onChange={(e) =>
+                              setFormasPagoModal((p) => ({ ...p, nombre: e.target.value }))
+                            }
+                            className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs text-gray-900 dark:text-white"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="flex gap-2.5 pt-4 border-t border-gray-200 dark:border-gray-800">
+                        <button
+                          onClick={() => setFormasPagoModal((p) => ({ ...p, open: false }))}
+                          disabled={formasPagoModal.loading}
+                          className="flex-1 py-2 border border-gray-300 dark:border-gray-700 rounded-lg text-xs font-semibold hover:bg-gray-100 dark:hover:bg-gray-800"
+                        >
+                          Cancelar
+                        </button>
+                        <button
+                          onClick={handleSaveFormaPago}
+                          disabled={formasPagoModal.loading || !formasPagoModal.nombre.trim()}
+                          className="flex-1 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-lg text-xs font-bold shadow-md"
+                        >
+                          {formasPagoModal.loading ? 'Guardando...' : 'Guardar Método'}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* CONTENIDO TAB 4: PROVEEDORES */}
+            {activeTab === 'proveedores' && (
+              <div className="flex flex-col flex-1 font-sans overflow-hidden min-h-0">
+                {/* BARRA DE ACCIONES Y BÚSQUEDA */}
+                <div className="p-4 border-b border-gray-200 dark:border-gray-800 bg-gray-50/30 dark:bg-gray-900/20 flex flex-wrap gap-4 items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                      Gestión de Proveedores
+                    </span>
+                    <span className="bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 text-[10px] font-bold px-2 py-0.5 rounded-full">
+                      {proveedores.length} en total
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-3">
+                    <div className="relative">
+                      <Search size={14} className="absolute left-3 top-2.5 text-gray-400" />
+                      <input
+                        type="text"
+                        placeholder="Buscar por nombre, alias o RFC..."
+                        value={busquedaProveedor}
+                        onChange={(e) => setBusquedaProveedor(e.target.value)}
+                        className="pl-9 pr-4 py-2 w-64 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-xl text-xs outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 transition-all text-gray-900 dark:text-white"
+                      />
+                    </div>
+                    <button
+                      onClick={() => setProveedorModal({
+                        open: true,
+                        proveedor: {
+                          nombre_comercial: '',
+                          razon_social: '',
+                          rfc: '',
+                          telefono: '',
+                          email: '',
+                          alias: '',
+                          portal_facturacion: '',
+                          sitio_web: '',
+                          direccion: '',
+                          comentarios: '',
+                          banco_nombre: '',
+                          cuenta_clabe: '',
+                          cuenta_numero: '',
+                          convenio_numero: '',
+                          referencia_bancaria: ''
+                        },
+                        loading: false,
+                        error: ''
+                      })}
+                      className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold shadow-md transition-colors"
+                    >
+                      <Plus size={14} /> Nuevo Proveedor
+                    </button>
+                  </div>
+                </div>
+
+                {/* CONTENIDO PRINCIPAL: LISTADO Y DETALLES */}
+                <div className="flex-1 flex flex-col lg:flex-row min-h-0 overflow-hidden">
+                  
+                  {/* LISTADO DE PROVEEDORES (LADO IZQUIERDO) */}
+                  <div className="w-full lg:w-96 border-r border-gray-200 dark:border-gray-800 flex flex-col min-h-0 bg-gray-50/10 dark:bg-gray-900/5 overflow-y-auto">
+                    <div className="divide-y divide-gray-100 dark:divide-gray-800/60">
+                      {proveedores.filter(p => {
+                        const search = busquedaProveedor.toLowerCase();
+                        return (
+                          p.nombre_comercial?.toLowerCase().includes(search) ||
+                          p.razon_social?.toLowerCase().includes(search) ||
+                          p.rfc?.toLowerCase().includes(search) ||
+                          p.alias?.toLowerCase().includes(search)
+                        );
+                      }).map((p) => {
+                        const isSelected = selectedProveedor?.id === p.id;
+                        return (
+                          <div
+                            key={p.id}
+                            onClick={() => cargarDetallesProveedor(p)}
+                            className={`p-4 cursor-pointer transition-all hover:bg-indigo-50/30 dark:hover:bg-indigo-950/10 flex flex-col gap-1 border-l-4 ${
+                              isSelected
+                                ? 'bg-indigo-50/50 dark:bg-indigo-950/20 border-indigo-500'
+                                : 'border-transparent'
+                            }`}
+                          >
+                            <div className="flex justify-between items-start">
+                              <span className="font-bold text-xs text-gray-900 dark:text-white truncate max-w-[180px]">
+                                {p.alias ? (
+                                  <>
+                                    {p.alias}{' '}
+                                    <span className="text-[10px] text-gray-400 font-normal">
+                                      ({p.nombre_comercial})
+                                    </span>
+                                  </>
+                                ) : (
+                                  p.nombre_comercial
+                                )}
+                              </span>
+                              <span className="font-mono text-[9px] bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 px-1.5 py-0.5 rounded uppercase">
+                                {p.rfc}
+                              </span>
+                            </div>
+                            <span className="text-[10px] text-gray-400 truncate">
+                              {p.razon_social || p.nombre_comercial}
+                            </span>
+                            <div className="flex gap-4 text-[10px] text-gray-400 mt-1">
+                              {p.telefono && <span>📞 {p.telefono}</span>}
+                              {p.email && <span className="truncate max-w-[150px]">✉️ {p.email}</span>}
+                            </div>
+                          </div>
+                        );
+                      })}
+
+                      {proveedores.length === 0 && (
+                        <div className="p-8 text-center text-gray-400 italic text-xs">
+                          No hay proveedores registrados.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* DETALLE Y HISTORIAL (LADO DERECHO) */}
+                  <div className="flex-1 flex flex-col min-h-0 overflow-y-auto bg-white dark:bg-gray-950 p-6">
+                    {selectedProveedor ? (
+                      <div className="space-y-6">
+                        {/* Cabecera Proveedor */}
+                        <div className="flex justify-between items-start gap-4 flex-wrap border-b border-gray-100 dark:border-gray-800 pb-4">
+                          <div>
+                            <h2 className="text-lg font-black text-gray-900 dark:text-white">
+                              {selectedProveedor.alias || selectedProveedor.nombre_comercial}
+                            </h2>
+                            <p className="text-xs text-gray-500">
+                              Razón Social: {selectedProveedor.razon_social || selectedProveedor.nombre_comercial} | RFC: <span className="font-mono">{selectedProveedor.rfc}</span>
+                            </p>
+                          </div>
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => setProveedorModal({
+                                open: true,
+                                proveedor: { ...selectedProveedor },
+                                loading: false,
+                                error: ''
+                              })}
+                              className="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-lg text-xs font-bold transition-all"
+                            >
+                              Editar Info
+                            </button>
+                            <button
+                              onClick={() => handleDeleteProveedor(selectedProveedor.id)}
+                              className="px-3 py-1.5 bg-red-50 hover:bg-red-100 dark:bg-red-950/20 dark:hover:bg-red-950/40 text-red-600 dark:text-red-400 rounded-lg text-xs font-bold transition-all"
+                            >
+                              Eliminar
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Fichas de Datos */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                          
+                          {/* Datos Generales / Contacto */}
+                          <div className="p-4 rounded-2xl border border-gray-100 dark:border-gray-800/80 bg-gray-50/30 dark:bg-gray-900/10 space-y-3">
+                            <h3 className="text-xs font-extrabold uppercase text-gray-400 tracking-wider">
+                              Contacto y Administración
+                            </h3>
+                            <div className="grid grid-cols-2 gap-3 text-xs">
+                              <div>
+                                <span className="text-[10px] text-gray-400 block">Teléfono</span>
+                                <span className="font-medium text-gray-900 dark:text-white">{selectedProveedor.telefono || '-'}</span>
+                              </div>
+                              <div>
+                                <span className="text-[10px] text-gray-400 block">Correo Facturación</span>
+                                <span className="font-medium text-gray-900 dark:text-white truncate block" title={selectedProveedor.email}>{selectedProveedor.email || '-'}</span>
+                              </div>
+                              <div>
+                                <span className="text-[10px] text-gray-400 block">Portal Facturación</span>
+                                {selectedProveedor.portal_facturacion ? (
+                                  <a
+                                    href={selectedProveedor.portal_facturacion}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="font-medium text-indigo-500 hover:underline flex items-center gap-1"
+                                  >
+                                    Visitar <ExternalLink size={10} />
+                                  </a>
+                                ) : (
+                                  <span className="text-gray-400">-</span>
+                                )}
+                              </div>
+                              <div>
+                                <span className="text-[10px] text-gray-400 block">Sitio Web</span>
+                                {selectedProveedor.sitio_web ? (
+                                  <a
+                                    href={selectedProveedor.sitio_web.startsWith('http') ? selectedProveedor.sitio_web : `https://${selectedProveedor.sitio_web}`}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="font-medium text-indigo-500 hover:underline flex items-center gap-1"
+                                  >
+                                    Sitio <ExternalLink size={10} />
+                                  </a>
+                                ) : (
+                                  <span className="text-gray-400">-</span>
+                                )}
+                              </div>
+                            </div>
+                            <div className="text-xs pt-2 border-t border-gray-100 dark:border-gray-800">
+                              <span className="text-[10px] text-gray-400 block">Dirección</span>
+                              <span className="text-gray-800 dark:text-gray-200 block mt-0.5">{selectedProveedor.direccion || '-'}</span>
+                            </div>
+                            <div className="text-xs pt-1">
+                              <span className="text-[10px] text-gray-400 block">Comentarios / Notas</span>
+                              <span className="text-gray-600 dark:text-gray-300 block mt-0.5 italic">{selectedProveedor.comentarios || '-'}</span>
+                            </div>
+                          </div>
+
+                          {/* Datos Bancarios */}
+                          <div className="p-4 rounded-2xl border border-gray-100 dark:border-gray-800/80 bg-gray-50/30 dark:bg-gray-900/10 space-y-3">
+                            <h3 className="text-xs font-extrabold uppercase text-gray-400 tracking-wider">
+                              Datos Bancarios para Transferencias
+                            </h3>
+                            <div className="grid grid-cols-2 gap-3 text-xs">
+                              <div>
+                                <span className="text-[10px] text-gray-400 block">Banco</span>
+                                <span className="font-semibold text-gray-900 dark:text-white">{selectedProveedor.banco_nombre || '-'}</span>
+                              </div>
+                              <div>
+                                <span className="text-[10px] text-gray-400 block">Número Cuenta / Tarjeta</span>
+                                <span className="font-mono text-gray-900 dark:text-white">{selectedProveedor.cuenta_numero || '-'}</span>
+                              </div>
+                              <div className="col-span-2">
+                                <span className="text-[10px] text-gray-400 block">Cuenta CLABE (18 dígitos)</span>
+                                <span className="font-mono text-xs text-gray-900 dark:text-white tracking-wider font-semibold">{selectedProveedor.cuenta_clabe || '-'}</span>
+                              </div>
+                              <div>
+                                <span className="text-[10px] text-gray-400 block">Número de Convenio</span>
+                                <span className="font-mono text-gray-900 dark:text-white font-medium">{selectedProveedor.convenio_numero || '-'}</span>
+                              </div>
+                              <div>
+                                <span className="text-[10px] text-gray-400 block">Referencia Bancaria</span>
+                                <span className="font-mono text-gray-900 dark:text-white font-medium">{selectedProveedor.referencia_bancaria || '-'}</span>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* KPIs de Invoices/Consumo */}
+                        <div className="grid grid-cols-3 gap-4">
+                          <div className="p-4 rounded-2xl bg-indigo-50/50 dark:bg-indigo-950/10 border border-indigo-100/50 dark:border-indigo-900/30 text-center">
+                            <span className="text-[10px] font-bold text-indigo-500 uppercase tracking-wide">Total Facturado</span>
+                            <span className="block text-lg font-black text-indigo-600 dark:text-indigo-400 mt-1">
+                              {formatCurrency(proveedorFacturas.reduce((sum, f) => sum + Number(f.monto || 0), 0))}
+                            </span>
+                          </div>
+                          <div className="p-4 rounded-2xl bg-indigo-50/50 dark:bg-indigo-950/10 border border-indigo-100/50 dark:border-indigo-900/30 text-center">
+                            <span className="text-[10px] font-bold text-indigo-500 uppercase tracking-wide">Facturas Cargadas</span>
+                            <span className="block text-lg font-black text-indigo-600 dark:text-indigo-400 mt-1">
+                              {proveedorFacturas.length} comprobantes
+                            </span>
+                          </div>
+                          <div className="p-4 rounded-2xl bg-indigo-50/50 dark:bg-indigo-950/10 border border-indigo-100/50 dark:border-indigo-900/30 text-center">
+                            <span className="text-[10px] font-bold text-indigo-500 uppercase tracking-wide">Promedio por Comprobante</span>
+                            <span className="block text-lg font-black text-indigo-600 dark:text-indigo-400 mt-1">
+                              {formatCurrency(
+                                proveedorFacturas.length > 0
+                                  ? proveedorFacturas.reduce((sum, f) => sum + Number(f.monto || 0), 0) / proveedorFacturas.length
+                                  : 0
+                              )}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Historial de Facturas */}
+                        <div className="space-y-3">
+                          <div className="flex justify-between items-center">
+                            <h3 className="text-xs font-extrabold uppercase text-gray-500 tracking-wider">
+                              Historial de Facturas Emitidas
+                            </h3>
+                          </div>
+
+                          <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl overflow-hidden shadow-sm">
+                            {cargandoFacturasProveedor ? (
+                              <div className="p-8 text-center text-gray-400">
+                                <RefreshCw className="w-5 h-5 animate-spin mx-auto mb-2 text-indigo-500" />
+                                Cargando facturas...
+                              </div>
+                            ) : (
+                              <table className="w-full text-left border-collapse">
+                                <thead>
+                                  <tr className="bg-gray-50 dark:bg-gray-900/50 border-b border-gray-200 dark:border-gray-800 text-[10px] font-bold text-gray-400 uppercase">
+                                    <th className="p-3">Fecha</th>
+                                    <th className="p-3">Folio / Concepto</th>
+                                    <th className="p-3 text-right">Monto</th>
+                                    <th className="p-3 text-center">Documentos</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-gray-100 dark:divide-gray-800/50 text-xs">
+                                  {proveedorFacturas.map((f) => {
+                                    const isRep = f.gasto_padre_id !== null;
+                                    return (
+                                      <tr key={f.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/10 transition-colors">
+                                        <td className="p-3 text-gray-500 dark:text-gray-400 font-mono text-[10px]">
+                                          {f.fecha_gasto || 'S/F'}
+                                        </td>
+                                        <td className="p-3">
+                                          <div className="flex flex-col">
+                                            <div className="flex items-center gap-1.5">
+                                              <span className="font-semibold text-gray-950 dark:text-white">
+                                                {f.concepto}
+                                              </span>
+                                              {isRep && (
+                                                <span className="bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 text-[8px] font-black px-1 py-0.5 rounded font-sans uppercase">
+                                                  REP / Complemento
+                                                </span>
+                                              )}
+                                            </div>
+                                            <span className="text-[10px] text-gray-400 font-mono">{f.uuid_fiscal || 'Sin UUID'}</span>
+                                          </div>
+                                        </td>
+                                        <td className="p-3 text-right font-semibold text-gray-950 dark:text-white">
+                                          {formatCurrency(f.monto)}
+                                        </td>
+                                        <td className="p-3">
+                                          <div className="flex justify-center gap-1.5">
+                                            {f.xml_url ? (
+                                              <button
+                                                onClick={() => handleDownloadFile(f.xml_url)}
+                                                className="p-1 bg-blue-50 dark:bg-blue-900/20 hover:bg-blue-100 dark:hover:bg-blue-900/40 rounded border border-blue-200 dark:border-blue-900/50 text-blue-500 font-bold text-[9px]"
+                                              >
+                                                XML
+                                              </button>
+                                            ) : (
+                                              <span className="text-[9px] text-gray-450 italic">No XML</span>
+                                            )}
+                                            {f.pdf_url ? (
+                                              <button
+                                                onClick={() => handleDownloadFile(f.pdf_url)}
+                                                className="p-1 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/40 rounded border border-red-200 dark:border-red-900/50 text-red-500 font-bold text-[9px]"
+                                              >
+                                                PDF
+                                              </button>
+                                            ) : (
+                                              <span className="text-[9px] text-gray-450 italic">No PDF</span>
+                                            )}
+                                          </div>
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                                  {proveedorFacturas.length === 0 && (
+                                    <tr>
+                                      <td colSpan={4} className="p-8 text-center text-gray-400 italic">
+                                        No hay facturas cargadas para este proveedor.
+                                      </td>
+                                    </tr>
+                                  )}
+                                </tbody>
+                              </table>
+                            )}
+                          </div>
+                        </div>
+
+                      </div>
+                    ) : (
+                      <div className="h-full flex flex-col items-center justify-center text-center p-12 space-y-4">
+                        <div className="p-4 bg-indigo-50 dark:bg-indigo-950/20 rounded-full text-indigo-500">
+                          <Users size={32} />
+                        </div>
+                        <div className="space-y-1">
+                          <h3 className="text-sm font-black text-gray-900 dark:text-white">Selecciona un Proveedor</h3>
+                          <p className="text-xs text-gray-400 max-w-sm">
+                            Elige un proveedor del listado para consultar sus datos administrativos, su portal de facturación, sus detalles de cuenta bancaria y el historial de compras.
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                </div>
+              </div>
+            )}
+
+          </div>
+
+          {/* MODAL: REGISTRAR / EDITAR PROVEEDOR */}
+          {proveedorModal.open && proveedorModal.proveedor && (
+            <div className="fixed inset-0 bg-black/60 dark:bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4 transition-all">
+              <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-6 rounded-2xl w-full max-w-2xl shadow-2xl max-h-[95vh] overflow-y-auto text-gray-900 dark:text-gray-100 flex flex-col font-sans">
+                
+                {/* Cabecera */}
+                <div className="flex justify-between items-center mb-4 pb-2 border-b border-gray-100 dark:border-gray-800">
+                  <h3 className="text-base font-extrabold flex items-center gap-2 text-indigo-500">
+                    <Users size={18} />
+                    {proveedorModal.proveedor.id ? 'Editar Proveedor' : 'Registrar Nuevo Proveedor'}
+                  </h3>
+                  <button
+                    onClick={() => setProveedorModal({ open: false, proveedor: null, loading: false, error: '' })}
+                    className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+
+                {/* Error message */}
+                {proveedorModal.error && (
+                  <div className="mb-4 p-3 bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-900/30 text-red-600 dark:text-red-400 rounded-xl text-xs flex items-center gap-2">
+                    <AlertTriangle size={14} className="shrink-0" />
+                    <span>{proveedorModal.error}</span>
+                  </div>
+                )}
+
+                <form onSubmit={handleSaveProveedor} className="space-y-4 text-xs">
+                  
+                  {/* Sección 1: Datos de SAT (Identificación) */}
+                  <div className="space-y-3">
+                    <h4 className="text-[10px] font-extrabold uppercase text-gray-400 tracking-wider">
+                      Identificación (SAT)
+                    </h4>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">RFC *</label>
+                        <input
+                          type="text"
+                          required
+                          placeholder="XAXX010101000"
+                          value={proveedorModal.proveedor.rfc || ''}
+                          onChange={(e) => setProveedorModal(prev => ({
+                            ...prev,
+                            proveedor: { ...prev.proveedor, rfc: e.target.value }
+                          }))}
+                          className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-xl text-xs text-gray-900 dark:text-white outline-none focus:ring-1 focus:ring-indigo-500 uppercase"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Alias Comercial</label>
+                        <input
+                          type="text"
+                          placeholder="Nombre corto, Ej: Soriana, Papelería Lola"
+                          value={proveedorModal.proveedor.alias || ''}
+                          onChange={(e) => setProveedorModal(prev => ({
+                            ...prev,
+                            proveedor: { ...prev.proveedor, alias: e.target.value }
+                          }))}
+                          className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-xl text-xs text-gray-900 dark:text-white outline-none focus:ring-1 focus:ring-indigo-500"
+                        />
+                      </div>
+                      <div className="sm:col-span-2">
+                        <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Nombre Comercial *</label>
+                        <input
+                          type="text"
+                          required
+                          placeholder="Ej. Distribuidora de Alimentos S.A. de C.V."
+                          value={proveedorModal.proveedor.nombre_comercial || ''}
+                          onChange={(e) => setProveedorModal(prev => ({
+                            ...prev,
+                            proveedor: { ...prev.proveedor, nombre_comercial: e.target.value }
+                          }))}
+                          className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-xl text-xs text-gray-900 dark:text-white outline-none focus:ring-1 focus:ring-indigo-500"
+                        />
+                      </div>
+                      <div className="sm:col-span-2">
+                        <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Razón Social</label>
+                        <input
+                          type="text"
+                          placeholder="Nombre legal de facturación si difiere"
+                          value={proveedorModal.proveedor.razon_social || ''}
+                          onChange={(e) => setProveedorModal(prev => ({
+                            ...prev,
+                            proveedor: { ...prev.proveedor, razon_social: e.target.value }
+                          }))}
+                          className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-xl text-xs text-gray-900 dark:text-white outline-none focus:ring-1 focus:ring-indigo-500"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Sección 2: Contacto y Enlaces */}
+                  <div className="pt-2 border-t border-gray-100 dark:border-gray-800 space-y-3">
+                    <h4 className="text-[10px] font-extrabold uppercase text-gray-400 tracking-wider">
+                      Contacto y Canales
+                    </h4>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Teléfono</label>
+                        <input
+                          type="text"
+                          placeholder="10 dígitos"
+                          value={proveedorModal.proveedor.telefono || ''}
+                          onChange={(e) => setProveedorModal(prev => ({
+                            ...prev,
+                            proveedor: { ...prev.proveedor, telefono: e.target.value }
+                          }))}
+                          className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-xl text-xs text-gray-900 dark:text-white outline-none focus:ring-1 focus:ring-indigo-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Correo de Facturación</label>
+                        <input
+                          type="email"
+                          placeholder="proveedor@empresa.com"
+                          value={proveedorModal.proveedor.email || ''}
+                          onChange={(e) => setProveedorModal(prev => ({
+                            ...prev,
+                            proveedor: { ...prev.proveedor, email: e.target.value }
+                          }))}
+                          className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-xl text-xs text-gray-900 dark:text-white outline-none focus:ring-1 focus:ring-indigo-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Portal de Facturación (URL)</label>
+                        <input
+                          type="text"
+                          placeholder="https://portal.factura.com"
+                          value={proveedorModal.proveedor.portal_facturacion || ''}
+                          onChange={(e) => setProveedorModal(prev => ({
+                            ...prev,
+                            proveedor: { ...prev.proveedor, portal_facturacion: e.target.value }
+                          }))}
+                          className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-xl text-xs text-gray-900 dark:text-white outline-none focus:ring-1 focus:ring-indigo-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Sitio Web</label>
+                        <input
+                          type="text"
+                          placeholder="www.proveedor.com"
+                          value={proveedorModal.proveedor.sitio_web || ''}
+                          onChange={(e) => setProveedorModal(prev => ({
+                            ...prev,
+                            proveedor: { ...prev.proveedor, sitio_web: e.target.value }
+                          }))}
+                          className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-xl text-xs text-gray-900 dark:text-white outline-none focus:ring-1 focus:ring-indigo-500"
+                        />
+                      </div>
+                      <div className="sm:col-span-2">
+                        <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Dirección Física</label>
+                        <input
+                          type="text"
+                          placeholder="Calle, No, Colonia, CP, Ciudad"
+                          value={proveedorModal.proveedor.direccion || ''}
+                          onChange={(e) => setProveedorModal(prev => ({
+                            ...prev,
+                            proveedor: { ...prev.proveedor, direccion: e.target.value }
+                          }))}
+                          className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-xl text-xs text-gray-900 dark:text-white outline-none focus:ring-1 focus:ring-indigo-500"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Sección 3: Datos Bancarios */}
+                  <div className="pt-2 border-t border-gray-100 dark:border-gray-800 space-y-3">
+                    <h4 className="text-[10px] font-extrabold uppercase text-gray-400 tracking-wider">
+                      Información de Pago (Banco)
+                    </h4>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Nombre del Banco</label>
+                        <input
+                          type="text"
+                          placeholder="Ej. BBVA, Santander, Banamex"
+                          value={proveedorModal.proveedor.banco_nombre || ''}
+                          onChange={(e) => setProveedorModal(prev => ({
+                            ...prev,
+                            proveedor: { ...prev.proveedor, banco_nombre: e.target.value }
+                          }))}
+                          className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-xl text-xs text-gray-900 dark:text-white outline-none focus:ring-1 focus:ring-indigo-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Número de Cuenta / Tarjeta</label>
+                        <input
+                          type="text"
+                          placeholder="10 o 16 dígitos"
+                          value={proveedorModal.proveedor.cuenta_numero || ''}
+                          onChange={(e) => setProveedorModal(prev => ({
+                            ...prev,
+                            proveedor: { ...prev.proveedor, cuenta_numero: e.target.value }
+                          }))}
+                          className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-xl text-xs text-gray-900 dark:text-white outline-none focus:ring-1 focus:ring-indigo-500"
+                        />
+                      </div>
+                      <div className="sm:col-span-2">
+                        <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Cuenta CLABE (18 dígitos)</label>
+                        <input
+                          type="text"
+                          maxLength={18}
+                          placeholder="012345678901234567"
+                          value={proveedorModal.proveedor.cuenta_clabe || ''}
+                          onChange={(e) => setProveedorModal(prev => ({
+                            ...prev,
+                            proveedor: { ...prev.proveedor, cuenta_clabe: e.target.value }
+                          }))}
+                          className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-xl text-xs text-gray-900 dark:text-white outline-none focus:ring-1 focus:ring-indigo-500 font-mono tracking-wider"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Número de Convenio (CIE)</label>
+                        <input
+                          type="text"
+                          placeholder="Ej. 14598"
+                          value={proveedorModal.proveedor.convenio_numero || ''}
+                          onChange={(e) => setProveedorModal(prev => ({
+                            ...prev,
+                            proveedor: { ...prev.proveedor, convenio_numero: e.target.value }
+                          }))}
+                          className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-xl text-xs text-gray-900 dark:text-white outline-none focus:ring-1 focus:ring-indigo-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Referencia Bancaria Estándar</label>
+                        <input
+                          type="text"
+                          placeholder="Referencia para depósitos"
+                          value={proveedorModal.proveedor.referencia_bancaria || ''}
+                          onChange={(e) => setProveedorModal(prev => ({
+                            ...prev,
+                            proveedor: { ...prev.proveedor, referencia_bancaria: e.target.value }
+                          }))}
+                          className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-xl text-xs text-gray-900 dark:text-white outline-none focus:ring-1 focus:ring-indigo-500"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Notas */}
+                  <div className="pt-2 border-t border-gray-100 dark:border-gray-800">
+                    <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Comentarios / Notas internas</label>
+                    <textarea
+                      placeholder="Horarios de entrega, condiciones especiales, etc."
+                      value={proveedorModal.proveedor.comentarios || ''}
+                      onChange={(e) => setProveedorModal(prev => ({
+                        ...prev,
+                        proveedor: { ...prev.proveedor, comentarios: e.target.value }
+                      }))}
+                      rows={2}
+                      className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-xl text-xs text-gray-900 dark:text-white outline-none focus:ring-1 focus:ring-indigo-500"
+                    />
+                  </div>
+
+                  {/* Acciones */}
+                  <div className="flex gap-3 pt-4 border-t border-gray-100 dark:border-gray-800">
+                    <button
+                      type="button"
+                      onClick={() => setProveedorModal({ open: false, proveedor: null, loading: false, error: '' })}
+                      disabled={proveedorModal.loading}
+                      className="flex-1 py-2.5 border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-300 rounded-xl font-semibold hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors disabled:opacity-50"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={proveedorModal.loading}
+                      className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-xl shadow-md transition-colors flex items-center justify-center gap-1.5 disabled:opacity-50"
+                    >
+                      {proveedorModal.loading ? (
+                        <>
+                          <RefreshCw size={12} className="animate-spin" /> Guardando...
+                        </>
+                      ) : (
+                        <>
+                          <Save size={12} /> Guardar Proveedor
+                        </>
+                      )}
+                    </button>
+                  </div>
+
+                </form>
+
+              </div>
+            </div>
+          )}
+
           </div>
 
         </div>
-
-      </div>
 
       {/* MODAL SIMULACION CORREO */}
       {emailModal.open && emailModal.details && (

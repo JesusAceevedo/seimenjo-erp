@@ -71,6 +71,16 @@ export interface Proveedor {
   razon_social?: string;
   telefono?: string;
   email?: string;
+  alias?: string | null;
+  portal_facturacion?: string | null;
+  sitio_web?: string | null;
+  direccion?: string | null;
+  comentarios?: string | null;
+  banco_nombre?: string | null;
+  cuenta_clabe?: string | null;
+  cuenta_numero?: string | null;
+  convenio_numero?: string | null;
+  referencia_bancaria?: string | null;
 }
 
 export interface CategoriaGasto {
