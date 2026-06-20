@@ -5,6 +5,7 @@ import { X, FileText, Download, Loader2 } from 'lucide-react';
 import { obtenerSignedUrl } from '../actions';
 import { supabase } from '../../../../lib/supabase';
 import { XMLParser } from 'fast-xml-parser';
+import { QRCodeSVG } from 'qrcode.react';
 
 interface CfdiViewerModalProps {
   xmlUrl: string | null;
@@ -163,12 +164,43 @@ export default function CfdiViewerModal({ xmlUrl, onClose }: CfdiViewerModalProp
           </div>
         </div>
 
-        {/* METADATOS EXTRA */}
-        <div className="text-[10px] text-gray-400 border-t pt-4 break-words">
-          <p><strong>Forma de Pago:</strong> {cfdiData.FormaPago} | <strong>Método de Pago:</strong> {cfdiData.MetodoPago}</p>
-          <p><strong>Moneda:</strong> {cfdiData.Moneda}</p>
-          <p className="mt-2 text-gray-300">Sello Digital SAT: {timbre.SelloSAT?.substring(0, 50)}...</p>
-          <p className="text-gray-300">Este documento es una representación impresa de un CFDI.</p>
+        {/* METADATOS EXTRA Y TIMBRE FISCAL */}
+        <div className="bg-gray-50 p-3 rounded-lg border mb-6 text-xs text-gray-700">
+          <p><strong>Forma de Pago:</strong> {cfdiData.FormaPago || 'N/A'} | <strong>Método de Pago:</strong> {cfdiData.MetodoPago || 'N/A'} | <strong>Moneda:</strong> {cfdiData.Moneda || 'N/A'}</p>
+        </div>
+
+        <div className="border-t-2 border-gray-800 pt-4 mt-4">
+          <div className="grid grid-cols-1 sm:grid-cols-4 gap-6">
+            <div className="sm:col-span-1 flex justify-center items-start">
+              <QRCodeSVG 
+                value={`https://verificacfdi.facturaelectronica.sat.gob.mx/default.aspx?id=${timbre.UUID || ''}&re=${emisor.Rfc || ''}&rr=${receptor.Rfc || ''}&tt=${cfdiData.Total || ''}&fe=${cfdiData.Sello ? cfdiData.Sello.slice(-8) : ''}`} 
+                size={140} 
+                level={"M"} 
+              />
+            </div>
+            <div className="sm:col-span-3 text-[9px] text-gray-600 flex flex-col gap-2 break-all font-mono">
+              <div>
+                <p className="font-bold text-gray-900 mb-0.5">Sello Digital del Emisor (CFDI):</p>
+                <p>{cfdiData.Sello || 'No disponible'}</p>
+              </div>
+              <div>
+                <p className="font-bold text-gray-900 mb-0.5">Sello Digital del SAT:</p>
+                <p>{timbre.SelloSAT || 'No disponible'}</p>
+              </div>
+              <div>
+                <p className="font-bold text-gray-900 mb-0.5">Cadena Original del complemento de certificación digital del SAT:</p>
+                <p>{`||1.1|${timbre.UUID || ''}|${timbre.FechaTimbrado || ''}|${timbre.RfcProvCertif || ''}|${cfdiData.Sello || ''}|${timbre.NoCertificadoSAT || ''}||`}</p>
+              </div>
+              <div className="mt-2 text-gray-500 font-sans text-[10px]">
+                <p><strong>Folio Fiscal (UUID):</strong> {timbre.UUID}</p>
+                <p><strong>Fecha y Hora de Certificación:</strong> {timbre.FechaTimbrado}</p>
+                <p><strong>No. de Serie del Certificado del SAT:</strong> {timbre.NoCertificadoSAT}</p>
+                <p><strong>No. de Serie del Certificado del Emisor:</strong> {cfdiData.NoCertificado}</p>
+                <p><strong>RfcProvCertif:</strong> {timbre.RfcProvCertif || 'N/A'}</p>
+              </div>
+            </div>
+          </div>
+          <p className="text-center text-gray-400 text-xs mt-6 font-sans">Este documento es una representación impresa de un CFDI.</p>
         </div>
       </div>
     );

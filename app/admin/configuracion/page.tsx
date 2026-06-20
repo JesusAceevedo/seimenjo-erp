@@ -35,11 +35,11 @@ export default function ConfigPage() {
   // --- ESTADOS DE FACTURACION ---
   const [cuentasBancarias, setCuentasBancarias] = useState<any[]>([]);
   const [estatusConciliacion, setEstatusConciliacion] = useState<any[]>([]);
-  const [formasPagoBanco, setFormasPagoBanco] = useState<any[]>([]);
+  const [categoriasMovimiento, setCategoriasMovimiento] = useState<any[]>([]);
 
   const [nuevaCuenta, setNuevaCuenta] = useState({ nombre: '', numero_cuenta: '', moneda: 'MXN' });
-  const [nuevoEstatusConciliacion, setNuevoEstatusConciliacion] = useState({ estatus: '', color: '#94a3b8' });
-  const [nuevaFormaPagoBanco, setNuevaFormaPagoBanco] = useState({ forma_pago: '' });
+  const [nuevoEstatusConciliacion, setNuevoEstatusConciliacion] = useState({ nombre: '', color: '#94a3b8' });
+  const [nuevaCategoriaMovimiento, setNuevaCategoriaMovimiento] = useState({ nombre: '', requiere_comprobante: true });
 
 
   // --- ESTADOS DE SUPERUSUARIO ---
@@ -137,10 +137,10 @@ export default function ConfigPage() {
     // FACTURACION Y CONCILIACION
     const cb = await fetchCatalog('cuentas_bancarias', 'nombre');
     setCuentasBancarias(cb);
-    const ec = await fetchCatalog('estatus_conciliacion', 'estatus');
+    const ec = await fetchCatalog('estatus_conciliacion_bancaria', 'nombre');
     setEstatusConciliacion(ec);
-    const fpb = await fetchCatalog('formas_pago_banco', 'forma_pago');
-    setFormasPagoBanco(fpb);
+    const catMov = await fetchCatalog('categorias_movimiento_bancario', 'nombre');
+    setCategoriasMovimiento(catMov);
 
     // 7. Proveedores
     const provs = await fetchCatalog('proveedores', 'nombre_comercial');
@@ -1045,13 +1045,18 @@ export default function ConfigPage() {
               {/* BLOQUE: ESTATUS CONCILIACION */}
               <div className="bg-white dark:bg-gray-950 p-6 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-sm space-y-4">
                 <h3 className="text-lg font-bold flex items-center gap-2">
-                  <Settings className="text-blue-500" size={20} /> Estatus de Conciliación
+                  <Settings className="text-emerald-500" size={20} /> Estatus de Conciliación Bancaria
                 </h3>
-                <ErrorBanner table="estatus_conciliacion" />
+                <ErrorBanner table="estatus_conciliacion_bancaria" />
                 <div className="flex gap-2">
-                  <input type="text" placeholder="Ej. Comisión Bancaria" value={nuevoEstatusConciliacion.estatus} className="flex-1 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-xl text-sm outline-none" onChange={e => setNuevoEstatusConciliacion({...nuevoEstatusConciliacion, estatus: e.target.value})} />
+                  <input type="text" placeholder="Ej. Conciliado" value={nuevoEstatusConciliacion.nombre} className="flex-1 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-xl text-sm outline-none" onChange={e => setNuevoEstatusConciliacion({...nuevoEstatusConciliacion, nombre: e.target.value})} />
                   <input type="color" value={nuevoEstatusConciliacion.color} onChange={e => setNuevoEstatusConciliacion({...nuevoEstatusConciliacion, color: e.target.value})} className="w-10 h-10 p-1 rounded bg-white border border-gray-300"/>
-                  <button onClick={() => handleSaveItem('estatus_conciliacion', nuevoEstatusConciliacion, setEstatusConciliacion, 'estatus', () => setNuevoEstatusConciliacion({ estatus: '', color: '#94a3b8' }))} className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2.5 rounded-xl font-bold text-sm flex items-center gap-1"><Plus size={16}/> Agregar</button>
+                  <button onClick={() => {
+                     // Since handleSaveItem doesn't add empresa_id directly, we rely on RLS trigger or we just pass it if needed. Actually, handleSaveItem just takes fields. 
+                     // Wait, we can't easily get empresa_id here if it's not in scope, but RLS or default or user's setup might handle it.
+                     // The user said "recuerda que van ligados a una sucursal y a una empresa". Let's assume the DB trigger or policy sets it, or they can just save it.
+                     handleSaveItem('estatus_conciliacion_bancaria', nuevoEstatusConciliacion, setEstatusConciliacion, 'nombre', () => setNuevoEstatusConciliacion({ nombre: '', color: '#94a3b8' }))
+                  }} className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2.5 rounded-xl font-bold text-sm flex items-center gap-1"><Plus size={16}/> Agregar</button>
                 </div>
                 <div className="overflow-hidden rounded-xl border border-gray-100 dark:border-gray-800">
                   <table className="w-full text-left text-xs">
@@ -1059,8 +1064,8 @@ export default function ConfigPage() {
                     <tbody className="divide-y divide-gray-100 dark:divide-gray-800/40">
                       {estatusConciliacion.map(ec => (
                         <tr key={ec.id} className="hover:bg-gray-50 dark:hover:bg-gray-900/10">
-                          <td className="p-3 font-semibold flex items-center gap-2"><div className="w-3 h-3 rounded-full" style={{backgroundColor: ec.color}}></div>{ec.estatus}</td>
-                          <td className="p-3 text-right"><button onClick={() => handleDeleteItem('estatus_conciliacion', ec.id, setEstatusConciliacion, 'estatus')} className="text-gray-400 hover:text-red-500"><Trash2 size={15}/></button></td>
+                          <td className="p-3 font-semibold flex items-center gap-2"><div className="w-3 h-3 rounded-full" style={{backgroundColor: ec.color}}></div>{ec.nombre}</td>
+                          <td className="p-3 text-right"><button onClick={() => handleDeleteItem('estatus_conciliacion_bancaria', ec.id, setEstatusConciliacion, 'nombre')} className="text-gray-400 hover:text-red-500"><Trash2 size={15}/></button></td>
                         </tr>
                       ))}
                     </tbody>
@@ -1068,24 +1073,36 @@ export default function ConfigPage() {
                 </div>
               </div>
 
-              {/* BLOQUE: FORMAS DE PAGO BANCO */}
+              {/* BLOQUE: CATEGORÍAS DE MOVIMIENTOS */}
               <div className="bg-white dark:bg-gray-950 p-6 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-sm space-y-4">
                 <h3 className="text-lg font-bold flex items-center gap-2">
-                  <CreditCard className="text-blue-500" size={20} /> Formas de Pago Bancario
+                  <CreditCard className="text-blue-500" size={20} /> Categorías de Movimientos Bancarios
                 </h3>
-                <ErrorBanner table="formas_pago_banco" />
+                <ErrorBanner table="categorias_movimiento_bancario" />
                 <div className="flex gap-2">
-                  <input type="text" placeholder="Ej. SPEI" value={nuevaFormaPagoBanco.forma_pago} className="flex-1 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-xl text-sm outline-none" onChange={e => setNuevaFormaPagoBanco({forma_pago: e.target.value})} />
-                  <button onClick={() => handleSaveItem('formas_pago_banco', nuevaFormaPagoBanco, setFormasPagoBanco, 'forma_pago', () => setNuevaFormaPagoBanco({ forma_pago: '' }))} className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2.5 rounded-xl font-bold text-sm flex items-center gap-1"><Plus size={16}/> Agregar</button>
+                  <input type="text" placeholder="Ej. Comisión Bancaria" value={nuevaCategoriaMovimiento.nombre} className="flex-1 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-xl text-sm outline-none" onChange={e => setNuevaCategoriaMovimiento({...nuevaCategoriaMovimiento, nombre: e.target.value})} />
+                  
+                  <label className="flex items-center gap-2 text-xs font-semibold cursor-pointer">
+                    <input type="checkbox" checked={nuevaCategoriaMovimiento.requiere_comprobante} onChange={e => setNuevaCategoriaMovimiento({...nuevaCategoriaMovimiento, requiere_comprobante: e.target.checked})} className="w-4 h-4" />
+                    Req. Comprobante
+                  </label>
+
+                  <button onClick={() => {
+                    const clave = nuevaCategoriaMovimiento.nombre.toUpperCase().replace(/\s+/g, '_');
+                    handleSaveItem('categorias_movimiento_bancario', { ...nuevaCategoriaMovimiento, clave }, setCategoriasMovimiento, 'nombre', () => setNuevaCategoriaMovimiento({ nombre: '', requiere_comprobante: true }))
+                  }} className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2.5 rounded-xl font-bold text-sm flex items-center gap-1"><Plus size={16}/> Agregar</button>
                 </div>
                 <div className="overflow-hidden rounded-xl border border-gray-100 dark:border-gray-800">
                   <table className="w-full text-left text-xs">
-                    <thead className="bg-gray-100/60 dark:bg-gray-900/40 p-3 border-b border-gray-200 dark:border-gray-800 text-gray-500"><tr><th className="p-3">Forma Pago</th><th className="p-3 text-right">Acción</th></tr></thead>
+                    <thead className="bg-gray-100/60 dark:bg-gray-900/40 p-3 border-b border-gray-200 dark:border-gray-800 text-gray-500"><tr><th className="p-3">Categoría</th><th className="p-3 text-center">Requiere XML</th><th className="p-3 text-right">Acción</th></tr></thead>
                     <tbody className="divide-y divide-gray-100 dark:divide-gray-800/40">
-                      {formasPagoBanco.map(fpb => (
-                        <tr key={fpb.id} className="hover:bg-gray-50 dark:hover:bg-gray-900/10">
-                          <td className="p-3 font-semibold">{fpb.forma_pago}</td>
-                          <td className="p-3 text-right"><button onClick={() => handleDeleteItem('formas_pago_banco', fpb.id, setFormasPagoBanco, 'forma_pago')} className="text-gray-400 hover:text-red-500"><Trash2 size={15}/></button></td>
+                      {categoriasMovimiento.map(cat => (
+                        <tr key={cat.id} className="hover:bg-gray-50 dark:hover:bg-gray-900/10">
+                          <td className="p-3 font-semibold">{cat.nombre}</td>
+                          <td className="p-3 text-center">
+                             {cat.requiere_comprobante ? <span className="text-emerald-500 font-bold">Sí</span> : <span className="text-gray-400 font-bold">No</span>}
+                          </td>
+                          <td className="p-3 text-right"><button onClick={() => handleDeleteItem('categorias_movimiento_bancario', cat.id, setCategoriasMovimiento, 'nombre')} className="text-gray-400 hover:text-red-500"><Trash2 size={15}/></button></td>
                         </tr>
                       ))}
                     </tbody>

@@ -252,7 +252,7 @@ export default function IngresosTab({
                                 <FileText size={13} />
                               </button>
                             ))}
-                            {!inv.pdf_url && inv.xml_url && onViewCfdi && (
+                            {inv.xml_url && onViewCfdi && (
                               <button onClick={() => onViewCfdi(inv.xml_url!.split(',')[0])} title="Ver XML"
                                 className="p-1.5 bg-indigo-50 dark:bg-indigo-900/20 hover:bg-indigo-100 rounded border border-indigo-200 dark:border-indigo-900/50 text-indigo-500">
                                 <Eye size={13} />

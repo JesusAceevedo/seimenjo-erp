@@ -35,6 +35,7 @@ import {
 import EgresosTab from './_components/EgresosTab';
 import IngresosTab from './_components/IngresosTab';
 import BancoTab from './_components/BancoTab';
+import CfdiViewerModal from './_components/CfdiViewerModal';
 interface GastoFacturado {
   id: string;
   fecha_timbrado?: string;
@@ -44,6 +45,7 @@ interface GastoFacturado {
   monto: number;
   iva_acreditable?: number;
   proveedores?: { nombre_comercial: string; rfc: string };
+  categoria_id?: string | null;
   categorias_gasto?: { id: string; nombre: string } | null;
   xml_url?: string;
   pdf_url?: string;
@@ -126,6 +128,7 @@ export default function AdvancedBillingModule() {
 
   // --- TAB ACTIVAS EN LA VISUALIZACIÓN ---
   const [activeTab, setActiveTab] = useState<'egresos' | 'ingresos' | 'banco'>('egresos');
+  const [cfdiViewerUrl, setCfdiViewerUrl] = useState<string | null>(null);
 
   // --- ESTADOS DE PROVEEDORES ---
   const [proveedores, setProveedores] = useState<any[]>([]);
@@ -241,6 +244,7 @@ export default function AdvancedBillingModule() {
 
   // --- ESTADOS DE DATOS ---
   const [gastosFacturados, setGastosFacturados] = useState<GastoFacturado[]>([]);
+  const [categoriasGasto, setCategoriasGasto] = useState<any[]>([]);
   const [cuentasBancarias, setCuentasBancarias] = useState<any[]>([]);
   const [ventasFacturadas, setVentasFacturadas] = useState<VentaFacturada[]>([]);
   const [pedidosPendientes, setPedidosPendientes] = useState<PedidoPendiente[]>([]);
@@ -302,6 +306,9 @@ export default function AdvancedBillingModule() {
         .not('uuid_fiscal', 'is', null)
         .order('fecha_gasto', { ascending: false });
       setGastosFacturados(gFac || []);
+
+      const { data: cGasto } = await supabase.from('categorias_gasto').select('*').order('nombre');
+      setCategoriasGasto(cGasto || []);
 
       // 2. Todas las Ventas (Facturadas y no Facturadas)
       const { data: vAll } = await supabase
@@ -538,6 +545,24 @@ export default function AdvancedBillingModule() {
     } catch (err: any) {
       console.error(err);
       alert('Error de red al actualizar visibilidad.');
+    }
+  };
+
+  const handleUpdateCategoriaGasto = async (gastoId: string, categoriaId: string | null) => {
+    try {
+      const catId = categoriaId === '' ? null : categoriaId;
+      const { error } = await supabase
+        .from('gastos')
+        .update({ categoria_id: catId })
+        .eq('id', gastoId);
+      
+      if (error) throw error;
+      
+      // Update local state without fetching all
+      setGastosFacturados(prev => prev.map(g => g.id === gastoId ? { ...g, categoria_id: catId } : g));
+    } catch (err) {
+      console.error(err);
+      alert('Error al actualizar categoría del gasto.');
     }
   };
 
@@ -1528,10 +1553,11 @@ export default function AdvancedBillingModule() {
             {activeTab === 'egresos' && (
               <EgresosTab
                 gastosFacturados={gastosFacturados}
-                categorias={[]}
-                onUpdateCategoria={() => {}}
+                categorias={categoriasGasto}
+                onUpdateCategoria={handleUpdateCategoriaGasto}
                 onOpenComprobacionAcumulada={() => setComprobacionAcumuladaModal(prev => ({ ...prev, open: true }))}
                 onDownloadFile={handleDownloadFile}
+                onViewCfdi={setCfdiViewerUrl}
               />
             )}
 
@@ -1542,6 +1568,7 @@ export default function AdvancedBillingModule() {
                 onOpenFacturacionAcumulada={() => setFacturacionAcumuladaModal(prev => ({ ...prev, open: true }))}
                 onDownloadFile={handleDownloadFile}
                 onSendEmail={handleSendEmail}
+                onViewCfdi={setCfdiViewerUrl}
               />
             )}
 
@@ -2399,6 +2426,14 @@ export default function AdvancedBillingModule() {
 
           </div>
         </div>
+      )}
+
+      {/* MODAL VISOR CFDI */}
+      {cfdiViewerUrl && (
+        <CfdiViewerModal 
+          xmlUrl={cfdiViewerUrl} 
+          onClose={() => setCfdiViewerUrl(null)} 
+        />
       )}
     </div>
   );

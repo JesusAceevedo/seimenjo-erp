@@ -270,7 +270,7 @@ export default function EgresosTab({
                         {arr.length > 1 && <span className="text-[9px] font-bold">{idx + 1}</span>}
                       </button>
                     ))}
-                    {!g.pdf_url && g.xml_url && onViewCfdi && (
+                    {g.xml_url && onViewCfdi && (
                       <button
                         onClick={() => onViewCfdi(g.xml_url!.split(',')[0])}
                         title="Ver representación impresa del XML"
