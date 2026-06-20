@@ -59,8 +59,8 @@ interface PedidoPendiente {
 
 export interface BancoTabProps {
   // Sub-tab activo
-  bancoSubTab: 'movimientos' | 'global' | 'catalogo' | 'formas_pago';
-  setBancoSubTab: (sub: 'movimientos' | 'global' | 'catalogo' | 'formas_pago') => void;
+  bancoSubTab: 'movimientos' | 'global';
+  setBancoSubTab: (sub: 'movimientos' | 'global') => void;
 
   cuentasBancarias?: any[];
   gastosFacturados?: any[];
@@ -200,9 +200,7 @@ export default function BancoTab({
         {([
           { key: 'movimientos', label: 'Movimientos de Cuenta', icon: <List size={14} /> },
           { key: 'global', label: 'Facturación Global (Ingresos)', icon: <Scale size={14} /> },
-          { key: 'catalogo', label: 'Catálogo de Estatus', icon: <Settings size={14} /> },
-          { key: 'formas_pago', label: 'Métodos de Pago', icon: <CreditCard size={14} /> },
-        ] as const).map(({ key, label, icon }) => (
+          ] as const).map(({ key, label, icon }) => (
           <button
             key={key}
             onClick={() => {
@@ -605,137 +603,9 @@ export default function BancoTab({
           </div>
         )}
 
-        {/* ── SUB-TAB 3: CATÁLOGO DE ESTATUS ──────────────────────────────── */}
-        {bancoSubTab === 'catalogo' && (
-          <div className="flex-1 p-4 overflow-auto">
-            <div className="flex justify-between items-center mb-4">
-              <h4 className="text-sm font-bold text-gray-700 dark:text-gray-300">Catálogo de Estatus de Conciliación</h4>
-              <button
-                onClick={() => setCatalogEditModal({ open: true, clave: '', nombre: '', descripcion: '', color: '#9CA3AF', loading: false })}
-                className="inline-flex items-center gap-2 px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-bold shadow-md transition-colors">
-                <Plus size={14} /> Nuevo Estatus
-              </button>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              {estatusCatalog.map((e) => (
-                <div key={e.id} className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-xl p-4 shadow-sm flex items-start justify-between gap-3">
-                  <div className="flex items-start gap-3">
-                    <div className="w-4 h-4 rounded-full mt-0.5 shrink-0 border-2" style={{ backgroundColor: e.color || '#9CA3AF', borderColor: `${e.color || '#9CA3AF'}80` }} />
-                    <div>
-                      <div className="font-bold text-sm text-gray-900 dark:text-white">{e.nombre}</div>
-                      <div className="text-[10px] font-mono text-gray-400">{e.clave}</div>
-                      {e.descripcion && <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">{e.descripcion}</div>}
-                    </div>
-                  </div>
-                  <div className="flex gap-1 shrink-0">
-                    <button onClick={() => setCatalogEditModal({ open: true, id: e.id, clave: e.clave, nombre: e.nombre, descripcion: e.descripcion || '', color: e.color || '#9CA3AF', loading: false })}
-                      className="p-1.5 rounded hover:bg-amber-500/10 text-gray-400 hover:text-amber-500 transition-colors"><Settings size={13} /></button>
-                    <button onClick={() => handleDeleteCatalogItem(e.id)}
-                      className="p-1.5 rounded hover:bg-red-500/10 text-gray-400 hover:text-red-500 transition-colors"><Trash2 size={13} /></button>
-                  </div>
-                </div>
-              ))}
-            </div>
-            {/* Modal edición catálogo */}
-            {catalogEditModal.open && (
-              <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4"
-                onClick={(e) => { if (e.target === e.currentTarget) setCatalogEditModal((p) => ({ ...p, open: false })); }}>
-                <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-6 rounded-2xl w-full max-w-md shadow-2xl space-y-4">
-                  <h3 className="text-lg font-bold">{catalogEditModal.id ? 'Editar' : 'Nuevo'} Estatus de Conciliación</h3>
-                  <div className="space-y-3">
-                    {[
-                      { label: 'Clave (identificador único)', key: 'clave', placeholder: 'ej: pendiente, comprobado' },
-                      { label: 'Nombre visible', key: 'nombre', placeholder: 'ej: Pendiente, Comprobado' },
-                      { label: 'Descripción (opcional)', key: 'descripcion', placeholder: 'Descripción breve...' },
-                    ].map(({ label, key, placeholder }) => (
-                      <div key={key}>
-                        <label className="text-xs font-bold text-gray-500 block mb-1">{label}</label>
-                        <input type="text" value={(catalogEditModal as any)[key]} placeholder={placeholder}
-                          onChange={(e) => setCatalogEditModal((p) => ({ ...p, [key]: e.target.value }))}
-                          className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs text-gray-900 dark:text-white focus:ring-1 focus:ring-amber-500 outline-none transition-all" />
-                      </div>
-                    ))}
-                    <div>
-                      <label className="text-xs font-bold text-gray-500 block mb-1">Color del badge</label>
-                      <div className="flex items-center gap-3">
-                        <input type="color" value={catalogEditModal.color}
-                          onChange={(e) => setCatalogEditModal((p) => ({ ...p, color: e.target.value }))}
-                          className="w-10 h-10 rounded-lg border border-gray-300 cursor-pointer" />
-                        <span className="text-xs font-mono text-gray-500">{catalogEditModal.color}</span>
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold border"
-                          style={{ backgroundColor: `${catalogEditModal.color}20`, borderColor: `${catalogEditModal.color}50`, color: catalogEditModal.color }}>
-                          {catalogEditModal.nombre || 'Preview'}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                  <div className="flex gap-3 pt-2">
-                    <button onClick={() => setCatalogEditModal((p) => ({ ...p, open: false }))}
-                      className="flex-1 py-2 border border-gray-300 dark:border-gray-700 rounded-lg text-xs font-semibold hover:bg-gray-100 dark:hover:bg-gray-800">
-                      Cancelar
-                    </button>
-                    <button onClick={handleSaveCatalogItem} disabled={catalogEditModal.loading || !catalogEditModal.clave || !catalogEditModal.nombre}
-                      className="flex-1 py-2 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-lg text-xs font-bold shadow-md">
-                      {catalogEditModal.loading ? 'Guardando...' : 'Guardar'}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
+        
 
-        {/* ── SUB-TAB 4: MÉTODOS DE PAGO ──────────────────────────────────── */}
-        {bancoSubTab === 'formas_pago' && (
-          <div className="flex-1 p-4 overflow-auto">
-            <div className="flex justify-between items-center mb-4">
-              <h4 className="text-sm font-bold text-gray-700 dark:text-gray-300">Catálogo de Métodos de Pago</h4>
-              <button
-                onClick={() => setFormasPagoModal({ open: true, nombre: '', loading: false })}
-                className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold shadow-md transition-colors">
-                <Plus size={14} /> Nuevo Método
-              </button>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              {formasPago.map((fp) => (
-                <div key={fp.id} className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-xl p-4 shadow-sm flex items-center justify-between gap-3">
-                  <div className="font-bold text-sm text-gray-900 dark:text-white">{fp.nombre}</div>
-                  <div className="flex gap-1">
-                    <button onClick={() => setFormasPagoModal({ open: true, id: fp.id, nombre: fp.nombre, loading: false })}
-                      className="p-1.5 rounded hover:bg-blue-500/10 text-gray-400 hover:text-blue-500 transition-colors"><Settings size={13} /></button>
-                    <button onClick={() => handleDeleteFormaPago(fp.id)}
-                      className="p-1.5 rounded hover:bg-red-500/10 text-gray-400 hover:text-red-500 transition-colors"><Trash2 size={13} /></button>
-                  </div>
-                </div>
-              ))}
-            </div>
-            {/* Modal forma de pago */}
-            {formasPagoModal.open && (
-              <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4"
-                onClick={(e) => { if (e.target === e.currentTarget) setFormasPagoModal((p) => ({ ...p, open: false })); }}>
-                <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-6 rounded-2xl w-full max-w-sm shadow-2xl space-y-4">
-                  <h3 className="text-lg font-bold">{formasPagoModal.id ? 'Editar' : 'Nuevo'} Método de Pago</h3>
-                  <div>
-                    <label className="text-xs font-bold text-gray-500 block mb-1">Nombre del método</label>
-                    <input type="text" value={formasPagoModal.nombre} placeholder="ej: Efectivo, Transferencia..."
-                      onChange={(e) => setFormasPagoModal((p) => ({ ...p, nombre: e.target.value }))}
-                      className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs text-gray-900 dark:text-white focus:ring-1 focus:ring-blue-500 outline-none transition-all" />
-                  </div>
-                  <div className="flex gap-2.5 pt-4 border-t border-gray-200 dark:border-gray-800">
-                    <button onClick={() => setFormasPagoModal((p) => ({ ...p, open: false }))} disabled={formasPagoModal.loading}
-                      className="flex-1 py-2 border border-gray-300 dark:border-gray-700 rounded-lg text-xs font-semibold hover:bg-gray-100 dark:hover:bg-gray-800">
-                      Cancelar
-                    </button>
-                    <button onClick={handleSaveFormaPago} disabled={formasPagoModal.loading || !formasPagoModal.nombre.trim()}
-                      className="flex-1 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-lg text-xs font-bold shadow-md">
-                      {formasPagoModal.loading ? 'Guardando...' : 'Guardar Método'}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
+        
 
       </div>
 

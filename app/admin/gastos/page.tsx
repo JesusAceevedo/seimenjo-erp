@@ -125,7 +125,7 @@ export default function AdvancedBillingModule() {
   const { isDarkMode, toggleDarkMode } = useThemeMode();
 
   // --- TAB ACTIVAS EN LA VISUALIZACIÓN ---
-  const [activeTab, setActiveTab] = useState<'egresos' | 'ingresos' | 'banco' | 'proveedores'>('egresos');
+  const [activeTab, setActiveTab] = useState<'egresos' | 'ingresos' | 'banco'>('egresos');
 
   // --- ESTADOS DE PROVEEDORES ---
   const [proveedores, setProveedores] = useState<any[]>([]);
@@ -149,7 +149,7 @@ export default function AdvancedBillingModule() {
   const [movimientos, setMovimientos] = useState<any[]>([]);
   const [estatusCatalog, setEstatusCatalog] = useState<any[]>([]);
   const [formasPago, setFormasPago] = useState<any[]>([]);
-  const [bancoSubTab, setBancoSubTab] = useState<'movimientos' | 'global' | 'catalogo' | 'formas_pago'>('movimientos');
+  const [bancoSubTab, setBancoSubTab] = useState<'movimientos' | 'global'>('movimientos');
 
   const [formasPagoModal, setFormasPagoModal] = useState<{
     open: boolean;
@@ -1856,7 +1856,7 @@ export default function AdvancedBillingModule() {
           )}
 
           {/* COLUMNA DERECHA: PESTAÑAS DE VISUALIZACIÓN */}
-          <div className={`${(activeTab === 'banco' || activeTab === 'proveedores') ? 'lg:col-span-3' : 'lg:col-span-2'} bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-2xl shadow-xl flex flex-col overflow-hidden h-full`}>
+          <div className={`${(activeTab === 'banco') ? 'lg:col-span-3' : 'lg:col-span-2'} bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-2xl shadow-xl flex flex-col overflow-hidden h-full`}>
 
             {/* PESTAÑAS */}
             <div className="flex border-b border-gray-200 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-900/30">
@@ -1887,15 +1887,7 @@ export default function AdvancedBillingModule() {
               >
                 <CreditCard size={16} /> Conciliación Bancaria
               </button>
-              <button
-                onClick={() => setActiveTab('proveedores')}
-                className={`flex-1 py-4 text-sm font-bold border-b-2 transition-all flex items-center justify-center gap-2 ${activeTab === 'proveedores'
-                    ? 'border-indigo-500 text-indigo-500'
-                    : 'border-transparent text-gray-400 hover:text-gray-900 dark:hover:text-white'
-                  }`}
-              >
-                <Users size={16} /> Proveedores
-              </button>
+              
             </div>
 
             {/* TAB 1: EGRESOS */}

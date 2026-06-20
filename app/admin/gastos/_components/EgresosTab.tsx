@@ -4,8 +4,9 @@
 // Tab de Egresos/Gastos facturados — con paginación, búsqueda, columnas enriquecidas y clasificación inline.
 
 import React, { useState, useMemo } from 'react';
-import { Plus, FileCode, FileText, CreditCard, Search, ChevronLeft, ChevronRight, Tag, Filter, Eye } from 'lucide-react';
+import { UploadCloud, Plus, FileCode, FileText, CreditCard, Search, ChevronLeft, ChevronRight, Tag, Filter, Eye } from 'lucide-react';
 import { formatCurrency } from '../../../../lib/formatters';
+import CargaXmlMasivaModal from './CargaXmlMasivaModal';
 import type { GastoFacturado, CategoriaGasto } from '../../types';
 
 // ── Props ─────────────────────────────────────────────────────────────────────
@@ -52,6 +53,7 @@ export default function EgresosTab({
 }: EgresosTabProps) {
 
   // Paginación
+  const [showXmlModal, setShowXmlModal] = useState(false);
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(PAGE_SIZE_OPTIONS[0]);
 
@@ -341,7 +343,18 @@ export default function EgresosTab({
             »
           </button>
         </div>
-      </div>
+      
+      {showXmlModal && (
+        <CargaXmlMasivaModal
+          tipo="gasto"
+          onClose={() => setShowXmlModal(false)}
+          onSuccess={() => {
+            setShowXmlModal(false);
+            window.location.reload();
+          }}
+        />
+      )}
+</div>
     </div>
   );
 }
