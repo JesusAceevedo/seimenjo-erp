@@ -7,6 +7,7 @@ import React, { useState, useMemo } from 'react';
 import { UploadCloud, Plus, FileCode, FileText, CreditCard, Mail, Search, ChevronLeft, ChevronRight, CheckCircle, Clock, Eye } from 'lucide-react';
 import { formatCurrency } from '../../../../lib/formatters';
 import CargaXmlMasivaModal from './CargaXmlMasivaModal';
+import CargaManualModal from './CargaManualModal';
 import type { VentaFacturada } from '../../types';
 
 // ── Props ─────────────────────────────────────────────────────────────────────
@@ -57,6 +58,7 @@ export default function IngresosTab({
 }: IngresosTabProps) {
 
   const [showXmlModal, setShowXmlModal] = useState(false);
+  const [manualModal, setManualModal] = useState<{isOpen: boolean, id?: string}>({isOpen: false});
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(PAGE_SIZE_OPTIONS[0]);
   const [search, setSearch] = useState('');
@@ -327,6 +329,18 @@ export default function IngresosTab({
             className="px-2 py-1 rounded-lg border border-gray-200 dark:border-gray-700 text-xs disabled:opacity-40 hover:bg-gray-100 dark:hover:bg-gray-800 font-bold text-gray-500">»</button>
         </div>
       
+      
+      {manualModal.isOpen && (
+        <CargaManualModal
+          tipo="venta"
+          registroId={manualModal.id}
+          onClose={() => setManualModal({isOpen: false})}
+          onSuccess={() => {
+            setManualModal({isOpen: false});
+            window.location.reload();
+          }}
+        />
+      )}
       {showXmlModal && (
         <CargaXmlMasivaModal
           tipo="venta"

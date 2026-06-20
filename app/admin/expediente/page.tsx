@@ -1,6 +1,8 @@
 'use client';
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../../../lib/supabase';
+import CargaManualModal from '../gastos/_components/CargaManualModal';
+import { Plus } from 'lucide-react';
 import {
   FileText, FileCode, CheckCircle, AlertTriangle, XCircle, Search, Calendar,
   Download, RefreshCw, Layers, DollarSign, CreditCard
@@ -27,6 +29,7 @@ export default function ExpedienteDigital() {
   const [filterTipo, setFilterTipo] = useState('todos');
   const [filterEstatus, setFilterEstatus] = useState('todos');
   
+  const [manualModal, setManualModal] = useState<{isOpen: boolean, id?: string, tipo?: 'gasto'|'venta'}>({isOpen: false});
   const [viewer, setViewer] = useState<{ open: boolean; title: string; docs: any[] }>({
     open: false, title: '', docs: []
   });
@@ -338,6 +341,18 @@ export default function ExpedienteDigital() {
         </div>
       </div>
 
+      
+      {manualModal.isOpen && (
+        <CargaManualModal
+          tipo={manualModal.tipo || 'gasto'}
+          registroId={manualModal.id}
+          onClose={() => setManualModal({isOpen: false})}
+          onSuccess={() => {
+            setManualModal({isOpen: false});
+            window.location.reload();
+          }}
+        />
+      )}
       <DocumentViewer
         open={viewer.open}
         onClose={() => setViewer({ open: false, title: '', docs: [] })}

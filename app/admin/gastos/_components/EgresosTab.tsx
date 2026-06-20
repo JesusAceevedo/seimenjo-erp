@@ -7,6 +7,7 @@ import React, { useState, useMemo } from 'react';
 import { UploadCloud, Plus, FileCode, FileText, CreditCard, Search, ChevronLeft, ChevronRight, Tag, Filter, Eye } from 'lucide-react';
 import { formatCurrency } from '../../../../lib/formatters';
 import CargaXmlMasivaModal from './CargaXmlMasivaModal';
+import CargaManualModal from './CargaManualModal';
 import type { GastoFacturado, CategoriaGasto } from '../../types';
 
 // ── Props ─────────────────────────────────────────────────────────────────────
@@ -54,6 +55,7 @@ export default function EgresosTab({
 
   // Paginación
   const [showXmlModal, setShowXmlModal] = useState(false);
+  const [manualModal, setManualModal] = useState<{isOpen: boolean, id?: string}>({isOpen: false});
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(PAGE_SIZE_OPTIONS[0]);
 
@@ -354,6 +356,18 @@ export default function EgresosTab({
           </button>
         </div>
       
+      
+      {manualModal.isOpen && (
+        <CargaManualModal
+          tipo="gasto"
+          registroId={manualModal.id}
+          onClose={() => setManualModal({isOpen: false})}
+          onSuccess={() => {
+            setManualModal({isOpen: false});
+            window.location.reload();
+          }}
+        />
+      )}
       {showXmlModal && (
         <CargaXmlMasivaModal
           tipo="gasto"
