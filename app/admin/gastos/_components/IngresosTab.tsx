@@ -100,8 +100,18 @@ export default function IngresosTab({
               {filtrados.length} registros
             </span>
           </div>
-          <button
-            onClick={onOpenFacturacionAcumulada}
+          
+          <div className="flex gap-2">
+            <button
+              onClick={() => setShowXmlModal(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-xs font-bold shadow-sm transition-colors"
+            >
+              <UploadCloud size={13} /> Subir Facturas (XML)
+            </button>
+          </div>
+            <button
+              onClick={onOpenFacturacionAcumulada}
+
             className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold shadow-sm transition-colors"
           >
             <Plus size={13} /> Facturación Acumulada
