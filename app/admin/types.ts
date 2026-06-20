@@ -159,8 +159,10 @@ export interface GastoFacturado {
   monto: number;
   subtotal?: number;
   iva_acreditable?: number;
+  metodo_pago?: string;
+  categoria_id?: string | null;
   proveedores?: { nombre_comercial: string; rfc: string };
-  categorias_gasto?: { nombre: string };
+  categorias_gasto?: { id: string; nombre: string } | null;
   xml_url?: string;
   pdf_url?: string;
   ticket_url?: string;
@@ -209,6 +211,14 @@ export interface GastoReconciliable {
 // Módulo de Conciliación Bancaria
 // ---------------------------------------------------------------------------
 
+export interface CuentaBancaria {
+  id: string;
+  nombre: string;
+  numero_cuenta?: string;
+  saldo_inicial?: number;
+  moneda?: string;
+}
+
 export interface MovimientoBancario {
   id: string;
   fecha: string;
@@ -228,6 +238,8 @@ export interface MovimientoBancario {
   pdf_ticket_url?: string | null;
   storage_provider?: 'Supabase' | 'GoogleDrive';
   empresa_id?: string;
+  cuenta_bancaria_id?: string | null;
+  cuentas_bancarias?: CuentaBancaria | null;
 }
 
 export interface EstatusConciliacion {

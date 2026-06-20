@@ -62,6 +62,11 @@ export interface BancoTabProps {
   bancoSubTab: 'movimientos' | 'global' | 'catalogo' | 'formas_pago';
   setBancoSubTab: (sub: 'movimientos' | 'global' | 'catalogo' | 'formas_pago') => void;
 
+  cuentasBancarias?: any[];
+  gastosFacturados?: any[];
+  ventasFacturadas?: any[];
+  handleDeleteMovimiento?: (id: string) => void;
+
   // Datos
   movimientos: MovimientoBancario[];
   estatusCatalog: EstatusConciliacion[];
@@ -129,9 +134,11 @@ function filterMovimientos(
   busqueda: string,
   tipo: string,
   estatus: string,
-  visibilidad: string
+  visibilidad: string,
+  cuentaId: string
 ): MovimientoBancario[] {
   return movimientos.filter((m) => {
+    if (cuentaId && m.cuenta_bancaria_id !== cuentaId) return false;
     if (busqueda.trim()) {
       const b = busqueda.toLowerCase();
       if (
@@ -154,6 +161,7 @@ function filterMovimientos(
 
 export default function BancoTab({
   bancoSubTab, setBancoSubTab,
+  cuentasBancarias = [],
   movimientos, estatusCatalog, formasPago, pedidosPendientes, gastosReconciliables,
   busquedaBanco, setBusquedaBanco,
   filtroBancoTipo, setFiltroBancoTipo,
@@ -173,10 +181,15 @@ export default function BancoTab({
   handleSaveCatalogItem, handleDeleteCatalogItem,
   formasPagoModal, setFormasPagoModal,
   handleSaveFormaPago, handleDeleteFormaPago,
+  handleDeleteMovimiento,
+  gastosFacturados = [],
+  ventasFacturadas = [],
   onDownloadFile,
 }: BancoTabProps) {
 
-  const filtered = filterMovimientos(movimientos, busquedaBanco, filtroBancoTipo, filtroBancoEstatus, filtroBancoVisibilidad);
+  const [selectedCuentaId, setSelectedCuentaId] = React.useState<string>('');
+
+  const filtered = filterMovimientos(movimientos, busquedaBanco, filtroBancoTipo, filtroBancoEstatus, filtroBancoVisibilidad, selectedCuentaId);
   const paginated = filtered.slice(bancoPage * bancoPageSize, (bancoPage + 1) * bancoPageSize);
   const totalPages = Math.max(1, Math.ceil(filtered.length / bancoPageSize));
 
@@ -216,6 +229,52 @@ export default function BancoTab({
           <div className="flex-1 flex flex-col md:flex-row gap-6 p-4 overflow-hidden min-h-0">
             {/* Panel izquierdo: carga e ingesta */}
             <div className="w-full md:w-80 flex flex-col gap-4 shrink-0 overflow-y-auto pr-1">
+              
+              {/* Selector de Cuenta y Cuadre */}
+              <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4 space-y-3 shadow-sm">
+                <h4 className="text-xs font-extrabold uppercase tracking-wide text-gray-500">Cuenta Bancaria</h4>
+                <select
+                  value={selectedCuentaId}
+                  onChange={(e) => setSelectedCuentaId(e.target.value)}
+                  className="w-full bg-gray-50 dark:bg-gray-950 border border-gray-300 dark:border-gray-700 rounded-lg p-2 text-sm text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-amber-500"
+                >
+                  <option value="">-- Seleccionar Cuenta --</option>
+                  {cuentasBancarias?.map(c => (
+                    <option key={c.id} value={c.id}>{c.nombre} ({c.moneda})</option>
+                  ))}
+                </select>
+
+                {selectedCuentaId && (() => {
+                  const cuenta = cuentasBancarias?.find(c => c.id === selectedCuentaId);
+                  const depositos = filtered.filter(m => m.tipo_movimiento === 'Deposito').reduce((acc, m) => acc + Number(m.monto), 0);
+                  const retiros = filtered.filter(m => m.tipo_movimiento === 'Retiro').reduce((acc, m) => acc + Number(m.monto), 0);
+                  const saldoInicial = Number(cuenta?.saldo_inicial || 0);
+                  const saldoCalculado = saldoInicial + depositos - retiros;
+
+                  return (
+                    <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-800 space-y-2">
+                      <h4 className="text-xs font-extrabold uppercase tracking-wide text-gray-500 mb-2">Cuadre de Saldos</h4>
+                      <div className="flex justify-between items-center text-xs">
+                        <span className="text-gray-500 dark:text-gray-400">Saldo Inicial:</span>
+                        <span className="font-mono font-medium">{formatCurrency(saldoInicial)}</span>
+                      </div>
+                      <div className="flex justify-between items-center text-xs">
+                        <span className="text-emerald-600 dark:text-emerald-500">+ Depósitos:</span>
+                        <span className="font-mono font-medium text-emerald-600 dark:text-emerald-500">{formatCurrency(depositos)}</span>
+                      </div>
+                      <div className="flex justify-between items-center text-xs">
+                        <span className="text-red-600 dark:text-red-500">- Retiros:</span>
+                        <span className="font-mono font-medium text-red-600 dark:text-red-500">{formatCurrency(retiros)}</span>
+                      </div>
+                      <div className="flex justify-between items-center pt-2 border-t border-gray-100 dark:border-gray-800">
+                        <span className="text-sm font-bold text-gray-700 dark:text-gray-300">Saldo ERP:</span>
+                        <span className="font-mono font-bold text-sm text-gray-900 dark:text-gray-100">{formatCurrency(saldoCalculado)}</span>
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+
               <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4 space-y-3 shadow-sm">
                 <h4 className="text-xs font-extrabold uppercase tracking-wide text-gray-500">Cargar Estado de Cuenta</h4>
                 <div className="relative border border-dashed border-gray-300 dark:border-gray-700 rounded-xl p-4 text-center hover:bg-gray-50 dark:hover:bg-gray-900/60 transition-all cursor-pointer">

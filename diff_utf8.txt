@@ -1,0 +1,574 @@
+﻿diff --git a/app/admin/gastos/page.tsx b/app/admin/gastos/page.tsx
+index 21709b8..741e6fb 100644
+--- a/app/admin/gastos/page.tsx
++++ b/app/admin/gastos/page.tsx
+@@ -1,4 +1,4 @@
+-´╗┐'use client';
++'use client';
+ /* eslint-disable @typescript-eslint/no-explicit-any */
+ /* eslint-disable react-hooks/exhaustive-deps */
+ /* eslint-disable react/no-unescaped-entities */
+@@ -15,7 +15,9 @@ import {
+   comprobarEgresoConFacturas,
+   guardarProveedor,
+   eliminarProveedor,
+-  obtenerFacturasPorProveedor
++  obtenerFacturasPorProveedor,
++  actualizarCategoriaGasto,
++  procesarLoteFacturas
+ } from './actions';
+ import {
+   importarMovimientosBancarios,
+@@ -33,123 +35,15 @@ import {
+   FileSpreadsheet, Play, ArrowRightLeft, Users, Search, X, Save
+ } from 'lucide-react';
+ import EgresosTab from './_components/EgresosTab';
++import CfdiViewerModal from './_components/CfdiViewerModal';
+ import IngresosTab from './_components/IngresosTab';
+ import BancoTab from './_components/BancoTab';
+ import ProveedoresTab from './_components/ProveedoresTab';
+-interface GastoFacturado {
+-  id: string;
+-  fecha_timbrado?: string;
+-  fecha_gasto?: string;
+-  uuid_fiscal?: string;
+-  concepto: string;
+-  monto: number;
+-  iva_acreditable?: number;
+-  proveedores?: { nombre_comercial: string; rfc: string };
+-  categorias_gasto?: { nombre: string };
+-  xml_url?: string;
+-  pdf_url?: string;
+-  ticket_url?: string;
+-  gasto_padre_id?: string | null;
+-  padre?: { concepto: string } | null;
+-}
+-
+-interface VentaFacturada {
+-  id: string;
+-  numero_pedido: string;
+-  precio_total: number;
+-  cliente_nombre?: string;
+-  fecha_pedido?: string;
+-  estatus_pago?: string;
+-  clientes?: { nombre_local: string; rfc: string; email_facturacion?: string };
+-  facturas_clientes?: { 
+-    uuid_fiscal?: string; 
+-    xml_url?: string; 
+-    pdf_url?: string;
+-    ticket_url?: string;
+-    total?: number;
+-    iva_trasladado?: number;
+-    fecha_emision?: string;
+-    serie_folio?: string;
+-  }[];
+-}
+-
+-interface PedidoPendiente {
+-  id: string;
+-  numero_pedido: string;
+-  precio_total: number;
+-  cliente_nombre?: string;
+-  fecha_pedido?: string;
+-}
+-
+-interface GastoPendiente {
+-  id: string;
+-  concepto: string;
+-  monto: number;
+-  fecha_gasto?: string;
+-}
+-
+-interface GastoReconciliable {
+-  id: string;
+-  concepto: string;
+-  monto: number;
+-  fecha_gasto?: string;
+-  xml_url?: string;
+-  pdf_url?: string;
+-  ticket_url?: string;
+-}
+-
+-interface Cliente {
+-  id: string;
+-  nombre_local: string;
+-  rfc: string;
+-}
+-
+-export const dynamic = 'force-dynamic';
+-
+-export default function AdvancedBillingModule() {
+-  const router = useRouter();
+-
+-  // Helper de Formato Contable
+-  const formatCurrency = (val: number) => {
+-    const num = Number(val) || 0;
+-    return new Intl.NumberFormat('es-MX', {
+-      style: 'currency',
+-      currency: 'MXN'
+-    }).format(num);
+-  };
+-
+-  const getSessionToken = async (): Promise<string> => {
+-    const { data: { session } } = await supabase.auth.getSession();
+-    return session?.access_token || '';
+-  };
+-
+-  const { isDarkMode, toggleDarkMode } = useThemeMode();
+-
+-  // --- TAB ACTIVAS EN LA VISUALIZACI├ôN ---
+-  const [activeTab, setActiveTab] = useState<'egresos' | 'ingresos' | 'banco' | 'proveedores'>('egresos');
+-
+-  // --- ESTADOS DE PROVEEDORES ---
+-  const [proveedores, setProveedores] = useState<any[]>([]);
+-  const [busquedaProveedor, setBusquedaProveedor] = useState<string>('');
+-  const [selectedProveedor, setSelectedProveedor] = useState<any | null>(null);
+-  const [proveedorFacturas, setProveedorFacturas] = useState<any[]>([]);
+-  const [cargandoFacturasProveedor, setCargandoFacturasProveedor] = useState<boolean>(false);
+-  const [proveedorModal, setProveedorModal] = useState<{
+-    open: boolean;
+-    proveedor: any | null;
+-    loading: boolean;
+-    error: string;
+-  }>({
+-    open: false,
+-    proveedor: null,
+-    loading: false,
+-    error: ''
+-  });
+-
+   // --- ESTADOS DE CONCILIACI├ôN BANCARIA ---
+   const [movimientos, setMovimientos] = useState<any[]>([]);
+   const [estatusCatalog, setEstatusCatalog] = useState<any[]>([]);
+   const [formasPago, setFormasPago] = useState<any[]>([]);
++  const [cuentasBancarias, setCuentasBancarias] = useState<any[]>([]);
+   const [bancoSubTab, setBancoSubTab] = useState<'movimientos' | 'global' | 'catalogo' | 'formas_pago'>('movimientos');
+ 
+   const [formasPagoModal, setFormasPagoModal] = useState<{
+@@ -241,6 +135,7 @@ export default function AdvancedBillingModule() {
+ 
+   // --- ESTADOS DE DATOS ---
+   const [gastosFacturados, setGastosFacturados] = useState<GastoFacturado[]>([]);
++  const [categorias, setCategorias] = useState<{id: string, nombre: string}[]>([]);
+   const [ventasFacturadas, setVentasFacturadas] = useState<VentaFacturada[]>([]);
+   const [pedidosPendientes, setPedidosPendientes] = useState<PedidoPendiente[]>([]);
+   const [gastosPendientes, setGastosPendientes] = useState<GastoPendiente[]>([]);
+@@ -288,6 +183,11 @@ export default function AdvancedBillingModule() {
+ 
+   // --- ESTADOS DE UI / PROCESAMIENTO ---
+   const [isUploading, setIsUploading] = useState(false);
++  const [cfdiViewerModal, setCfdiViewerModal] = useState<{open: boolean, xmlUrl: string | null}>({open: false, xmlUrl: null});
++  const [uploadMode, setUploadMode] = useState<'individual' | 'masiva'>('individual');
++  const [massXmlFiles, setMassXmlFiles] = useState<File[]>([]);
++  const [massUploadStatus, setMassUploadStatus] = useState<'idle' | 'processing' | 'done'>('idle');
++  const [massUploadResults, setMassUploadResults] = useState<any>(null);
+   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
+   const [emailModal, setEmailModal] = useState<{ open: boolean; details: any | null }>({ open: false, details: null });
+ 
+@@ -297,7 +197,7 @@ export default function AdvancedBillingModule() {
+       // 1. Gastos facturados (con XML)
+       const { data: gFac } = await supabase
+         .from('gastos')
+-        .select('*, proveedores(nombre_comercial, rfc), categorias_gasto(nombre), padre:gastos!gasto_padre_id(concepto)')
++        .select('*, proveedores(nombre_comercial, rfc), categorias_gasto(id, nombre), padre:gastos!gasto_padre_id(concepto)')
+         .not('uuid_fiscal', 'is', null)
+         .order('fecha_gasto', { ascending: false });
+       setGastosFacturados(gFac || []);
+@@ -382,6 +282,13 @@ export default function AdvancedBillingModule() {
+         .order('nombre', { ascending: true });
+       setFormasPago(fpData || []);
+ 
++      // 12. Cuentas Bancarias
++      const { data: ctasData } = await supabase
++        .from('cuentas_bancarias')
++        .select('*')
++        .order('nombre', { ascending: true });
++      setCuentasBancarias(ctasData || []);
++
+     } catch (err: unknown) {
+       console.error('Error fetching data:', err);
+     }
+@@ -1216,6 +1123,107 @@ export default function AdvancedBillingModule() {
+   };
+ 
+   // --- SUBIDA DE ARCHIVOS A SUPABASE STORAGE Y REGISTRO AT├ôMICO ---
++  
++  const handleUpdateGastoCategoria = async (gastoId: string, categoriaId: string | null) => {
++    setMessage({ text: 'Actualizando categor├¡a...', type: 'info' });
++    const token = await getSessionToken();
++    const res = await actualizarCategoriaGasto(gastoId, categoriaId, token);
++    if (res.success) {
++       setMessage({ text: 'Categor├¡a actualizada.', type: 'success' });
++       fetchData();
++    } else {
++       setMessage({ text: res.error || 'Error al actualizar categor├¡a.', type: 'error' });
++    }
++  };
++
++  const handleMassUpload = async () => {
++    if (massXmlFiles.length === 0) return;
++    setMassUploadStatus('processing');
++    setMessage({ text: 'Analizando XMLs...', type: 'info' });
++
++    try {
++      const { XMLParser } = require('fast-xml-parser');
++      const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: "" });
++      const payloads: any[] = [];
++
++      for (const file of massXmlFiles) {
++        const text = await file.text();
++        const json = parser.parse(text);
++        
++        let isCanceled = false;
++        let uuid = null;
++        let isAcuse = false;
++        
++        if (json.Acuse && json.Acuse.Folios && json.Acuse.Folios.UUID) {
++          uuid = json.Acuse.Folios.UUID;
++          isCanceled = true;
++          isAcuse = true;
++        }
++
++        const comprobante = json["cfdi:Comprobante"];
++        if (!comprobante && !isAcuse) continue;
++
++        if (comprobante) {
++          const emisor = comprobante["cfdi:Emisor"];
++          const receptor = comprobante["cfdi:Receptor"];
++          const complemento = comprobante["cfdi:Complemento"];
++          const timbre = complemento ? complemento["tfd:TimbreFiscalDigital"] : null;
++          if (timbre) uuid = timbre.UUID;
++          if (!uuid) continue;
++          
++          let total = comprobante.Total || 0;
++          let subtotal = comprobante.SubTotal || 0;
++          
++          const traslados = comprobante["cfdi:Impuestos"]?.["cfdi:Traslados"]?.["cfdi:Traslado"];
++          let iva = 0;
++          if (Array.isArray(traslados)) iva = traslados.reduce((sum: number, t: any) => sum + Number(t.Importe || 0), 0);
++          else if (traslados) iva = Number(traslados.Importe || 0);
++
++          payloads.push({
++            isGasto: invoiceType === 'gasto',
++            xmlData: {
++              total: Number(total), subtotal: Number(subtotal), iva, fecha: comprobante.Fecha,
++              serie: comprobante.Serie || '', folio: comprobante.Folio || '',
++              formaPagoCode: comprobante.FormaPago || '99', uuid, fechaTimbrado: timbre?.FechaTimbrado || '',
++              emisorRfc: emisor?.Rfc || '', emisorNombre: emisor?.Nombre || '',
++              receptorRfc: receptor?.Rfc || '', receptorNombre: receptor?.Nombre || '',
++              usoCfdi: receptor?.UsoCFDI || '', isComplementoPago: comprobante.TipoDeComprobante === 'P', isCanceled
++            }
++          });
++        } else if (isAcuse) {
++          payloads.push({
++            isGasto: invoiceType === 'gasto',
++            xmlData: { uuid, isCanceled: true, total: 0, subtotal: 0, iva: 0, fecha: '', serie: '', folio: '', formaPagoCode: '', fechaTimbrado: '', emisorRfc: '', emisorNombre: '', receptorRfc: '', receptorNombre: '' }
++          });
++        }
++      }
++
++      if (payloads.length === 0) {
++        setMessage({ text: 'No se encontraron CFDI v├ílidos o Acuses en los archivos.', type: 'error' });
++        setMassUploadStatus('idle');
++        return;
++      }
++
++      const token = await getSessionToken();
++      const res = await procesarLoteFacturas(payloads, token);
++      
++      if (res.success) {
++        setMassUploadResults(res.resumen);
++        setMassUploadStatus('done');
++        setMessage({ text: 'Lote procesado con ├®xito.', type: 'success' });
++        fetchData();
++      } else {
++        setMessage({ text: res.error || 'Error procesando lote.', type: 'error' });
++        setMassUploadStatus('idle');
++      }
++
++    } catch (err: any) {
++      console.error(err);
++      setMessage({ text: 'Error leyendo los archivos XML.', type: 'error' });
++      setMassUploadStatus('idle');
++    }
++  };
++
+   const handleUploadAndProcess = async (e: React.FormEvent) => {
+     e.preventDefault();
+     
+@@ -1462,50 +1470,117 @@ export default function AdvancedBillingModule() {
+             <div className="text-sm font-medium">{message.text}</div>
+           </div>
+         )}
++        <div className="flex-1 flex flex-col overflow-hidden min-h-0">
++          <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-2xl shadow-xl flex flex-col overflow-hidden h-full">
+ 
+-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 flex-1 overflow-hidden min-h-0">
+ 
+-          {/* COLUMNA IZQUIERDA: PANEL DE INGESTA */}
+-          {activeTab !== 'banco' && (
+-            <div className="lg:col-span-1 bg-white dark:bg-gray-950 p-6 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-xl space-y-6 overflow-y-auto h-full">
+-              <div>
+-                <h3 className="text-lg font-bold flex items-center gap-2">
+-                  <FileCode size={20} className="text-blue-500" /> Ingesta de Factura
+-                </h3>
+-                <p className="text-xs text-gray-400 mt-1 font-sans">
+-                  Sube el XML y PDF emitidos por el SAT para procesar.
+-                </p>
+-              </div>
++          
+ 
+-              <form onSubmit={handleUploadAndProcess} className="space-y-4">
++            {/* PESTA├æAS */}
++            <div className="flex border-b border-gray-200 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-900/30">
++              <button
++                onClick={() => setActiveTab('carga')}
++                className={`flex-1 py-4 text-sm font-bold border-b-2 transition-all flex items-center justify-center gap-2 ${activeTab === 'carga'
++                    ? 'border-purple-500 text-purple-500'
++                    : 'border-transparent text-gray-400 hover:text-gray-900 dark:hover:text-white'
++                  }`}
++              >
++                <UploadCloud size={16} /> Carga de Facturas
++              </button>
++              <button
++                onClick={() => setActiveTab('egresos')}
++                className={`flex-1 py-4 text-sm font-bold border-b-2 transition-all flex items-center justify-center gap-2 ${activeTab === 'egresos'
++                    ? 'border-blue-500 text-blue-500'
++                    : 'border-transparent text-gray-400 hover:text-gray-900 dark:hover:text-white'
++                  }`}
++              >
++                <DollarSign size={16} /> Egresos (Gastos)
++              </button>
++              <button
++                onClick={() => setActiveTab('ingresos')}
++                className={`flex-1 py-4 text-sm font-bold border-b-2 transition-all flex items-center justify-center gap-2 ${activeTab === 'ingresos'
++                    ? 'border-emerald-500 text-emerald-500'
++                    : 'border-transparent text-gray-400 hover:text-gray-900 dark:hover:text-white'
++                  }`}
++              >
++                <Layers size={16} /> Ingresos (Ventas)
++              </button>
++              <button
++                onClick={() => setActiveTab('banco')}
++                className={`flex-1 py-4 text-sm font-bold border-b-2 transition-all flex items-center justify-center gap-2 ${activeTab === 'banco'
++                    ? 'border-amber-500 text-amber-500'
++                    : 'border-transparent text-gray-400 hover:text-gray-900 dark:hover:text-white'
++                  }`}
++              >
++                <CreditCard size={16} /> Conciliaci├│n Bancaria
++              </button>
++              
++            </div>
+ 
+-                {/* SELECTOR DE TIPO (GASTO VS VENTA) */}
++            
++            {/* TAB 0: CARGA DE FACTURAS */}
++            {activeTab === 'carga' && (
++              <div className="p-6 overflow-y-auto h-full flex justify-center">
++                <div className="w-full max-w-2xl space-y-6">
++
++            <div className="bg-white dark:bg-gray-950 p-6 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-xl space-y-6 overflow-y-auto h-full">
++              <div className="flex justify-between items-center mb-2">
+                 <div>
+-                  <label className="text-xs font-bold text-gray-500 uppercase">Tipo de Factura</label>
+-                  <div className="grid grid-cols-2 gap-2 mt-2 font-sans">
+-                    <button
+-                      type="button"
+-                      onClick={() => { setInvoiceType('gasto'); resetUploadForm(); }}
+-                      className={`py-2 rounded-xl text-xs font-bold border transition-all ${invoiceType === 'gasto'
+-                          ? 'bg-red-600/10 text-red-500 border-red-500/40'
+-                          : 'bg-transparent text-gray-400 border-gray-200 dark:border-gray-800'
+-                        }`}
+-                    >
+-                      Gasto (Proveedor)
+-                    </button>
+-                    <button
+-                      type="button"
+-                      onClick={() => { setInvoiceType('venta'); resetUploadForm(); }}
+-                      className={`py-2 rounded-xl text-xs font-bold border transition-all ${invoiceType === 'venta'
+-                          ? 'bg-emerald-600/10 text-emerald-500 border-emerald-500/40'
+-                          : 'bg-transparent text-gray-400 border-gray-200 dark:border-gray-800'
+-                        }`}
+-                    >
+-                      Venta (Cliente)
+-                    </button>
+-                  </div>
++                  <h3 className="text-lg font-bold flex items-center gap-2">
++                    <FileCode size={20} className="text-blue-500" /> Ingesta de Factura
++                  </h3>
++                  <p className="text-xs text-gray-400 mt-1 font-sans">
++                    Sube y procesa tus CFDI (XML) del SAT.
++                  </p>
++                </div>
++              </div>
++
++              <div className="flex gap-2 border-b border-gray-200 dark:border-gray-800 pb-2 mb-4">
++                 <button onClick={() => setUploadMode('individual')} className={`text-sm font-bold px-4 py-2 rounded-t-lg transition-colors ${uploadMode === 'individual' ? 'bg-blue-50 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400 border-b-2 border-blue-500' : 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'}`}>Carga Individual</button>
++                 <button onClick={() => setUploadMode('masiva')} className={`text-sm font-bold px-4 py-2 rounded-t-lg transition-colors ${uploadMode === 'masiva' ? 'bg-blue-50 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400 border-b-2 border-blue-500' : 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'}`}>Carga Masiva Global</button>
++              </div>
++
++              <div>
++                <label className="text-xs font-bold text-gray-500 uppercase">┬┐Qu├® vas a subir?</label>
++                <div className="grid grid-cols-2 gap-2 mt-2 font-sans mb-4">
++                  <button type="button" onClick={() => { setInvoiceType('gasto'); resetUploadForm(); }} className={`py-2 rounded-xl text-xs font-bold border transition-all ${invoiceType === 'gasto' ? 'bg-red-600/10 text-red-500 border-red-500/40' : 'bg-transparent text-gray-400 border-gray-200 dark:border-gray-800'}`}>Gastos (Proveedores)</button>
++                  <button type="button" onClick={() => { setInvoiceType('venta'); resetUploadForm(); }} className={`py-2 rounded-xl text-xs font-bold border transition-all ${invoiceType === 'venta' ? 'bg-emerald-600/10 text-emerald-500 border-emerald-500/40' : 'bg-transparent text-gray-400 border-gray-200 dark:border-gray-800'}`}>Ventas (Clientes)</button>
+                 </div>
++              </div>
+ 
++              {uploadMode === 'masiva' ? (
++                 <div className="space-y-4">
++                    <div className="border-2 border-dashed border-gray-300 dark:border-gray-700 rounded-xl p-8 text-center bg-gray-50 dark:bg-gray-900/50">
++                       <p className="text-sm font-medium text-gray-600 dark:bg-gray-300 mb-2">Arrastra o selecciona m├║ltiples archivos XML</p>
++                       <input type="file" multiple accept=".xml" onChange={(e) => { if (e.target.files) { setMassXmlFiles(Array.from(e.target.files).slice(0, 100)); setMassUploadStatus('idle'); setMassUploadResults(null); } }} className="block w-full text-sm file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:bg-blue-50 file:text-blue-700" />
++                    </div>
++                    {massXmlFiles.length > 0 && <div className="text-sm font-bold text-gray-700 dark:text-gray-300">{massXmlFiles.length} archivo(s) listo(s) para procesar.</div>}
++                    {massUploadStatus === 'done' && massUploadResults && (
++                       <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg p-4 font-sans text-sm">
++                          <h4 className="font-bold text-green-800 dark:text-green-400 mb-2">Resumen de Procesamiento</h4>
++                          <ul className="space-y-1 text-green-700 dark:text-green-300">
++                             <li>Ô£ô Agregados nuevos: <b>{massUploadResults.agregados}</b></li>
++                             <li>Ô£ô Actualizados/Cancelados: <b>{massUploadResults.actualizados}</b></li>
++                             <li>- Ignorados (duplicados exactos): <b>{massUploadResults.ignorados}</b></li>
++                             {massUploadResults.errores > 0 && (
++                               <li className="text-red-600">
++                                 Ô£û Errores: <b>{massUploadResults.errores}</b>
++                                 {massUploadResults.detallesErrores && massUploadResults.detallesErrores.length > 0 && (
++                                   <ul className="mt-2 text-xs text-red-500 bg-red-100 dark:bg-red-900/40 p-2 rounded max-h-32 overflow-y-auto">
++                                     {massUploadResults.detallesErrores.map((err: any, i: number) => (
++                                       <li key={i} className="mb-1 border-b border-red-200 dark:border-red-800 pb-1">{err}</li>
++                                     ))}
++                                   </ul>
++                                 )}
++                               </li>
++                             )}
++                          </ul>
++                       </div>
++                    )}
++                    <button type="button" disabled={massUploadStatus === 'processing' || massXmlFiles.length === 0} onClick={handleMassUpload} className="w-full py-3.5 bg-gray-900 hover:bg-gray-800 text-white rounded-xl font-bold">{massUploadStatus === 'processing' ? 'Procesando Lote...' : 'Procesar Lote Masivo'}</button>
++                 </div>
++              ) : (
++              <form onSubmit={handleUploadAndProcess} className="space-y-4">
+                 {/* L├ôGICA DUAL DE CARGA DE ARCHIVOS */}
+                 <div className="space-y-4">
+                   {/* XML Input Container */}
+@@ -1852,59 +1927,22 @@ export default function AdvancedBillingModule() {
+                   )}
+                 </button>
+               </form>
++              )}
+             </div>
+-          )}
+-
+-          {/* COLUMNA DERECHA: PESTA├æAS DE VISUALIZACI├ôN */}
+-          <div className={`${(activeTab === 'banco' || activeTab === 'proveedores') ? 'lg:col-span-3' : 'lg:col-span-2'} bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-2xl shadow-xl flex flex-col overflow-hidden h-full`}>
+-
+-            {/* PESTA├æAS */}
+-            <div className="flex border-b border-gray-200 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-900/30">
+-              <button
+-                onClick={() => setActiveTab('egresos')}
+-                className={`flex-1 py-4 text-sm font-bold border-b-2 transition-all flex items-center justify-center gap-2 ${activeTab === 'egresos'
+-                    ? 'border-blue-500 text-blue-500'
+-                    : 'border-transparent text-gray-400 hover:text-gray-900 dark:hover:text-white'
+-                  }`}
+-              >
+-                <DollarSign size={16} /> Egresos (Gastos)
+-              </button>
+-              <button
+-                onClick={() => setActiveTab('ingresos')}
+-                className={`flex-1 py-4 text-sm font-bold border-b-2 transition-all flex items-center justify-center gap-2 ${activeTab === 'ingresos'
+-                    ? 'border-emerald-500 text-emerald-500'
+-                    : 'border-transparent text-gray-400 hover:text-gray-900 dark:hover:text-white'
+-                  }`}
+-              >
+-                <Layers size={16} /> Ingresos (Ventas)
+-              </button>
+-              <button
+-                onClick={() => setActiveTab('banco')}
+-                className={`flex-1 py-4 text-sm font-bold border-b-2 transition-all flex items-center justify-center gap-2 ${activeTab === 'banco'
+-                    ? 'border-amber-500 text-amber-500'
+-                    : 'border-transparent text-gray-400 hover:text-gray-900 dark:hover:text-white'
+-                  }`}
+-              >
+-                <CreditCard size={16} /> Conciliaci├│n Bancaria
+-              </button>
+-              <button
+-                onClick={() => setActiveTab('proveedores')}
+-                className={`flex-1 py-4 text-sm font-bold border-b-2 transition-all flex items-center justify-center gap-2 ${activeTab === 'proveedores'
+-                    ? 'border-indigo-500 text-indigo-500'
+-                    : 'border-transparent text-gray-400 hover:text-gray-900 dark:hover:text-white'
+-                  }`}
+-              >
+-                <Users size={16} /> Proveedores
+-              </button>
+-            </div>
++          
++                </div>
++              </div>
++            )}
+ 
+             {/* TAB 1: EGRESOS */}
+             {activeTab === 'egresos' && (
+               <EgresosTab
+                 gastosFacturados={gastosFacturados}
++                categorias={categorias}
++                onUpdateCategoria={handleUpdateGastoCategoria}
+                 onOpenComprobacionAcumulada={() => setComprobacionAcumuladaModal(prev => ({ ...prev, open: true }))}
+                 onDownloadFile={handleDownloadFile}
+-              />
++                onViewCfdi={(xmlUrl) => setCfdiViewerModal({ open: true, xmlUrl })} />
+             )}
+ 
+             {/* TAB 2: INGRESOS */}
+@@ -1914,7 +1952,7 @@ export default function AdvancedBillingModule() {
+                 onOpenFacturacionAcumulada={() => setFacturacionAcumuladaModal(prev => ({ ...prev, open: true }))}
+                 onDownloadFile={handleDownloadFile}
+                 onSendEmail={handleSendEmail}
+-              />
++                onViewCfdi={(xmlUrl) => setCfdiViewerModal({ open: true, xmlUrl })} />
+             )}
+ 
+             {/* TAB 3: BANCO */}
+@@ -1962,8 +2000,7 @@ export default function AdvancedBillingModule() {
+                 setFormasPagoModal={setFormasPagoModal}
+                 handleSaveFormaPago={handleSaveFormaPago}
+                 handleDeleteFormaPago={handleDeleteFormaPago}
+-                onDownloadFile={handleDownloadFile}
+-              />
++                onDownloadFile={handleDownloadFile} />
+             )}
+ 
+             {/* TAB 4: PROVEEDORES */}
+@@ -1980,8 +2017,7 @@ export default function AdvancedBillingModule() {
+                 cargarDetallesProveedor={cargarDetallesProveedor}
+                 handleSaveProveedor={handleSaveProveedor}
+                 handleDeleteProveedor={handleDeleteProveedor}
+-                onDownloadFile={handleDownloadFile}
+-              />
++                onDownloadFile={handleDownloadFile} />
+             )}
+ 
+           </div>
+@@ -2269,7 +2305,7 @@ export default function AdvancedBillingModule() {
+                     </button>
+                   </div>
+ 
+-                </form>
++                              </form>
+ 
+               </div>
+             </div>
+@@ -2280,6 +2316,14 @@ export default function AdvancedBillingModule() {
+         </div>
+ 
+       {/* MODAL SIMULACION CORREO */}
++      
++        {cfdiViewerModal.open && (
++          <CfdiViewerModal 
++             xmlUrl={cfdiViewerModal.xmlUrl} 
++             onClose={() => setCfdiViewerModal({ open: false, xmlUrl: null })} 
++          />
++        )}
++
+       {emailModal.open && emailModal.details && (
+         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+           <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-6 rounded-2xl w-full max-w-lg shadow-2xl animate-in zoom-in-95 duration-200 text-gray-900 dark:text-gray-100">

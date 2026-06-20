@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
-import { Soup, LayoutDashboard, Users, FileDown, Settings, LogOut, Package } from 'lucide-react';
+import { Soup, LayoutDashboard, Users, FileDown, Settings, LogOut, Package, Truck } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import OnboardingWizard from './components/OnboardingWizard';
 
@@ -268,6 +268,28 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                 }`}
             >
               <FileDown size={18} /> Facturación
+            </button>
+          )}
+
+          {/* BOTÓN EXPEDIENTE */}
+          {hasModule('gastos') && (
+            <button
+              onClick={() => router.push('/admin/expediente')}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${isSelected('/admin/expediente') ? 'bg-amber-600 text-white font-semibold' : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white'
+                }`}
+            >
+              <FileDown size={18} /> Expediente
+            </button>
+          )}
+
+          {/* BOTÓN PROVEEDORES */}
+          {hasModule('gastos') && (
+            <button
+              onClick={() => router.push('/admin/proveedores')}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${isSelected('/admin/proveedores') ? 'bg-amber-600 text-white font-semibold' : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white'
+                }`}
+            >
+              <Truck size={18} /> Proveedores
             </button>
           )}
 

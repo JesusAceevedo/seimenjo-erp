@@ -1925,6 +1925,8 @@ export default function AdvancedBillingModule() {
                 bancoSubTab={bancoSubTab}
                 setBancoSubTab={setBancoSubTab}
                 cuentasBancarias={cuentasBancarias}
+                gastosFacturados={gastosFacturados}
+                ventasFacturadas={ventasFacturadas}
                 movimientos={movimientos}
                 estatusCatalog={estatusCatalog}
                 formasPago={formasPago}
@@ -2773,7 +2775,6 @@ export default function AdvancedBillingModule() {
           </div>
         </div>
       )}
-      </div>
     </div>
   );
 }
