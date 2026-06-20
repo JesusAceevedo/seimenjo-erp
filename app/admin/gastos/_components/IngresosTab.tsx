@@ -108,16 +108,21 @@ export default function IngresosTab({
               onClick={() => setShowXmlModal(true)}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-xs font-bold shadow-sm transition-colors"
             >
-              <UploadCloud size={13} /> Subir Facturas (XML)
+              <UploadCloud size={13} /> Subir Masivo (XML)
             </button>
-          </div>
+            <button
+              onClick={() => setManualModal({isOpen: true})}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold shadow-sm transition-colors"
+            >
+              <FileText size={13} /> Carga Manual
+            </button>
             <button
               onClick={onOpenFacturacionAcumulada}
-
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold shadow-sm transition-colors"
-          >
-            <Plus size={13} /> Facturación Acumulada
-          </button>
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold shadow-sm transition-colors"
+            >
+              <Plus size={13} /> Facturación Acumulada
+            </button>
+          </div>
         </div>
         <div className="flex flex-wrap gap-2 items-center">
           <div className="relative flex-1 min-w-[200px]">
@@ -265,6 +270,15 @@ export default function IngresosTab({
                     ) : (
                       <span className="text-[10px] text-gray-300 dark:text-gray-600 italic block text-center">—</span>
                     )}
+                    <div className="flex justify-center mt-1">
+                      <button 
+                        onClick={() => setManualModal({isOpen: true, id: v.id})} 
+                        className="text-blue-500 hover:text-blue-700 bg-blue-50 dark:bg-blue-900/30 hover:bg-blue-100 dark:hover:bg-blue-900/50 p-1.5 rounded-lg transition-colors" 
+                        title="Añadir Documentos Faltantes"
+                      >
+                        <Plus size={14} />
+                      </button>
+                    </div>
                   </td>
 
                   {/* Acciones */}
