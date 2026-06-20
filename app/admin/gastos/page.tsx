@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 /* eslint-disable @typescript-eslint/no-explicit-any */
 /* eslint-disable react-hooks/exhaustive-deps */
 /* eslint-disable react/no-unescaped-entities */
@@ -149,6 +149,7 @@ export default function AdvancedBillingModule() {
   const [movimientos, setMovimientos] = useState<any[]>([]);
   const [estatusCatalog, setEstatusCatalog] = useState<any[]>([]);
   const [formasPago, setFormasPago] = useState<any[]>([]);
+  const [categoriasMovimiento, setCategoriasMovimiento] = useState<any[]>([]);
   const [bancoSubTab, setBancoSubTab] = useState<'movimientos' | 'global'>('movimientos');
 
   const [formasPagoModal, setFormasPagoModal] = useState<{
@@ -364,7 +365,7 @@ export default function AdvancedBillingModule() {
       // 7. Movimientos bancarios (con catálogo enlazado)
       const { data: movs } = await supabase
         .from('movimientos_bancarios')
-        .select('*, estatus_conciliacion_bancaria(*)')
+        .select('*, estatus_conciliacion_bancaria(*), categorias_movimiento_bancario(*)')
         .order('fecha', { ascending: false });
       setMovimientos(movs || []);
 
@@ -381,6 +382,13 @@ export default function AdvancedBillingModule() {
         .select('*')
         .order('nombre', { ascending: true });
       setFormasPago(fpData || []);
+
+      // 12. Categorías de movimiento bancario
+      const { data: catMovs } = await supabase
+        .from('categorias_movimiento_bancario')
+        .select('*')
+        .order('nombre', { ascending: true });
+      setCategoriasMovimiento(catMovs || []);
 
     } catch (err: unknown) {
       console.error('Error fetching data:', err);
@@ -530,6 +538,22 @@ export default function AdvancedBillingModule() {
     } catch (err: any) {
       console.error(err);
       alert('Error de red al actualizar visibilidad.');
+    }
+  };
+
+  const handleUpdateCategoria = async (movimientoId: string, categoriaId: string) => {
+    try {
+      const catId = categoriaId === '' ? null : categoriaId;
+      const { error } = await supabase
+        .from('movimientos_bancarios')
+        .update({ categoria_movimiento_id: catId })
+        .eq('id', movimientoId);
+      if (error) throw error;
+      
+      await fetchData();
+    } catch (err: any) {
+      console.error(err);
+      setMessage({ text: err.message, type: 'error' });
     }
   };
 
@@ -1524,14 +1548,12 @@ export default function AdvancedBillingModule() {
             {/* TAB 3: BANCO */}
             {activeTab === 'banco' && (
               <BancoTab
-                bancoSubTab={bancoSubTab}
-                setBancoSubTab={setBancoSubTab}
+                bancoSubTab={bancoSubTab} setBancoSubTab={setBancoSubTab}
                 cuentasBancarias={cuentasBancarias}
-                gastosFacturados={gastosFacturados}
-                ventasFacturadas={ventasFacturadas}
                 movimientos={movimientos}
                 estatusCatalog={estatusCatalog}
                 formasPago={formasPago}
+                categoriasMovimiento={categoriasMovimiento}
                 pedidosPendientes={pedidosPendientes}
                 gastosReconciliables={gastosReconciliables}
                 busquedaBanco={busquedaBanco}
@@ -1556,6 +1578,7 @@ export default function AdvancedBillingModule() {
                 handleOpenReconcileModal={handleOpenReconcileModal}
                 handleSaveReconciliation={handleSaveManualReconcile}
                 handleToggleVisibility={handleToggleVisibility}
+                handleUpdateCategoria={handleUpdateCategoria}
                 selectedGlobalDepositId={selectedGlobalDepositId}
                 setSelectedGlobalDepositId={setSelectedGlobalDepositId}
                 selectedGlobalPedidosIds={selectedGlobalPedidosIds}

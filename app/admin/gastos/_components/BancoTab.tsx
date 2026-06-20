@@ -71,6 +71,7 @@ export interface BancoTabProps {
   movimientos: MovimientoBancario[];
   estatusCatalog: EstatusConciliacion[];
   formasPago: FormaPago[];
+  categoriasMovimiento?: any[];
   pedidosPendientes: PedidoPendiente[];
   gastosReconciliables: GastoReconciliable[];
 
@@ -100,11 +101,12 @@ export interface BancoTabProps {
   setReconcileModal: React.Dispatch<React.SetStateAction<ReconcileModalState>>;
   manualMatchSearch: string;
   setManualMatchSearch: (v: string) => void;
-  handleOpenReconcileModal: (m: MovimientoBancario) => void;
-  handleSaveReconciliation: () => void;
-  handleToggleVisibility: (id: string, tipo: 'egresos' | 'ingresos', val: boolean) => void;
+  handleOpenReconcileModal?: (m: MovimientoBancario) => void;
+  handleSaveReconciliation?: () => void;
+  handleToggleVisibility: (id: string, modulo: 'egresos'|'ingresos', visible: boolean) => void;
+  handleUpdateCategoria?: (movimientoId: string, categoriaId: string) => void;
 
-  // Facturación global
+  // Globalcturación global
   selectedGlobalDepositId: string | null;
   setSelectedGlobalDepositId: (id: string | null) => void;
   selectedGlobalPedidosIds: string[];
@@ -162,7 +164,7 @@ function filterMovimientos(
 export default function BancoTab({
   bancoSubTab, setBancoSubTab,
   cuentasBancarias = [],
-  movimientos, estatusCatalog, formasPago, pedidosPendientes, gastosReconciliables,
+  movimientos, estatusCatalog, formasPago, categoriasMovimiento = [], pedidosPendientes, gastosReconciliables,
   busquedaBanco, setBusquedaBanco,
   filtroBancoTipo, setFiltroBancoTipo,
   filtroBancoEstatus, setFiltroBancoEstatus,
@@ -173,7 +175,7 @@ export default function BancoTab({
   reconcileModal, setReconcileModal,
   manualMatchSearch, setManualMatchSearch,
   handleOpenReconcileModal, handleSaveReconciliation,
-  handleToggleVisibility,
+  handleToggleVisibility, handleUpdateCategoria,
   selectedGlobalDepositId, setSelectedGlobalDepositId,
   selectedGlobalPedidosIds, setSelectedGlobalPedidosIds,
   handleGlobalLink,
@@ -331,11 +333,12 @@ export default function BancoTab({
 
               {/* Tabla */}
               <div className="flex-1 overflow-auto">
-                <table className="w-full text-left border-collapse text-xs min-w-[800px]">
+                <table className="w-full text-left border-collapse text-xs min-w-[850px]">
                   <thead>
                     <tr className="bg-gray-50 dark:bg-gray-900/50 border-b border-gray-200 dark:border-gray-800 text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
                       <th className="p-3 w-24">Fecha</th>
                       <th className="p-3">Detalle / Concepto</th>
+                      <th className="p-3 w-36">Categoría</th>
                       <th className="p-3 text-right w-28">Monto</th>
                       <th className="p-3 text-center w-36">Estatus</th>
                       <th className="p-3 text-center w-28">ERP Egreso/Ingreso</th>
@@ -345,7 +348,7 @@ export default function BancoTab({
                   </thead>
                   <tbody className="divide-y divide-gray-100 dark:divide-gray-800/60 font-sans">
                     {paginated.length === 0 ? (
-                      <tr><td colSpan={7} className="p-8 text-center text-gray-400 italic">No se encontraron movimientos bancarios</td></tr>
+                      <tr><td colSpan={8} className="p-8 text-center text-gray-400 italic">No se encontraron movimientos bancarios</td></tr>
                     ) : paginated.map((m) => {
                       const color = m.estatus_conciliacion_bancaria?.color || '#9CA3AF';
                       const dateStr = new Date(m.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' });
@@ -355,7 +358,7 @@ export default function BancoTab({
                           <td className="p-3 font-mono text-gray-500">{dateStr}</td>
                           <td className="p-3">
                             <div className="font-bold text-gray-800 dark:text-gray-200">{m.concepto}</div>
-                            <div className="text-[10px] text-gray-400 flex items-center gap-1.5">
+                            <div className="text-[10px] text-gray-400 flex items-center gap-1.5 mt-1">
                               {m.referencia && <span>Ref: {m.referencia}</span>}
                               {m.rfc_proveedor && (
                                 <span className="font-mono text-[9px] bg-gray-100 dark:bg-gray-800 px-1 py-0.5 rounded text-gray-500">
@@ -363,6 +366,18 @@ export default function BancoTab({
                                 </span>
                               )}
                             </div>
+                          </td>
+                          <td className="p-3">
+                            <select
+                              className="w-full bg-transparent border-gray-200 dark:border-gray-700 rounded text-[10px] p-1.5 focus:ring-blue-500 dark:text-gray-300"
+                              value={m.categoria_movimiento_id || ''}
+                              onChange={(e) => handleUpdateCategoria?.(m.id, e.target.value)}
+                            >
+                              <option value="">- Sin Categoría -</option>
+                              {categoriasMovimiento?.map(c => (
+                                <option key={c.id} value={c.id}>{c.nombre}</option>
+                              ))}
+                            </select>
                           </td>
                           <td className="p-3 text-right font-mono font-bold">
                             {isRetiro
@@ -418,7 +433,7 @@ export default function BancoTab({
                             </div>
                           </td>
                           <td className="p-3 text-center">
-                            <button onClick={() => handleOpenReconcileModal(m)}
+                            <button onClick={() => handleOpenReconcileModal?.(m)}
                               className="p-1 rounded text-amber-500 hover:bg-amber-500/15" title="Conciliación Manual">
                               <ArrowRightLeft size={13} />
                             </button>

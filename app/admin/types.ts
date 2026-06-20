@@ -240,6 +240,16 @@ export interface MovimientoBancario {
   empresa_id?: string;
   cuenta_bancaria_id?: string | null;
   cuentas_bancarias?: CuentaBancaria | null;
+  categoria_movimiento_id?: string | null;
+  categorias_movimiento_bancario?: CategoriaMovimientoBancario | null;
+}
+
+export interface CategoriaMovimientoBancario {
+  id: string;
+  clave: string;
+  nombre: string;
+  descripcion?: string;
+  requiere_comprobante: boolean;
 }
 
 export interface EstatusConciliacion {

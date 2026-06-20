@@ -54,7 +54,7 @@ export default function ExpedienteDigital() {
       // 3. Fetch Movimientos Bancarios
       const { data: movimientos } = await supabase
         .from('movimientos_bancarios')
-        .select('id, fecha, concepto, monto, xml_url, pdf_factura_url, pdf_ticket_url')
+        .select('id, fecha, concepto, monto, xml_url, pdf_factura_url, pdf_ticket_url, categorias_movimiento_bancario(requiere_comprobante)')
         .order('fecha', { ascending: false })
         .limit(300);
 
@@ -126,20 +126,26 @@ export default function ExpedienteDigital() {
 
       // Procesar Movimientos
       (movimientos || []).forEach((m: any) => {
-        const missing = [];
-        if (!m.xml_url) missing.push('XML');
-        if (!m.pdf_factura_url) missing.push('PDF');
-        if (!m.pdf_ticket_url) missing.push('Ticket');
-        
         let color: 'green' | 'yellow' | 'red' = 'green';
         let label = 'Completo';
-        
-        if (missing.length === 3) {
-          color = 'red';
-          label = 'Sin Documentos';
-        } else if (missing.length > 0) {
-          color = 'yellow';
-          label = `Falta: ${missing.join(', ')}`;
+
+        // Si la categoría indica que no requiere comprobante, lo pasamos directamente como completo.
+        if (m.categorias_movimiento_bancario && m.categorias_movimiento_bancario.requiere_comprobante === false) {
+          color = 'green';
+          label = 'Exento (No Requiere)';
+        } else {
+          const missing = [];
+          if (!m.xml_url) missing.push('XML');
+          if (!m.pdf_factura_url) missing.push('PDF');
+          if (!m.pdf_ticket_url) missing.push('Ticket');
+          
+          if (missing.length === 3) {
+            color = 'red';
+            label = 'Sin Documentos';
+          } else if (missing.length > 0) {
+            color = 'yellow';
+            label = `Falta: ${missing.join(', ')}`;
+          }
         }
 
         allItems.push({
