@@ -35,7 +35,6 @@ import {
 import EgresosTab from './_components/EgresosTab';
 import IngresosTab from './_components/IngresosTab';
 import BancoTab from './_components/BancoTab';
-import ProveedoresTab from './_components/ProveedoresTab';
 interface GastoFacturado {
   id: string;
   fecha_timbrado?: string;
@@ -45,7 +44,7 @@ interface GastoFacturado {
   monto: number;
   iva_acreditable?: number;
   proveedores?: { nombre_comercial: string; rfc: string };
-  categorias_gasto?: { nombre: string };
+  categorias_gasto?: { id: string; nombre: string } | null;
   xml_url?: string;
   pdf_url?: string;
   ticket_url?: string;
@@ -241,6 +240,7 @@ export default function AdvancedBillingModule() {
 
   // --- ESTADOS DE DATOS ---
   const [gastosFacturados, setGastosFacturados] = useState<GastoFacturado[]>([]);
+  const [cuentasBancarias, setCuentasBancarias] = useState<any[]>([]);
   const [ventasFacturadas, setVentasFacturadas] = useState<VentaFacturada[]>([]);
   const [pedidosPendientes, setPedidosPendientes] = useState<PedidoPendiente[]>([]);
   const [gastosPendientes, setGastosPendientes] = useState<GastoPendiente[]>([]);
@@ -1902,6 +1902,8 @@ export default function AdvancedBillingModule() {
             {activeTab === 'egresos' && (
               <EgresosTab
                 gastosFacturados={gastosFacturados}
+                categorias={[]}
+                onUpdateCategoria={() => {}}
                 onOpenComprobacionAcumulada={() => setComprobacionAcumuladaModal(prev => ({ ...prev, open: true }))}
                 onDownloadFile={handleDownloadFile}
               />
@@ -1922,6 +1924,7 @@ export default function AdvancedBillingModule() {
               <BancoTab
                 bancoSubTab={bancoSubTab}
                 setBancoSubTab={setBancoSubTab}
+                cuentasBancarias={cuentasBancarias}
                 movimientos={movimientos}
                 estatusCatalog={estatusCatalog}
                 formasPago={formasPago}
@@ -1966,23 +1969,7 @@ export default function AdvancedBillingModule() {
               />
             )}
 
-            {/* TAB 4: PROVEEDORES */}
-            {activeTab === 'proveedores' && (
-              <ProveedoresTab
-                proveedores={proveedores}
-                busquedaProveedor={busquedaProveedor}
-                setBusquedaProveedor={setBusquedaProveedor}
-                selectedProveedor={selectedProveedor}
-                proveedorFacturas={proveedorFacturas}
-                cargandoFacturasProveedor={cargandoFacturasProveedor}
-                proveedorModal={proveedorModal}
-                setProveedorModal={setProveedorModal}
-                cargarDetallesProveedor={cargarDetallesProveedor}
-                handleSaveProveedor={handleSaveProveedor}
-                handleDeleteProveedor={handleDeleteProveedor}
-                onDownloadFile={handleDownloadFile}
-              />
-            )}
+            
 
           </div>
 
@@ -2786,7 +2773,7 @@ export default function AdvancedBillingModule() {
           </div>
         </div>
       )}
-
+      </div>
     </div>
   );
 }
