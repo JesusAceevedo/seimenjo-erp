@@ -326,12 +326,21 @@ export default function ExpedienteDigital() {
                       </div>
                     </td>
                     <td className="p-4 text-center">
-                      <button
-                        onClick={() => handleOpenViewer(item)}
-                        className="px-3 py-1.5 bg-gray-100 dark:bg-gray-800 hover:bg-blue-50 dark:hover:bg-blue-900/40 text-gray-600 dark:text-gray-300 hover:text-blue-600 dark:hover:text-blue-400 rounded-lg text-[10px] font-bold transition-colors inline-flex items-center gap-1"
-                      >
-                        <Search size={12} /> Revisar Archivos
-                      </button>
+                      <div className="flex justify-center gap-2">
+                        <button
+                          onClick={() => handleOpenViewer(item)}
+                          className="px-3 py-1.5 bg-gray-100 dark:bg-gray-800 hover:bg-blue-50 dark:hover:bg-blue-900/40 text-gray-600 dark:text-gray-300 hover:text-blue-600 dark:hover:text-blue-400 rounded-lg text-[10px] font-bold transition-colors inline-flex items-center gap-1"
+                        >
+                          <Search size={12} /> Revisar Archivos
+                        </button>
+                        <button
+                          onClick={() => setManualModal({isOpen: true, id: item.id, tipo: item.tipo === 'Egreso' ? 'gasto' : 'venta'})}
+                          className="px-2 py-1.5 bg-blue-50 dark:bg-blue-900/30 hover:bg-blue-100 dark:hover:bg-blue-900/50 text-blue-500 hover:text-blue-700 rounded-lg transition-colors"
+                          title="Añadir Documentos Faltantes"
+                        >
+                          <Plus size={14} />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}

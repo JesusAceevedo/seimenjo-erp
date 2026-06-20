@@ -41,6 +41,34 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId 
     ticket: ''
   });
 
+  const [existingDocs, setExistingDocs] = useState<{xml: boolean, pdf: boolean, ticket: boolean}>({
+    xml: false,
+    pdf: false,
+    ticket: false
+  });
+
+  React.useEffect(() => {
+    if (registroId) {
+      const fetchDocs = async () => {
+        const tableStr = tipo === 'gasto' ? 'gastos' : 'facturas_clientes';
+        const { data } = await supabase.from(tableStr).select('xml_url, pdf_url, ticket_url').eq('id', registroId).single();
+        if (data) {
+          setExistingDocs({
+            xml: !!data.xml_url,
+            pdf: !!data.pdf_url,
+            ticket: !!data.ticket_url
+          });
+          setLinks({
+            xml: data.xml_url ? data.xml_url.split(',')[0] : '',
+            pdf: data.pdf_url ? data.pdf_url.split(',')[0] : '',
+            ticket: data.ticket_url ? data.ticket_url.split(',')[0] : ''
+          });
+        }
+      };
+      fetchDocs();
+    }
+  }, [registroId, tipo]);
+
   const handleModeToggle = (docType: 'xml' | 'pdf' | 'ticket', mode: 'upload' | 'link') => {
     setFileMode(prev => ({ ...prev, [docType]: mode }));
   };
@@ -161,8 +189,9 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId 
     return (
       <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4 space-y-3">
         <div className="flex justify-between items-center">
-          <label className="text-sm font-bold text-gray-700 dark:text-gray-300">
+          <label className="text-sm font-bold text-gray-700 dark:text-gray-300 flex items-center gap-2">
             {title} {mandatory && <span className="text-red-500">*</span>}
+            {existingDocs[type] && <span className="px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-600 text-[10px] font-bold rounded-full">Ya cargado</span>}
           </label>
           <div className="flex bg-gray-100 dark:bg-gray-800 p-1 rounded-lg">
             <button
