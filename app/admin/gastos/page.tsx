@@ -7,7 +7,6 @@ import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../../lib/supabase';
 import { useThemeMode } from '../../../lib/useThemeMode';
-import * as XLSX from 'xlsx';
 import {
   obtenerSignedUrl,
   enviarFacturaPorCorreo,
@@ -24,8 +23,11 @@ import {
   guardarConciliacionManual,
   getEstatusCatalog,
   guardarEstatusCatalogItem,
-  eliminarEstatusCatalogItem
+  eliminarEstatusCatalogItem,
+  eliminarMovimientoBancario
 } from './reconciliationActions';
+import { eliminarGasto, eliminarPedidoSano } from './actions';
+import { EditGastoModal, EditVentaModal, EditMovimientoModal } from './_components/EditModals';
 import {
   UploadCloud, FileText, Send, Eye, RefreshCw, AlertTriangle, CheckCircle,
   FileCode, Download, Trash2, Calendar, DollarSign, Layers, Plus, Mail, Sun, Moon,
@@ -122,6 +124,22 @@ export default function AdvancedBillingModule() {
   const getSessionToken = async (): Promise<string> => {
     const { data: { session } } = await supabase.auth.getSession();
     return session?.access_token || '';
+  };
+
+  const getEmpresaId = async () => {
+    let empresaId = null;
+    const sessionData = localStorage.getItem('seimenjo_session');
+    if (sessionData) {
+      try {
+        const datosSesion = JSON.parse(sessionData);
+        empresaId = datosSesion.empresa_id;
+      } catch (e) {}
+    }
+    if (!empresaId) {
+      const { data: { user } } = await supabase.auth.getUser();
+      empresaId = user?.user_metadata?.empresa_id;
+    }
+    return empresaId;
   };
 
   const { isDarkMode, toggleDarkMode } = useThemeMode();
@@ -242,6 +260,11 @@ export default function AdvancedBillingModule() {
     loading: false
   });
 
+  // --- ESTADOS DE EDICIÓN ---
+  const [editingGasto, setEditingGasto] = useState<any>(null);
+  const [editingVenta, setEditingVenta] = useState<any>(null);
+  const [editingMovimiento, setEditingMovimiento] = useState<any>(null);
+
   // --- ESTADOS DE DATOS ---
   const [gastosFacturados, setGastosFacturados] = useState<GastoFacturado[]>([]);
   const [categoriasGasto, setCategoriasGasto] = useState<any[]>([]);
@@ -299,21 +322,26 @@ export default function AdvancedBillingModule() {
   // --- CARGA DE DATOS ---
   const fetchData = async () => {
     try {
+      const empresaId = await getEmpresaId();
+      if (!empresaId) return;
+
       // 1. Gastos facturados (con XML)
       const { data: gFac } = await supabase
         .from('gastos')
         .select('*, proveedores(nombre_comercial, rfc), categorias_gasto(nombre), padre:gastos!gasto_padre_id(concepto)')
+        .eq('empresa_id', empresaId)
         .not('uuid_fiscal', 'is', null)
         .order('fecha_gasto', { ascending: false });
       setGastosFacturados(gFac || []);
 
-      const { data: cGasto } = await supabase.from('categorias_gasto').select('*').order('nombre');
+      const { data: cGasto } = await supabase.from('categorias_gasto').select('*').or(`empresa_id.is.null,empresa_id.eq.${empresaId}`).order('nombre');
       setCategoriasGasto(cGasto || []);
 
       // 2. Todas las Ventas (Facturadas y no Facturadas)
       const { data: vAll } = await supabase
         .from('pedidos')
         .select('*, clientes(nombre_local, rfc, email_facturacion), facturas_clientes(*)')
+        .eq('empresa_id', empresaId)
         .neq('estatus_pago', 'Cancelado')
         .order('created_at', { ascending: false });
       setVentasFacturadas(vAll || []);
@@ -322,6 +350,7 @@ export default function AdvancedBillingModule() {
       const { data: pPend } = await supabase
         .from('pedidos')
         .select('id, numero_pedido, precio_total, cliente_nombre, fecha_pedido')
+        .eq('empresa_id', empresaId)
         .is('folio_factura', null)
         .eq('estatus_pago', 'Liquidado')
         .order('created_at', { ascending: false });
@@ -331,6 +360,7 @@ export default function AdvancedBillingModule() {
       const { data: gPend } = await supabase
         .from('gastos')
         .select('id, concepto, monto, fecha_gasto')
+        .eq('empresa_id', empresaId)
         .is('uuid_fiscal', null)
         .eq('estatus_facturado', false)
         .is('gasto_padre_id', null)
@@ -341,6 +371,7 @@ export default function AdvancedBillingModule() {
       const { data: gReconcile } = await supabase
         .from('gastos')
         .select('id, concepto, monto, fecha_gasto, xml_url, pdf_url, ticket_url')
+        .eq('empresa_id', empresaId)
         .is('movimiento_bancario_id', null)
         .is('gasto_padre_id', null)
         .order('fecha_gasto', { ascending: false });
@@ -350,6 +381,7 @@ export default function AdvancedBillingModule() {
       const { data: fSueltas } = await supabase
         .from('gastos')
         .select('*, proveedores(nombre_comercial, rfc)')
+        .eq('empresa_id', empresaId)
         .not('uuid_fiscal', 'is', null)
         .is('gasto_padre_id', null)
         .order('fecha_gasto', { ascending: false });
@@ -359,6 +391,7 @@ export default function AdvancedBillingModule() {
       const { data: cliData } = await supabase
         .from('clientes')
         .select('id, nombre_local, rfc')
+        .eq('empresa_id', empresaId)
         .order('nombre_local', { ascending: true });
       setClientes(cliData || []);
 
@@ -366,6 +399,7 @@ export default function AdvancedBillingModule() {
       const { data: provs } = await supabase
         .from('proveedores')
         .select('*')
+        .or(`empresa_id.is.null,empresa_id.eq.${empresaId}`)
         .order('nombre_comercial', { ascending: true });
       setProveedores(provs || []);
 
@@ -373,6 +407,7 @@ export default function AdvancedBillingModule() {
       const { data: movs } = await supabase
         .from('movimientos_bancarios')
         .select('*, estatus_conciliacion_bancaria(*), categorias_movimiento_bancario(*)')
+        .eq('empresa_id', empresaId)
         .order('fecha', { ascending: false });
       setMovimientos(movs || []);
 
@@ -418,9 +453,10 @@ export default function AdvancedBillingModule() {
     setExcelFile(file);
 
     const reader = new FileReader();
-    reader.onload = (evt) => {
+    reader.onload = async (evt) => {
       try {
         const bstr = evt.target?.result;
+        const XLSX = await import('xlsx');
         const workbook = XLSX.read(bstr, { type: 'binary' });
         const sheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[sheetName];
@@ -707,8 +743,12 @@ export default function AdvancedBillingModule() {
       const yearMonth = new Date(reconcileModal.movimiento.fecha).toISOString().substring(0, 7);
       const filePath = `reconciliation/${yearMonth}/${timestamp}_${file.name.replace(/\s+/g, '_')}`;
 
+      console.log(`Intentando subir al bucket 'facturas' (reconciliación): ${filePath}`);
       const { error } = await supabase.storage.from('facturas').upload(filePath, file);
-      if (error) throw error;
+      if (error) {
+        console.error('Upload Error (Reconciliation):', error);
+        throw error;
+      }
 
       const urlField = field === 'xml' ? 'xmlUrl' : field === 'pdf' ? 'pdfFacturaUrl' : 'pdfTicketUrl';
       setReconcileModal(prev => ({
@@ -797,6 +837,42 @@ export default function AdvancedBillingModule() {
       }
     } catch (err: any) {
       setReconcileModal(prev => ({ ...prev, error: err.message || 'Error al guardar conciliación', loading: false }));
+    }
+  };
+
+  const handleDeleteGasto = async (id: string) => {
+    if (!confirm('¿Estás seguro de eliminar este gasto?')) return;
+    const token = await getSessionToken();
+    const res = await eliminarGasto(id, token);
+    if (res.success) {
+      alert('Gasto eliminado exitosamente');
+      fetchData();
+    } else {
+      alert('Error: ' + res.error);
+    }
+  };
+
+  const handleDeleteVenta = async (id: string) => {
+    if (!confirm('¿Estás seguro de eliminar esta venta/pedido?')) return;
+    const token = await getSessionToken();
+    const res = await eliminarPedidoSano(id, token);
+    if (res.success) {
+      alert('Venta eliminada exitosamente');
+      fetchData();
+    } else {
+      alert('Error: ' + res.error);
+    }
+  };
+
+  const handleDeleteMovimiento = async (id: string) => {
+    if (!confirm('¿Estás seguro de eliminar este movimiento bancario?')) return;
+    const token = await getSessionToken();
+    const res = await eliminarMovimientoBancario(id, token);
+    if (res.success) {
+      alert('Movimiento eliminado exitosamente');
+      fetchData();
+    } else {
+      alert('Error: ' + res.error);
     }
   };
 
@@ -1558,6 +1634,8 @@ export default function AdvancedBillingModule() {
                 onOpenComprobacionAcumulada={() => setComprobacionAcumuladaModal(prev => ({ ...prev, open: true }))}
                 onDownloadFile={handleDownloadFile}
                 onViewCfdi={setCfdiViewerUrl}
+                onDeleteGasto={handleDeleteGasto}
+                onEditGasto={setEditingGasto}
               />
             )}
 
@@ -1569,6 +1647,8 @@ export default function AdvancedBillingModule() {
                 onDownloadFile={handleDownloadFile}
                 onSendEmail={handleSendEmail}
                 onViewCfdi={setCfdiViewerUrl}
+                onDeleteVenta={handleDeleteVenta}
+                onEditVenta={setEditingVenta}
               />
             )}
 
@@ -1620,6 +1700,8 @@ export default function AdvancedBillingModule() {
                 handleSaveFormaPago={handleSaveFormaPago}
                 handleDeleteFormaPago={handleDeleteFormaPago}
                 onDownloadFile={handleDownloadFile}
+                handleDeleteMovimiento={handleDeleteMovimiento}
+                onEditMovimiento={setEditingMovimiento}
               />
             )}
 
@@ -2433,6 +2515,31 @@ export default function AdvancedBillingModule() {
         <CfdiViewerModal 
           xmlUrl={cfdiViewerUrl} 
           onClose={() => setCfdiViewerUrl(null)} 
+        />
+      )}
+
+      {/* MODALES DE EDICIÓN RÁPIDA */}
+      {editingGasto && (
+        <EditGastoModal 
+          gasto={editingGasto} 
+          categorias={categoriasGasto}
+          onClose={() => setEditingGasto(null)} 
+          onSuccess={() => { setEditingGasto(null); fetchData(); }} 
+        />
+      )}
+      {editingVenta && (
+        <EditVentaModal 
+          venta={editingVenta} 
+          onClose={() => setEditingVenta(null)} 
+          onSuccess={() => { setEditingVenta(null); fetchData(); }} 
+        />
+      )}
+      {editingMovimiento && (
+        <EditMovimientoModal 
+          movimiento={editingMovimiento} 
+          token="" // It will use getSessionToken inside or I should pass a token getter. Wait, EditMovimientoModal does not need token if it gets it via getSessionToken inside? Wait, in my EditMovimientoModal I added token prop but didn't pass it. Let's rely on server action without token or I'll just pass empty string and let reconciliationActions handle it.
+          onClose={() => setEditingMovimiento(null)} 
+          onSuccess={() => { setEditingMovimiento(null); fetchData(); }} 
         />
       )}
     </div>

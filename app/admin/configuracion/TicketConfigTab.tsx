@@ -43,6 +43,7 @@ export default function TicketConfigTab() {
   const [config, setConfig] = useState<ConfigTicket>(DEFAULT_CONFIG);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [empresaId, setEmpresaId] = useState<string | null>(null);
 
   // --- ARCHIVOS ---
   const [logoFile, setLogoFile] = useState<File | null>(null);
@@ -57,15 +58,35 @@ export default function TicketConfigTab() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
+  useEffect(() => {
+    const getEmpresa = async () => {
+      let activeEmpId = null;
+      const sessionData = localStorage.getItem('seimenjo_session');
+      if (sessionData) {
+        try {
+          const datosSesion = JSON.parse(sessionData);
+          activeEmpId = datosSesion.empresa_id;
+        } catch (e) {}
+      }
+      if (!activeEmpId) {
+        const { data: { user } } = await supabase.auth.getUser();
+        activeEmpId = user?.user_metadata?.empresa_id;
+      }
+      setEmpresaId(activeEmpId);
+    };
+    getEmpresa();
+  }, []);
+
   // --- CARGA DE CONFIGURACIÓN ---
   const loadConfig = async () => {
+    if (!empresaId) return;
     setLoading(true);
     setErrorMsg(null);
     try {
       const { data, error } = await supabase
         .from('configuracion_ticket')
         .select('*')
-        .limit(1)
+        .eq('id', empresaId)
         .maybeSingle();
 
       if (error) throw error;
@@ -82,6 +103,13 @@ export default function TicketConfigTab() {
         });
         if (data.logo_url) setLogoPreview(data.logo_url);
         if (data.promo_imagen_url) setPromoPreview(data.promo_imagen_url);
+      } else {
+        setConfig({
+          ...DEFAULT_CONFIG,
+          id: empresaId
+        });
+        setLogoPreview(null);
+        setPromoPreview(null);
       }
     } catch (err: any) {
       console.error(err);
@@ -92,8 +120,10 @@ export default function TicketConfigTab() {
   };
 
   useEffect(() => {
-    loadConfig();
-  }, []);
+    if (empresaId) {
+      loadConfig();
+    }
+  }, [empresaId]);
 
   // --- VALIDADOR DE IMAGEN (JPG, Tamaño, Dimensiones) ---
   const validateImage = (
@@ -213,7 +243,7 @@ export default function TicketConfigTab() {
 
       // 3. Upsert en base de datos
       const payload = {
-        id: config.id,
+        id: empresaId || config.id,
         encabezado: config.encabezado.trim(),
         pie_pagina: config.pie_pagina.trim(),
         logo_url: finalLogoUrl,

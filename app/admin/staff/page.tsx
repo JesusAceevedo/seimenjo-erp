@@ -36,10 +36,12 @@ interface UsuarioStaff {
   [key: string]: unknown;
 }
 import { crearUsuarioStaffAdmin } from '../actions/adminAuth';
+import { useSessionToken } from '../../../lib/hooks/useSessionToken';
 
 export default function StaffPage() {
   const router = useRouter();
   const { isDarkMode, toggleDarkMode } = useThemeMode();
+  const getToken = useSessionToken();
 
   // --- ESTADOS DE CONTEXTO ---
   const [empresaId, setEmpresaId] = useState<string | null>(null);
@@ -265,6 +267,7 @@ export default function StaffPage() {
         ? selectedEmpresas
         : [...selectedEmpresas, targetEmpresa];
 
+      const token = await getToken();
       const res = await crearUsuarioStaffAdmin({
         email: nuevoStaff.email,
         passwordTemporal: nuevoStaff.password,
@@ -273,7 +276,7 @@ export default function StaffPage() {
         perfilId: selectedPerfilId,
         sucursalesPermitidas: selectedSucursales,
         empresasPermitidas: companies
-      });
+      }, token);
 
       if (!res.success) throw new Error(res.error);
 

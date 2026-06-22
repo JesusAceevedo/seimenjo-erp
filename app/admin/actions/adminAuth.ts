@@ -1,6 +1,7 @@
 'use server';
 
 import { createClient } from '@supabase/supabase-js';
+import { verifyStaffUser } from '../../../lib/supabaseAdmin';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
@@ -26,7 +27,11 @@ export async function crearUsuarioStaffAdmin(params: {
   perfilId: string;
   sucursalesPermitidas: string[];
   empresasPermitidas?: string[];
-}) {
+}, token: string) {
+  const caller = await verifyStaffUser(token);
+  if (!caller.esSuperusuario && caller.empresaId !== params.empresaId) {
+    throw new Error('Acceso denegado: No tienes permisos para crear usuarios en esta empresa.');
+  }
   const supabaseAdmin = getAdminClient();
 
   try {
@@ -121,8 +126,22 @@ export async function habilitarPortalClienteAdmin(params: {
   passwordTemporal: string;
   clienteId: string;
   nombreCliente: string;
-}) {
+}, token: string) {
+  const caller = await verifyStaffUser(token);
   const supabaseAdmin = getAdminClient();
+
+  if (!caller.esSuperusuario) {
+    // Verificar que el cliente pertenece a la misma empresa que el caller
+    const { data: client, error: clientErr } = await supabaseAdmin
+      .from('clientes')
+      .select('empresa_id')
+      .eq('id', params.clienteId)
+      .single();
+
+    if (clientErr || !client || client.empresa_id !== caller.empresaId) {
+      throw new Error('Acceso denegado: El cliente no pertenece a tu empresa.');
+    }
+  }
 
   try {
     // 1. Crear el usuario en Supabase Auth administrativamente con metadatos del cliente
@@ -164,7 +183,11 @@ export async function habilitarPortalClienteAdmin(params: {
   }
 }
 
-export async function crearBucketsAlmacenamiento() {
+export async function crearBucketsAlmacenamiento(token: string) {
+  const caller = await verifyStaffUser(token);
+  if (!caller.esSuperusuario) {
+    throw new Error('Acceso denegado: Solo los superusuarios pueden crear buckets de almacenamiento.');
+  }
   const supabaseAdmin = getAdminClient();
   try {
     // 1. Crear bucket público para logos de empresas
@@ -223,7 +246,11 @@ export async function inicializarNuevaEmpresa(params: {
   csd_key_url: string;
   csd_password_encriptada: string;
   modulos: string[];
-}) {
+}, token: string) {
+  const caller = await verifyStaffUser(token);
+  if (!caller.esSuperusuario && caller.empresaId !== params.empresaId) {
+    throw new Error('Acceso denegado: No puedes inicializar otra empresa.');
+  }
   const supabaseAdmin = getAdminClient();
   try {
     const { error: updateError } = await supabaseAdmin
@@ -294,7 +321,11 @@ export async function provisionarAdminEmpresa(params: {
   nombre: string;
   email: string;
   passwordTemporal: string;
-}) {
+}, token: string) {
+  const caller = await verifyStaffUser(token);
+  if (!caller.esSuperusuario) {
+    throw new Error('Acceso denegado: Solo los superusuarios pueden provisionar administradores de empresas.');
+  }
   const supabaseAdmin = getAdminClient();
   try {
     // 1. Verificar/Crear una sucursal por defecto ("Matriz") si la empresa no tiene ninguna
@@ -362,7 +393,7 @@ export async function provisionarAdminEmpresa(params: {
       empresaId: params.empresaId,
       perfilId: perfilId,
       sucursalesPermitidas: [sucursalId]
-    });
+    }, token);
 
     return res;
   } catch (err: any) {

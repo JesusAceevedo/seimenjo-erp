@@ -11,6 +11,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const pathname = usePathname();
 
   const [logoUrl, setLogoUrl] = useState<string | null>(null);
+  const [logoError, setLogoError] = useState(false);
   const [needsOnboarding, setNeedsOnboarding] = useState(false);
   const [empresaId, setEmpresaId] = useState<string | null>(null);
   const [loadingOnboarding, setLoadingOnboarding] = useState(true);
@@ -80,8 +81,11 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
               setEmpresaNombre(empresaData.nombre);
             }
 
-            if (empresaData?.logo_url) {
+            if (empresaData?.logo_url && empresaData.logo_url !== 'null' && empresaData.logo_url !== 'undefined') {
               setLogoUrl(empresaData.logo_url);
+              setLogoError(false);
+            } else {
+              setLogoUrl(null);
             }
 
             if (!isSuper && !empresaError && (!empresaData?.rfc || !empresaData?.razon_social)) {
@@ -187,13 +191,15 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       )}
       <aside className="w-64 bg-white dark:bg-gray-950 border-r border-gray-200 dark:border-gray-800 flex flex-col shrink-0">
         <div className="p-6 border-b border-gray-200 dark:border-gray-800 flex items-center gap-3">
-          {logoUrl ? (
-            <img src={logoUrl} alt="Logo" className="w-9 h-9 rounded-lg object-contain border border-gray-200 dark:border-gray-800 bg-white" />
+          {logoUrl && !logoError ? (
+            <img src={logoUrl} alt="Logo" onError={() => setLogoError(true)} className="w-9 h-9 rounded-lg object-contain border border-gray-200 dark:border-gray-800 bg-white" />
           ) : (
             <Soup className="text-amber-500 w-8 h-8" />
           )}
           <div className="min-w-0 flex-1">
-            <h1 className="font-bold text-lg leading-tight truncate">Playa Seimenjo</h1>
+            <h1 className="font-bold text-lg leading-tight truncate" title={empresaNombre || 'Mi Empresa'}>
+              {empresaNombre || 'Mi Empresa'}
+            </h1>
             {switchableCompanies.length > 1 ? (
               <div className="mt-1 relative">
                 <select
@@ -209,12 +215,10 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                   ))}
                 </select>
               </div>
-            ) : empresaNombre ? (
-              <span className="text-[10px] bg-amber-500/10 text-amber-600 dark:text-amber-400 px-1.5 py-0.5 rounded font-semibold uppercase tracking-wide block w-fit mt-0.5">
-                {empresaNombre}
-              </span>
             ) : (
-              <span className="text-xs text-gray-500">Administración</span>
+              <span className="text-[10px] bg-amber-500/10 text-amber-600 dark:text-amber-400 px-1.5 py-0.5 rounded font-semibold uppercase tracking-wide block w-fit mt-0.5">
+                {empresaNombre ? 'Staff' : 'Administración'}
+              </span>
             )}
           </div>
         </div>

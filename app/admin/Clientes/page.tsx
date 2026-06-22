@@ -8,6 +8,7 @@ import { supabase } from '../../../lib/supabase';
 import { useThemeMode } from '../../../lib/useThemeMode';
 import { Plus, Search, Sun, Moon, ChevronLeft, ChevronRight, Edit3, Trash2, Key, Users, Save } from 'lucide-react';
 import { habilitarPortalClienteAdmin } from '../actions/adminAuth';
+import { useSessionToken } from '../../../lib/hooks/useSessionToken';
 import {
   CATALOGO_REGIMEN_FISCAL,
   CATALOGO_USO_CFDI,
@@ -31,6 +32,7 @@ const CLIENTE_INICIAL = {
 export default function AdminMonitor() {
   const router = useRouter();
   const pathname = usePathname(); // <-- NUEVO: Leemos la ruta de Next.js
+  const getToken = useSessionToken();
 
   // Control de Navegación Interna basado en la URL del Layout
   // Si la ruta contiene "clientes" mostramos el módulo, si no, ventas.
@@ -254,12 +256,13 @@ export default function AdminMonitor() {
     }
     setHabilitandoPortal(true);
     try {
+      const token = await getToken();
       const res = await habilitarPortalClienteAdmin({
         email: portalModal.email,
         passwordTemporal: portalModal.password,
         clienteId: portalModal.cliente.id,
         nombreCliente: portalModal.cliente.nombre_local
-      });
+      }, token);
 
       if (!res.success) throw new Error(res.error);
 

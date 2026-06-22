@@ -168,6 +168,7 @@ export interface GastoFacturado {
   ticket_url?: string;
   gasto_padre_id?: string | null;
   padre?: { concepto: string } | null;
+  movimiento_bancario_id?: string | null;
 }
 
 export interface VentaFacturada {
@@ -184,10 +185,12 @@ export interface VentaFacturada {
     pdf_url?: string;
     ticket_url?: string;
     total?: number;
+    subtotal?: number;
     iva_trasladado?: number;
     fecha_emision?: string;
     serie_folio?: string;
   }[];
+  movimiento_bancario_id?: string | null;
 }
 
 export interface GastoPendiente {

@@ -4,7 +4,7 @@
 // Tab de Egresos/Gastos facturados — con paginación, búsqueda, columnas enriquecidas y clasificación inline.
 
 import React, { useState, useMemo } from 'react';
-import { UploadCloud, Plus, FileCode, FileText, CreditCard, Search, ChevronLeft, ChevronRight, Tag, Filter, Eye } from 'lucide-react';
+import { UploadCloud, Plus, FileCode, FileText, CreditCard, Search, ChevronLeft, ChevronRight, Tag, Filter, Eye, Trash2, Edit3 } from 'lucide-react';
 import { formatCurrency } from '../../../../lib/formatters';
 import CargaXmlMasivaModal from './CargaXmlMasivaModal';
 import CargaManualModal from './CargaManualModal';
@@ -19,6 +19,8 @@ interface EgresosTabProps {
   onDownloadFile: (url: string) => void;
   onViewCfdi?: (xmlUrl: string) => void;
   onUpdateCategoria: (gastoId: string, categoriaId: string | null) => void;
+  onEditGasto: (gasto: GastoFacturado) => void;
+  onDeleteGasto: (gastoId: string) => void;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -51,6 +53,8 @@ export default function EgresosTab({
   onDownloadFile,
   onViewCfdi,
   onUpdateCategoria,
+  onEditGasto,
+  onDeleteGasto,
 }: EgresosTabProps) {
 
   // Paginación
@@ -72,7 +76,9 @@ export default function EgresosTab({
         g.uuid_fiscal?.toLowerCase().includes(q) ||
         g.concepto?.toLowerCase().includes(q) ||
         g.proveedores?.nombre_comercial?.toLowerCase().includes(q) ||
-        g.proveedores?.rfc?.toLowerCase().includes(q)
+        g.proveedores?.rfc?.toLowerCase().includes(q) ||
+        g.monto?.toString().includes(q) ||
+        g.subtotal?.toString().includes(q)
       );
       const matchMetodo = !filtroMetodo || g.metodo_pago === filtroMetodo;
       const matchCat = !filtroCategoria || g.categoria_id === filtroCategoria || (!g.categoria_id && filtroCategoria === '__sin__');
@@ -86,6 +92,49 @@ export default function EgresosTab({
   const visible = filtrados.slice(pagina * pageSize, (pagina + 1) * pageSize);
 
   const resetPage = () => setPage(0);
+
+  // Calcular KPIs acumulados (IVA y formas de pago)
+  const kpis = useMemo(() => {
+    let totalMonto = 0;
+    let totalIva = 0;
+    const metodoTotals: Record<string, number> = {
+      Efectivo: 0,
+      Transferencia: 0,
+      Tarjeta: 0,
+      Cheque: 0,
+      Otros: 0,
+    };
+
+    filtrados.forEach((g) => {
+      const monto = Number(g.monto || 0);
+      totalMonto += monto;
+
+      // Calcular IVA con fallbacks inteligentes
+      let iva = 0;
+      if (g.iva_acreditable !== undefined && g.iva_acreditable !== null) {
+        iva = Number(g.iva_acreditable);
+      } else if (g.subtotal && Number(g.monto) > Number(g.subtotal)) {
+        iva = Number(g.monto) - Number(g.subtotal);
+      } else if (g.uuid_fiscal) {
+        iva = Number(g.monto) - (Number(g.monto) / 1.16);
+      }
+      totalIva += iva;
+
+      // Clasificar por método de pago
+      const metodo = g.metodo_pago || '';
+      if (metodoTotals[metodo] !== undefined) {
+        metodoTotals[metodo] += monto;
+      } else {
+        metodoTotals.Otros += monto;
+      }
+    });
+
+    return {
+      totalMonto,
+      totalIva,
+      metodoTotals,
+    };
+  }, [filtrados]);
 
   return (
     <div className="flex flex-col flex-1 font-sans min-h-0 overflow-hidden">
@@ -158,6 +207,53 @@ export default function EgresosTab({
         </div>
       </div>
 
+      {/* ── TARJETAS DE ACUMULADOS (KPIs) ─────────────────────────────────── */}
+      <div className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 bg-gray-50/50 dark:bg-gray-900/10 border-b border-gray-200 dark:border-gray-800 shrink-0">
+        {/* Card 1: Total Egresos */}
+        <div className="bg-white dark:bg-gray-950 border border-gray-150 dark:border-gray-850 p-4 rounded-2xl shadow-sm flex items-center gap-3">
+          <div className="p-3 bg-red-100 dark:bg-red-900/30 text-red-650 dark:text-red-400 rounded-xl flex items-center justify-center shrink-0">
+            <span className="text-red-600 dark:text-red-400 font-extrabold text-sm">$</span>
+          </div>
+          <div>
+            <span className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider block">Total Egresos</span>
+            <span className="text-lg font-black text-gray-900 dark:text-white block font-mono">
+              {formatCurrency(kpis.totalMonto)}
+            </span>
+          </div>
+        </div>
+
+        {/* Card 2: IVA Acreditable */}
+        <div className="bg-white dark:bg-gray-950 border border-gray-150 dark:border-gray-850 p-4 rounded-2xl shadow-sm flex items-center gap-3">
+          <div className="p-3 bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded-xl flex items-center justify-center shrink-0">
+            <FileCode size={20} />
+          </div>
+          <div>
+            <span className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider block">IVA Acreditable</span>
+            <span className="text-lg font-black text-blue-650 dark:text-blue-400 block font-mono">
+              {formatCurrency(kpis.totalIva)}
+            </span>
+          </div>
+        </div>
+
+        {/* Card 3 y 4: Desglose por Método de Pago */}
+        <div className="lg:col-span-2 bg-white dark:bg-gray-950 border border-gray-150 dark:border-gray-850 p-4 rounded-2xl shadow-sm flex flex-col justify-center">
+          <div className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+            <CreditCard size={12} className="text-gray-450" />
+            <span>Pagos por Método</span>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-[10px] font-mono">
+            {Object.entries(kpis.metodoTotals).map(([metodo, subtotal]) => (
+              <div key={metodo} className="p-2 bg-gray-50 dark:bg-gray-900/50 rounded-xl border border-gray-100 dark:border-gray-800 text-center">
+                <span className="text-[9px] text-gray-500 block truncate">{metodo}</span>
+                <span className="font-extrabold text-gray-800 dark:text-gray-200 block truncate">
+                  {formatCurrency(subtotal)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
       {/* ── TABLA ──────────────────────────────────────────────────────────── */}
       <div className="overflow-auto flex-1">
         <table className="w-full text-left border-collapse min-w-[900px] text-xs">
@@ -170,6 +266,7 @@ export default function EgresosTab({
               <th className="p-3 min-w-[160px]">Clasificación</th>
               <th className="p-3 text-right">Importe</th>
               <th className="p-3 text-center">Archivos</th>
+              <th className="p-3 text-center">Acciones</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100 dark:divide-gray-800/50">
@@ -240,8 +337,16 @@ export default function EgresosTab({
                   <div className="font-bold text-red-500 dark:text-red-400 text-sm">
                     -{formatCurrency(g.monto)}
                   </div>
-                  {g.iva_acreditable ? (
+                  {Number(g.iva_acreditable) > 0 ? (
                     <div className="text-[10px] text-gray-400 mt-0.5">IVA: {formatCurrency(g.iva_acreditable)}</div>
+                  ) : g.subtotal && Number(g.monto) > Number(g.subtotal) ? (
+                    <div className="text-[10px] text-gray-400 mt-0.5" title="IVA calculado (Monto - Subtotal)">
+                      IVA: {formatCurrency(Number(g.monto) - Number(g.subtotal))}
+                    </div>
+                  ) : g.uuid_fiscal ? (
+                    <div className="text-[10px] text-gray-400 mt-0.5" title="IVA estimado (16%)">
+                      IVA: {formatCurrency(Number(g.monto) - (Number(g.monto) / 1.16))}
+                    </div>
                   ) : null}
                 </td>
 
@@ -302,11 +407,33 @@ export default function EgresosTab({
                     </button>
                   </div>
                 </td>
+
+                {/* Acciones */}
+                <td className="p-3 text-center">
+                  <div className="flex gap-1 justify-center">
+                    <button
+                      onClick={() => onEditGasto(g)}
+                      disabled={!!g.movimiento_bancario_id}
+                      title={g.movimiento_bancario_id ? "No se puede editar porque está conciliado" : "Editar"}
+                      className={`p-1.5 rounded transition-colors ${g.movimiento_bancario_id ? 'text-gray-300 dark:text-gray-600 cursor-not-allowed' : 'text-gray-500 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/30'}`}
+                    >
+                      <Edit3 size={14} />
+                    </button>
+                    <button
+                      onClick={() => onDeleteGasto(g.id)}
+                      disabled={!!g.movimiento_bancario_id}
+                      title={g.movimiento_bancario_id ? "No se puede eliminar porque está conciliado" : "Eliminar"}
+                      className={`p-1.5 rounded transition-colors ${g.movimiento_bancario_id ? 'text-gray-300 dark:text-gray-600 cursor-not-allowed' : 'text-gray-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30'}`}
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                </td>
               </tr>
             ))}
             {visible.length === 0 && (
               <tr>
-                <td colSpan={7} className="p-12 text-center text-gray-400 italic">
+                <td colSpan={8} className="p-12 text-center text-gray-400 italic">
                   {filtrados.length === 0 && (search || filtroMetodo || filtroCategoria)
                     ? 'No se encontraron registros con los filtros aplicados.'
                     : 'No hay gastos facturados registrados.'}

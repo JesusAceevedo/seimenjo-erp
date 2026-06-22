@@ -64,7 +64,7 @@ export default function ExpedienteDigital() {
       (gastos || []).forEach((g: any) => {
         const missing = [];
         if (!g.xml_url) missing.push('XML');
-        if (!g.pdf_url) missing.push('PDF');
+        if (!g.pdf_url && !g.xml_url) missing.push('PDF');
         if (!g.ticket_url) missing.push('Ticket');
         
         let color: 'green' | 'yellow' | 'red' = 'green';
@@ -96,7 +96,7 @@ export default function ExpedienteDigital() {
       (ingresos || []).forEach((i: any) => {
         const missing = [];
         if (!i.xml_url) missing.push('XML');
-        if (!i.pdf_url) missing.push('PDF');
+        if (!i.pdf_url && !i.xml_url) missing.push('PDF');
         if (!i.ticket_url) missing.push('Ticket');
         
         let color: 'green' | 'yellow' | 'red' = 'green';
@@ -136,7 +136,7 @@ export default function ExpedienteDigital() {
         } else {
           const missing = [];
           if (!m.xml_url) missing.push('XML');
-          if (!m.pdf_factura_url) missing.push('PDF');
+          if (!m.pdf_factura_url && !m.xml_url) missing.push('PDF');
           if (!m.pdf_ticket_url) missing.push('Ticket');
           
           if (missing.length === 3) {
@@ -188,10 +188,13 @@ export default function ExpedienteDigital() {
   });
 
   const handleOpenViewer = (item: ExpedienteItem) => {
-    const docs: {url: string, type: 'pdf' | 'xml', label: string}[] = [];
+    const docs: {url: string, type: 'pdf' | 'xml' | 'cfdi', label: string}[] = [];
     if (item.xml_url) {
       item.xml_url.split(',').forEach((url, i) => {
-        if (url) docs.push({ url, type: 'xml', label: `XML ${i + 1}` });
+        if (url) {
+          docs.push({ url, type: 'xml', label: `XML ${i + 1}` });
+          docs.push({ url, type: 'cfdi', label: `Rep. PDF XML ${i + 1}` });
+        }
       });
     }
     if (item.pdf_url) {

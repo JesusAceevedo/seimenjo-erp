@@ -32,6 +32,23 @@ export async function getUserEmpresaId(token: string): Promise<{ empresaId: stri
   return { empresaId: staff.empresa_id, userId: user.id };
 }
 
+// Helper para validar staff, empresa y privilegios de superusuario
+export async function verifyStaffUser(token: string): Promise<{ empresaId: string | null; userId: string; esSuperusuario: boolean }> {
+  if (!token) throw new Error('Usuario no autenticado (Token no proporcionado).');
+
+  const { data: { user }, error: authErr } = await supabaseAdmin.auth.getUser(token);
+  if (authErr || !user) throw new Error('Sesión de usuario inválida o expirada.');
+
+  const { data: staff, error: staffErr } = await supabaseAdmin
+    .from('usuarios_staff')
+    .select('empresa_id, es_superusuario')
+    .eq('supabase_auth_id', user.id)
+    .single();
+
+  if (staffErr || !staff) throw new Error('No se encontró el perfil de staff asociado a tu cuenta.');
+  return { empresaId: staff.empresa_id, userId: user.id, esSuperusuario: !!staff.es_superusuario };
+}
+
 // ---------------------------------------------------------------------------
 // Helper: Mapear código SAT de forma de pago a ID en BD
 // ---------------------------------------------------------------------------

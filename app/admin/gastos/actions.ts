@@ -833,3 +833,82 @@ export async function procesarLoteFacturas(payloads: {
     return { success: false, error: error.message || 'Error al procesar el lote.' };
   }
 }
+
+// ── Eliminar Gasto (solo si NO está conciliado) ─────────────────────────────────────────
+export async function eliminarGasto(gastoId: string, token: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { empresaId } = await getUserEmpresaId(token);
+    
+    const { data: gasto } = await supabaseAdmin
+      .from('gastos')
+      .select('movimiento_bancario_id')
+      .eq('id', gastoId)
+      .eq('empresa_id', empresaId)
+      .single();
+      
+    if (gasto?.movimiento_bancario_id) {
+      throw new Error('No se puede eliminar un gasto que ya se encuentra conciliado.');
+    }
+
+    // Eliminar gastos hijos (comprobantes/REP)
+    await supabaseAdmin
+      .from('gastos')
+      .delete()
+      .eq('gasto_padre_id', gastoId)
+      .eq('empresa_id', empresaId);
+
+    const { error } = await supabaseAdmin
+      .from('gastos')
+      .delete()
+      .eq('id', gastoId)
+      .eq('empresa_id', empresaId);
+
+    if (error) throw error;
+    return { success: true };
+  } catch (err: any) {
+    const message = err?.message || (typeof err === 'string' ? err : JSON.stringify(err));
+    return { success: false, error: message || 'Error al eliminar el gasto' };
+  }
+}
+
+// ── Eliminar Pedido/Venta (solo si NO está conciliado) ─────────────────────────────────────────
+export async function eliminarPedidoSano(pedidoId: string, token: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { empresaId } = await getUserEmpresaId(token);
+
+    const { data: pedido } = await supabaseAdmin
+      .from('pedidos')
+      .select('movimiento_bancario_id')
+      .eq('id', pedidoId)
+      .eq('empresa_id', empresaId)
+      .single();
+
+    if (pedido?.movimiento_bancario_id) {
+      throw new Error('No se puede eliminar una venta/pedido que ya se encuentra conciliado.');
+    }
+
+    await supabaseAdmin
+      .from('facturas_clientes')
+      .delete()
+      .eq('pedido_id', pedidoId)
+      .eq('empresa_id', empresaId);
+
+    await supabaseAdmin
+      .from('pedido_detalles')
+      .delete()
+      .eq('pedido_id', pedidoId)
+      .eq('empresa_id', empresaId);
+
+    const { error } = await supabaseAdmin
+      .from('pedidos')
+      .delete()
+      .eq('id', pedidoId)
+      .eq('empresa_id', empresaId);
+
+    if (error) throw error;
+    return { success: true };
+  } catch (err: any) {
+    const message = err?.message || (typeof err === 'string' ? err : JSON.stringify(err));
+    return { success: false, error: message || 'Error al eliminar el pedido' };
+  }
+}

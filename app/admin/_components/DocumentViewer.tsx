@@ -3,17 +3,20 @@ import React, { useState, useEffect } from 'react';
 import { X, FileText, FileCode, Download, RefreshCw, AlertCircle } from 'lucide-react';
 import { obtenerSignedUrl } from '../gastos/actions';
 import { supabase } from '../../../lib/supabase';
+import { XMLParser } from 'fast-xml-parser';
+import { QRCodeSVG } from 'qrcode.react';
 
 interface DocumentViewerProps {
   open: boolean;
   onClose: () => void;
   title: string;
-  documents: { url: string; type: 'pdf' | 'xml'; label: string }[];
+  documents: { url: string; type: 'pdf' | 'xml' | 'cfdi'; label: string }[];
 }
 
 export default function DocumentViewer({ open, onClose, title, documents }: DocumentViewerProps) {
   const [activeIndex, setActiveIndex] = useState(0);
   const [xmlContent, setXmlContent] = useState<string | null>(null);
+  const [cfdiData, setCfdiData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -21,6 +24,7 @@ export default function DocumentViewer({ open, onClose, title, documents }: Docu
     if (!open) return;
     setActiveIndex(0);
     setXmlContent(null);
+    setCfdiData(null);
     setError(null);
   }, [open, documents]);
 
@@ -45,14 +49,22 @@ export default function DocumentViewer({ open, onClose, title, documents }: Docu
           throw new Error('No se pudo obtener el archivo.');
         }
 
-        if (activeDoc.type === 'xml') {
+        setSignedPdfUrl(res.url);
+
+        if (activeDoc.type === 'xml' || activeDoc.type === 'cfdi') {
           const fetchRes = await fetch(res.url);
           if (!fetchRes.ok) throw new Error('Error al cargar el XML');
           const text = await fetchRes.text();
           setXmlContent(text);
-        } else {
-          // Es PDF, usamos la URL firmada en el iframe
-          setSignedPdfUrl(res.url);
+          if (activeDoc.type === 'cfdi') {
+            const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: "" });
+            const json = parser.parse(text);
+            const comprobante = json["cfdi:Comprobante"];
+            if (!comprobante) {
+              throw new Error('Estructura XML inválida (no es un comprobante CFDI válido).');
+            }
+            setCfdiData(comprobante);
+          }
         }
       } catch (err: any) {
         console.error(err);
@@ -93,22 +105,42 @@ export default function DocumentViewer({ open, onClose, title, documents }: Docu
                       : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800'
                   }`}
                 >
-                  {doc.type === 'pdf' ? <FileText size={14} /> : <FileCode size={14} />}
+                  {doc.type === 'pdf' ? <FileText size={14} /> : (doc.type === 'cfdi' ? <FileText size={14} /> : <FileCode size={14} />)}
                   {doc.label}
                 </button>
               ))}
             </div>
           )}
-          <a
-            href={signedPdfUrl || '#'}
-            target="_blank"
-            rel="noreferrer"
-            download
-            className="p-2 rounded-lg bg-gray-800 text-gray-300 hover:bg-gray-700 hover:text-white transition-colors"
-            title="Descargar Documento"
-          >
-            <Download size={18} />
-          </a>
+          {activeDoc?.type === 'cfdi' && (
+            <button
+              onClick={() => {
+                const printContents = document.getElementById('cfdi-print-area')?.innerHTML;
+                if (printContents) {
+                  const originalContents = document.body.innerHTML;
+                  document.body.innerHTML = printContents;
+                  window.print();
+                  document.body.innerHTML = originalContents;
+                  window.location.reload();
+                }
+              }}
+              className="px-3 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-500 font-bold text-xs flex items-center gap-2"
+              title="Imprimir a PDF"
+            >
+              <Download size={14} /> Imprimir PDF
+            </button>
+          )}
+          {activeDoc?.type !== 'cfdi' && (
+            <a
+              href={signedPdfUrl || '#'}
+              target="_blank"
+              rel="noreferrer"
+              download
+              className="p-2 rounded-lg bg-gray-800 text-gray-300 hover:bg-gray-700 hover:text-white transition-colors"
+              title="Descargar Documento"
+            >
+              <Download size={18} />
+            </a>
+          )}
           <button
             onClick={onClose}
             className="p-2 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500 hover:text-white transition-colors"
@@ -148,6 +180,101 @@ export default function DocumentViewer({ open, onClose, title, documents }: Docu
                 className="w-full h-full border-0"
                 title={`PDF Viewer ${activeDoc.label}`}
               />
+            ) : activeDoc.type === 'cfdi' ? (
+              <div className="flex-1 overflow-auto p-4 bg-gray-100 dark:bg-gray-800">
+                {cfdiData && (
+                  <div id="cfdi-print-area" className="bg-white text-black p-8 border rounded-xl shadow-inner font-sans text-sm mx-auto max-w-3xl">
+                    <div className="flex justify-between items-start border-b-2 border-gray-800 pb-4 mb-6">
+                      <div>
+                        <h1 className="text-2xl font-black uppercase tracking-wider">{cfdiData["cfdi:Emisor"]?.Nombre || 'Emisor Desconocido'}</h1>
+                        <p className="font-bold text-gray-600">RFC: {cfdiData["cfdi:Emisor"]?.Rfc}</p>
+                        <p className="text-gray-500 text-xs">Régimen Fiscal: {cfdiData["cfdi:Emisor"]?.RegimenFiscal}</p>
+                      </div>
+                      <div className="text-right">
+                        <h2 className="text-xl font-bold text-blue-800">FACTURA</h2>
+                        <p className="text-gray-600 font-bold">Serie/Folio: <span className="text-black">{cfdiData.Serie || ''} {cfdiData.Folio || ''}</span></p>
+                        <p className="text-gray-600 text-xs mt-1">Fecha: {cfdiData.Fecha}</p>
+                        <p className="text-gray-600 text-xs mt-1">UUID: {cfdiData["cfdi:Complemento"]?.["tfd:TimbreFiscalDigital"]?.UUID || 'N/A'}</p>
+                      </div>
+                    </div>
+                    <div className="bg-gray-50 p-4 rounded-lg border mb-6">
+                      <h3 className="font-bold border-b pb-2 mb-2 uppercase text-xs text-gray-500">Receptor</h3>
+                      <p className="font-bold text-lg">{cfdiData["cfdi:Receptor"]?.Nombre || 'Receptor Desconocido'}</p>
+                      <p className="text-gray-600">RFC: {cfdiData["cfdi:Receptor"]?.Rfc}</p>
+                      <p className="text-gray-600 text-xs">Uso CFDI: {cfdiData["cfdi:Receptor"]?.UsoCFDI} | Domicilio Fiscal: {cfdiData["cfdi:Receptor"]?.DomicilioFiscalReceptor}</p>
+                    </div>
+                    <table className="w-full text-left mb-6 text-sm border-collapse">
+                      <thead>
+                        <tr className="bg-gray-100 border-b-2 border-gray-300">
+                          <th className="py-2 px-2 font-bold w-16">Cant</th>
+                          <th className="py-2 px-2 font-bold w-20">Clave</th>
+                          <th className="py-2 px-2 font-bold">Descripción</th>
+                          <th className="py-2 px-2 font-bold text-right w-24">V. Unitario</th>
+                          <th className="py-2 px-2 font-bold text-right w-24">Importe</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(Array.isArray(cfdiData["cfdi:Conceptos"]?.["cfdi:Concepto"]) 
+                          ? cfdiData["cfdi:Conceptos"]?.["cfdi:Concepto"] 
+                          : cfdiData["cfdi:Conceptos"]?.["cfdi:Concepto"] ? [cfdiData["cfdi:Conceptos"]?.["cfdi:Concepto"]] : []).map((c: any, i: number) => (
+                          <tr key={i} className="border-b border-gray-100">
+                            <td className="py-2 px-2">{c.Cantidad}</td>
+                            <td className="py-2 px-2 text-xs text-gray-500">{c.ClaveProdServ}</td>
+                            <td className="py-2 px-2">{c.Descripcion}</td>
+                            <td className="py-2 px-2 text-right">{new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' }).format(Number(c.ValorUnitario) || 0)}</td>
+                            <td className="py-2 px-2 text-right font-medium">{new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' }).format(Number(c.Importe) || 0)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    <div className="flex justify-end mb-8">
+                      <div className="w-64">
+                        <div className="flex justify-between py-1 border-b">
+                          <span className="font-bold text-gray-600">Subtotal:</span>
+                          <span>{new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' }).format(Number(cfdiData.SubTotal) || 0)}</span>
+                        </div>
+                        <div className="flex justify-between py-1 border-b">
+                          <span className="font-bold text-gray-600">Impuestos:</span>
+                          <span>{new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' }).format(Number(cfdiData.Total) - Number(cfdiData.SubTotal))}</span>
+                        </div>
+                        <div className="flex justify-between py-2 text-lg font-black text-blue-800">
+                          <span>Total:</span>
+                          <span>{new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' }).format(Number(cfdiData.Total) || 0)}</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="bg-gray-50 p-3 rounded-lg border mb-6 text-xs text-gray-700">
+                      <p><strong>Forma de Pago:</strong> {cfdiData.FormaPago || 'N/A'} | <strong>Método de Pago:</strong> {cfdiData.MetodoPago || 'N/A'} | <strong>Moneda:</strong> {cfdiData.Moneda || 'N/A'}</p>
+                    </div>
+                    <div className="border-t-2 border-gray-800 pt-4 mt-4">
+                      <div className="grid grid-cols-1 sm:grid-cols-4 gap-6">
+                        <div className="sm:col-span-1 flex justify-center items-start">
+                          <QRCodeSVG 
+                            value={`https://verificacfdi.facturaelectronica.sat.gob.mx/default.aspx?id=${cfdiData["cfdi:Complemento"]?.["tfd:TimbreFiscalDigital"]?.UUID || ''}&re=${cfdiData["cfdi:Emisor"]?.Rfc || ''}&rr=${cfdiData["cfdi:Receptor"]?.Rfc || ''}&tt=${cfdiData.Total || ''}&fe=${cfdiData.Sello ? cfdiData.Sello.slice(-8) : ''}`} 
+                            size={140} 
+                            level={"M"} 
+                          />
+                        </div>
+                        <div className="sm:col-span-3 text-[9px] text-gray-600 flex flex-col gap-2 break-all font-mono">
+                          <div>
+                            <p className="font-bold text-gray-900 mb-0.5">Sello Digital del Emisor (CFDI):</p>
+                            <p>{cfdiData.Sello || 'No disponible'}</p>
+                          </div>
+                          <div>
+                            <p className="font-bold text-gray-900 mb-0.5">Sello Digital del SAT:</p>
+                            <p>{cfdiData["cfdi:Complemento"]?.["tfd:TimbreFiscalDigital"]?.SelloSAT || 'No disponible'}</p>
+                          </div>
+                          <div>
+                            <p className="font-bold text-gray-900 mb-0.5">Cadena Original del complemento de certificación digital del SAT:</p>
+                            <p>{`||1.1|${cfdiData["cfdi:Complemento"]?.["tfd:TimbreFiscalDigital"]?.UUID || ''}|${cfdiData["cfdi:Complemento"]?.["tfd:TimbreFiscalDigital"]?.FechaTimbrado || ''}|${cfdiData["cfdi:Complemento"]?.["tfd:TimbreFiscalDigital"]?.RfcProvCertif || ''}|${cfdiData.Sello || ''}|${cfdiData["cfdi:Complemento"]?.["tfd:TimbreFiscalDigital"]?.NoCertificadoSAT || ''}||`}</p>
+                          </div>
+                        </div>
+                      </div>
+                      <p className="text-center text-gray-400 text-xs mt-6 font-sans">Este documento es una representación impresa de un CFDI.</p>
+                    </div>
+                  </div>
+                )}
+              </div>
             ) : (
               <div className="flex-1 overflow-auto p-4 bg-[#1E1E1E] text-[#D4D4D4] font-mono text-sm">
                 <pre className="whitespace-pre-wrap"><code>{xmlContent}</code></pre>

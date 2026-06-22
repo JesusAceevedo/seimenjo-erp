@@ -49,68 +49,361 @@ export default function CargaXmlMasivaModal({ onClose, onSuccess, tipo }: CargaX
     const nuevosResultados: any[] = [];
     const tableStr = tipo === 'gasto' ? 'gastos' : 'facturas_clientes';
 
-    for (const file of archivos) {
-      try {
-        const text = await file.text();
-        
-        // Extracción super básica usando regex para evitar fallos por namespaces variables del SAT
-        const totalMatch = text.match(/Total="([^"]+)"/i) || text.match(/total="([^"]+)"/i);
-        const folioMatch = text.match(/Folio="([^"]+)"/i) || text.match(/folio="([^"]+)"/i);
-        const uuidMatch = text.match(/UUID="([^"]+)"/i) || text.match(/uuid="([^"]+)"/i);
-        const fechaMatch = text.match(/Fecha="([^"]+)"/i) || text.match(/fecha="([^"]+)"/i);
-
-        const rfcEmisorMatch = text.match(/<cfdi:Emisor[^>]*Rfc="([^"]+)"/i) || text.match(/<cfdi:Emisor[^>]*rfc="([^"]+)"/i);
-        const rfcReceptorMatch = text.match(/<cfdi:Receptor[^>]*Rfc="([^"]+)"/i) || text.match(/<cfdi:Receptor[^>]*rfc="([^"]+)"/i);
-        const nombreEmisorMatch = text.match(/<cfdi:Emisor[^>]*Nombre="([^"]+)"/i) || text.match(/<cfdi:Emisor[^>]*nombre="([^"]+)"/i);
-
-        if (!totalMatch || !uuidMatch) {
-          nuevosResultados.push({ nombre: file.name, estatus: 'error', mensaje: 'XML inválido o no es CFDI v3.3/v4.0' });
-          continue;
-        }
-
-        const total = parseFloat(totalMatch[1] || '0');
-        const folio = folioMatch ? folioMatch[1] : `SF-${Math.floor(Math.random()*1000)}`;
-        const uuid = uuidMatch[1];
-        const fecha_emision = fechaMatch ? fechaMatch[1].split('T')[0] : new Date().toISOString().split('T')[0];
-        
-        const rfc = tipo === 'gasto' ? (rfcEmisorMatch ? rfcEmisorMatch[1] : 'XAXX010101000') : (rfcReceptorMatch ? rfcReceptorMatch[1] : 'XAXX010101000');
-        const proveedor_cliente_nombre = tipo === 'gasto' ? (nombreEmisorMatch ? nombreEmisorMatch[1] : 'PROVEEDOR DESCONOCIDO') : 'CLIENTE';
-
-        // 1. Subir XML al storage
-        const fileExt = file.name.split('.').pop();
-        const fileName = `${tipo}s/${Date.now()}_${uuid}.${fileExt}`;
-        const { error: uploadError } = await supabase.storage.from('comprobantes').upload(fileName, file);
-
-        let xmlUrl = null;
-        if (!uploadError) {
-          const { data: urlData } = supabase.storage.from('comprobantes').getPublicUrl(fileName);
-          xmlUrl = urlData.publicUrl;
-        }
-
-        // 2. Insertar en base de datos
-        const { error: dbError } = await supabase.from(tableStr).insert([{
-          folio_factura: folio,
-          uuid: uuid,
-          monto_total: total,
-          monto_pagado: 0,
-          saldo_pendiente: total,
-          fecha_emision: fecha_emision,
-          rfc_proveedor: tipo === 'gasto' ? rfc : null,
-          proveedor_nombre_temp: tipo === 'gasto' ? proveedor_cliente_nombre : null,
-          rfc_cliente: tipo === 'venta' ? rfc : null,
-          cliente_nombre_temp: tipo === 'venta' ? proveedor_cliente_nombre : null,
-          xml_url: xmlUrl,
-          estatus_factura_id: null,
-          categoria_gasto_id: null
-        }]);
-
-        if (dbError) throw dbError;
-        nuevosResultados.push({ nombre: file.name, estatus: 'ok' });
-
-      } catch (err: any) {
-        console.error(err);
-        nuevosResultados.push({ nombre: file.name, estatus: 'error', mensaje: err.message || 'Error de procesamiento' });
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        throw new Error('Debes iniciar sesión para realizar esta acción.');
       }
+
+      // Obtener el ID de la tabla 'usuarios_staff' (el ID de autenticación difiere del ID de base de datos)
+      let staffId = null;
+      if (tipo === 'gasto') {
+        const { data: staffData, error: staffError } = await supabase
+          .from('usuarios_staff')
+          .select('id')
+          .eq('supabase_auth_id', user.id)
+          .maybeSingle();
+        if (staffError || !staffData) {
+          throw new Error('No se encontró tu registro de usuario de personal (Staff).');
+        }
+        staffId = staffData.id;
+      }
+
+      // Obtener formas_pago y estatus_factura una sola vez para optimizar rendimiento
+      const { data: formasPagoData } = await supabase.from('formas_pago').select('id, nombre');
+      const { data: estatusData } = await supabase
+        .from('estatus_factura')
+        .select('id')
+        .ilike('nombre', 'Facturado')
+        .maybeSingle();
+      
+      let defaultEstatusId = null;
+      if (estatusData) {
+        defaultEstatusId = estatusData.id;
+      } else {
+        const { data: firstE } = await supabase.from('estatus_factura').select('id').limit(1).maybeSingle();
+        if (firstE) defaultEstatusId = firstE.id;
+      }
+
+      for (const file of archivos) {
+        try {
+          const text = await file.text();
+          const parser = new DOMParser();
+          const xmlDoc = parser.parseFromString(text, 'application/xml');
+
+          // Verificar errores de parseo
+          const parseErrorNode = xmlDoc.getElementsByTagName('parsererror');
+          if (parseErrorNode.length > 0) {
+            nuevosResultados.push({ nombre: file.name, estatus: 'error', mensaje: 'El archivo no tiene un formato XML válido.' });
+            continue;
+          }
+
+          // 1. Nodo Comprobante
+          const comprobante = xmlDoc.getElementsByTagName('cfdi:Comprobante')[0] || xmlDoc.getElementsByTagName('Comprobante')[0];
+          if (!comprobante) {
+            nuevosResultados.push({ nombre: file.name, estatus: 'error', mensaje: 'Falta elemento cfdi:Comprobante.' });
+            continue;
+          }
+
+          const tipoDeComprobante = comprobante.getAttribute('TipoDeComprobante') || comprobante.getAttribute('tipoDeComprobante') || 'I';
+
+          let total = parseFloat(comprobante.getAttribute('Total') || comprobante.getAttribute('total') || '0');
+          let subtotal = parseFloat(comprobante.getAttribute('SubTotal') || comprobante.getAttribute('subtotal') || '0');
+          let fecha = comprobante.getAttribute('Fecha') || comprobante.getAttribute('fecha') || '';
+          let serie = comprobante.getAttribute('Serie') || comprobante.getAttribute('serie') || '';
+          let folio = comprobante.getAttribute('Folio') || comprobante.getAttribute('folio') || '';
+          let formaPagoCode = comprobante.getAttribute('FormaPago') || comprobante.getAttribute('formaPago') || '';
+
+          // Check if it is a Complemento de Pago (REP)
+          const pagoNodes = xmlDoc.getElementsByTagName('pago20:Pago').length > 0
+            ? xmlDoc.getElementsByTagName('pago20:Pago')
+            : xmlDoc.getElementsByTagName('pago10:Pago').length > 0
+              ? xmlDoc.getElementsByTagName('pago10:Pago')
+              : xmlDoc.getElementsByTagName('Pago');
+
+          let isComplementoPago = false;
+          let uuidsRelacionados: string[] = [];
+
+          if (tipoDeComprobante === 'P' || pagoNodes.length > 0) {
+            isComplementoPago = true;
+            let totalPago = 0;
+            let fechaPago = '';
+            let formaPagoPago = '';
+
+            for (let i = 0; i < pagoNodes.length; i++) {
+              const pNode = pagoNodes[i];
+              totalPago += parseFloat(pNode.getAttribute('Monto') || pNode.getAttribute('monto') || '0');
+              if (!fechaPago) {
+                fechaPago = pNode.getAttribute('FechaPago') || pNode.getAttribute('fechaPago') || '';
+              }
+              if (!formaPagoPago) {
+                formaPagoPago = pNode.getAttribute('FormaDePagoP') || pNode.getAttribute('formaDePagoP') || '';
+              }
+            }
+
+            total = totalPago;
+            subtotal = totalPago;
+            if (fechaPago) {
+              fecha = fechaPago;
+            }
+            if (formaPagoPago) {
+              formaPagoCode = formaPagoPago;
+            }
+
+            // Extract DoctoRelacionado UUIDs
+            const docRelNodes = xmlDoc.getElementsByTagName('pago20:DoctoRelacionado').length > 0
+              ? xmlDoc.getElementsByTagName('pago20:DoctoRelacionado')
+              : xmlDoc.getElementsByTagName('pago10:DoctoRelacionado').length > 0
+                ? xmlDoc.getElementsByTagName('pago10:DoctoRelacionado')
+                : xmlDoc.getElementsByTagName('DoctoRelacionado');
+
+            for (let i = 0; i < docRelNodes.length; i++) {
+              const dNode = docRelNodes[i];
+              const refUuid = dNode.getAttribute('IdDocumento') || dNode.getAttribute('idDocumento') || '';
+              if (refUuid && !uuidsRelacionados.includes(refUuid.toUpperCase())) {
+                uuidsRelacionados.push(refUuid.toUpperCase());
+              }
+            }
+          }
+
+          // 2. Nodo Emisor
+          const emisor = xmlDoc.getElementsByTagName('cfdi:Emisor')[0] || xmlDoc.getElementsByTagName('Emisor')[0];
+          const emisorRfc = emisor?.getAttribute('Rfc') || emisor?.getAttribute('rfc') || '';
+          const emisorNombre = emisor?.getAttribute('Nombre') || emisor?.getAttribute('nombre') || '';
+
+          // 3. Nodo Receptor
+          const receptor = xmlDoc.getElementsByTagName('cfdi:Receptor')[0] || xmlDoc.getElementsByTagName('Receptor')[0];
+          const rfcReceptor = receptor?.getAttribute('Rfc') || receptor?.getAttribute('rfc') || '';
+          const nombreReceptor = receptor?.getAttribute('Nombre') || receptor?.getAttribute('nombre') || '';
+          const usoCfdi = receptor?.getAttribute('UsoCFDI') || receptor?.getAttribute('usoCFDI') || '';
+
+          // 4. Complemento -> TimbreFiscalDigital
+          const timbre = xmlDoc.getElementsByTagName('tfd:TimbreFiscalDigital')[0] || xmlDoc.getElementsByTagName('TimbreFiscalDigital')[0];
+          const uuid = timbre?.getAttribute('UUID') || '';
+          const fechaTimbrado = timbre?.getAttribute('FechaTimbrado') || '';
+
+          if (!uuid) {
+            nuevosResultados.push({ nombre: file.name, estatus: 'error', mensaje: 'No se detectó el UUID del Timbre Fiscal Digital.' });
+            continue;
+          }
+
+          // 5. Impuestos -> Traslados (IVA 002 Global)
+          let globalIva = 0;
+          if (!isComplementoPago) {
+            const cfdiImpuestos = xmlDoc.querySelector('Comprobante > Impuestos, cfdi\\:Comprobante > cfdi\\:Impuestos');
+            if (cfdiImpuestos) {
+              const traslados = cfdiImpuestos.getElementsByTagName('cfdi:Traslado').length > 0
+                ? cfdiImpuestos.getElementsByTagName('cfdi:Traslado')
+                : cfdiImpuestos.getElementsByTagName('Traslado');
+
+              for (let i = 0; i < traslados.length; i++) {
+                const t = traslados[i];
+                if (t.getAttribute('Impuesto') === '002') {
+                  globalIva += parseFloat(t.getAttribute('Importe') || '0');
+                }
+              }
+            }
+          }
+
+          const rfc = tipo === 'gasto' ? emisorRfc : rfcReceptor;
+          const proveedor_cliente_nombre = tipo === 'gasto' ? emisorNombre : nombreReceptor;
+          const folioStr = folio ? `${serie}${folio}`.trim() : (serie ? serie.trim() : `SF-${Math.floor(Math.random() * 1000)}`);
+          const fecha_emision = fecha ? fecha.split('T')[0] : new Date().toISOString().split('T')[0];
+
+          // Mapear la forma de pago para esta factura
+          let formaPagoId = null;
+          let metodoPago = 'Transferencia'; // fallback por defecto
+          if (formasPagoData && formasPagoData.length > 0) {
+            const code = formaPagoCode || '03';
+            let term = 'Efectivo';
+            if (code === '03') term = 'Transferencia';
+            else if (code === '04' || code === '28') term = 'Tarjeta';
+            else if (code === '02') term = 'Cheque';
+
+            const match = formasPagoData.find(f => f.nombre.toLowerCase().includes(term.toLowerCase()));
+            if (match) {
+              formaPagoId = match.id;
+              metodoPago = match.nombre;
+            } else {
+              formaPagoId = formasPagoData[0].id;
+              metodoPago = formasPagoData[0].nombre;
+            }
+          }
+
+          // 1. Subir XML al storage
+          const fileExt = file.name.split('.').pop();
+          const fileName = `${tipo}s/${Date.now()}_${uuid}.${fileExt}`;
+          const { error: uploadError } = await supabase.storage.from('facturas').upload(fileName, file);
+
+          let xmlUrl = '';
+          if (!uploadError) {
+            xmlUrl = fileName;
+          }
+
+          // 2. Insertar en base de datos
+          let insertPayload: any = {};
+
+          if (tipo === 'gasto') {
+            let empresaId = '';
+            try {
+              const sesionGuardada = localStorage.getItem('seimenjo_session');
+              if (sesionGuardada) {
+                const datosSesion = JSON.parse(sesionGuardada);
+                empresaId = datosSesion.empresa_id;
+              }
+            } catch (e) {
+              console.error('Error reading active company from localStorage:', e);
+            }
+
+            if (!empresaId) {
+              empresaId = user.user_metadata?.empresa_id;
+            }
+
+            if (!empresaId) {
+              throw new Error('No se pudo identificar la empresa activa en tu sesión.');
+            }
+
+            // Buscar o crear proveedor por RFC
+            let proveedorId = null;
+            if (rfc) {
+              const { data: prov } = await supabase
+                .from('proveedores')
+                .select('id')
+                .eq('rfc', rfc.toUpperCase())
+                .eq('empresa_id', empresaId)
+                .maybeSingle();
+
+              if (prov) {
+                proveedorId = prov.id;
+              } else {
+                const { data: newProv, error: errP } = await supabase
+                  .from('proveedores')
+                  .insert({
+                    rfc: rfc.toUpperCase(),
+                    nombre_comercial: proveedor_cliente_nombre || rfc,
+                    razon_social: proveedor_cliente_nombre || rfc,
+                    empresa_id: empresaId
+                  })
+                  .select('id')
+                  .single();
+                if (errP) throw errP;
+                proveedorId = newProv.id;
+              }
+            }
+            
+            insertPayload = {
+              folio_factura: folioStr,
+              uuid_fiscal: uuid.toUpperCase(),
+              monto: total,
+              subtotal: subtotal || total,
+              iva_acreditable: globalIva,
+              xml_url: xmlUrl,
+              fecha_gasto: fecha_emision,
+              empresa_id: empresaId,
+              concepto: `Gasto por factura XML (UUID: ${uuid.substring(0, 8)})`,
+              registrado_por: staffId,
+              proveedor_id: proveedorId,
+              forma_pago_id: formaPagoId,
+              estatus_factura_id: defaultEstatusId,
+              estatus_facturado: true,
+              metodo_pago: metodoPago,
+              fecha_timbrado: fechaTimbrado || null
+            };
+          } else {
+            let empresaId = '';
+            try {
+              const sesionGuardada = localStorage.getItem('seimenjo_session');
+              if (sesionGuardada) {
+                const datosSesion = JSON.parse(sesionGuardada);
+                empresaId = datosSesion.empresa_id;
+              }
+            } catch (e) {
+              console.error('Error reading active company from localStorage:', e);
+            }
+
+            if (!empresaId) {
+              empresaId = user.user_metadata?.empresa_id;
+            }
+
+            if (!empresaId) {
+              throw new Error('No se pudo identificar la empresa activa en tu sesión.');
+            }
+
+            // Buscar o crear cliente por RFC
+            let clienteId = null;
+            if (rfc) {
+              const { data: cli } = await supabase
+                .from('clientes')
+                .select('id')
+                .eq('rfc', rfc.toUpperCase())
+                .eq('empresa_id', empresaId)
+                .maybeSingle();
+
+              if (cli) {
+                clienteId = cli.id;
+              } else {
+                const { data: newCli, error: errC } = await supabase
+                  .from('clientes')
+                  .insert({
+                    rfc: rfc.toUpperCase(),
+                    nombre_local: proveedor_cliente_nombre || 'CLIENTE DESCONOCIDO',
+                    telefono: '0000000000',
+                    es_anonimo: false,
+                    empresa_id: empresaId
+                  })
+                  .select('id')
+                  .single();
+                if (errC) throw errC;
+                clienteId = newCli.id;
+              }
+            }
+
+            insertPayload = {
+              serie_folio: folioStr,
+              uuid_fiscal: uuid.toUpperCase(),
+              total: total,
+              subtotal: subtotal || total,
+              iva_trasladado: globalIva,
+              xml_url: xmlUrl,
+              fecha_emision: fecha_emision,
+              cliente_id: clienteId,
+              forma_pago_id: formaPagoId,
+              estatus_factura_id: defaultEstatusId,
+              uso_cfdi_clave: usoCfdi || 'G03',
+              empresa_id: empresaId,
+              fecha_timbrado: fechaTimbrado || null
+            };
+          }
+
+          // Verificar duplicados por UUID fiscal antes de insertar
+          if (insertPayload.uuid_fiscal) {
+            const { data: duplicate } = await supabase
+              .from(tableStr)
+              .select('id')
+              .ilike('uuid_fiscal', insertPayload.uuid_fiscal)
+              .maybeSingle();
+            if (duplicate) {
+              nuevosResultados.push({
+                nombre: file.name,
+                estatus: 'error',
+                mensaje: `Esta factura ya está registrada (UUID: ${insertPayload.uuid_fiscal}).`
+              });
+              continue;
+            }
+          }
+
+          const { error: dbError } = await supabase.from(tableStr).insert([insertPayload]);
+          if (dbError) throw dbError;
+          nuevosResultados.push({ nombre: file.name, estatus: 'ok' });
+
+        } catch (err: any) {
+          console.error(err);
+          nuevosResultados.push({ nombre: file.name, estatus: 'error', mensaje: err.message || 'Error de procesamiento' });
+        }
+      }
+    } catch (gErr: any) {
+      console.error(gErr);
+      nuevosResultados.push({ nombre: 'General', estatus: 'error', mensaje: gErr.message || 'Error de sesión' });
     }
 
     setResultados(nuevosResultados);

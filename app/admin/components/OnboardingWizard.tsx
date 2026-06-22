@@ -163,6 +163,9 @@ export default function OnboardingWizard({ empresaId, onSuccess }: OnboardingWiz
 
       setSubiendoArchivo('Guardando configuración...');
 
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token || '';
+
       // 2. Llamar Server Action para inicializar la empresa en BD
       const res = await inicializarNuevaEmpresa({
         empresaId,
@@ -180,7 +183,7 @@ export default function OnboardingWizard({ empresaId, onSuccess }: OnboardingWiz
         csd_key_url: keyPath,
         csd_password_encriptada: btoa(csdPassword), // Encriptación simulación básica en base64
         modulos
-      });
+      }, token);
 
       if (!res.success) {
         throw new Error(res.error || 'Fallo al guardar la configuración');

@@ -10,7 +10,7 @@
 import React from 'react';
 import {
   FileCode, FileText, CreditCard, List, Scale, Settings,
-  ArrowRightLeft, Play, RefreshCw, FileSpreadsheet, Plus, Trash2,
+  ArrowRightLeft, Play, RefreshCw, FileSpreadsheet, Plus, Trash2, Edit3,
   Layers, Check, X
 } from 'lucide-react';
 import { formatCurrency } from '../../../../lib/formatters';
@@ -66,6 +66,7 @@ export interface BancoTabProps {
   gastosFacturados?: any[];
   ventasFacturadas?: any[];
   handleDeleteMovimiento?: (id: string) => void;
+  onEditMovimiento: (movimiento: MovimientoBancario) => void;
 
   // Datos
   movimientos: MovimientoBancario[];
@@ -187,6 +188,7 @@ export default function BancoTab({
   gastosFacturados = [],
   ventasFacturadas = [],
   onDownloadFile,
+  onEditMovimiento,
 }: BancoTabProps) {
 
   const [selectedCuentaId, setSelectedCuentaId] = React.useState<string>('');
@@ -433,10 +435,22 @@ export default function BancoTab({
                             </div>
                           </td>
                           <td className="p-3 text-center">
-                            <button onClick={() => handleOpenReconcileModal?.(m)}
-                              className="p-1 rounded text-amber-500 hover:bg-amber-500/15" title="Conciliación Manual">
-                              <ArrowRightLeft size={13} />
-                            </button>
+                            <div className="flex gap-1 justify-center">
+                              <button onClick={() => handleOpenReconcileModal?.(m)}
+                                className="p-1.5 rounded text-amber-500 hover:bg-amber-500/15 transition-colors" title="Conciliación Manual">
+                                <ArrowRightLeft size={13} />
+                              </button>
+                              <button onClick={() => onEditMovimiento(m)}
+                                disabled={m.estatus_conciliacion_bancaria?.clave !== 'pendiente'}
+                                className={`p-1.5 rounded transition-colors ${m.estatus_conciliacion_bancaria?.clave !== 'pendiente' ? 'text-gray-300 dark:text-gray-600 cursor-not-allowed' : 'text-blue-500 hover:bg-blue-500/15'}`} title={m.estatus_conciliacion_bancaria?.clave !== 'pendiente' ? "No editable (Conciliado)" : "Editar"}>
+                                <Edit3 size={13} />
+                              </button>
+                              <button onClick={() => handleDeleteMovimiento?.(m.id)}
+                                disabled={m.estatus_conciliacion_bancaria?.clave !== 'pendiente'}
+                                className={`p-1.5 rounded transition-colors ${m.estatus_conciliacion_bancaria?.clave !== 'pendiente' ? 'text-gray-300 dark:text-gray-600 cursor-not-allowed' : 'text-red-500 hover:bg-red-500/15'}`} title={m.estatus_conciliacion_bancaria?.clave !== 'pendiente' ? "No eliminable (Conciliado)" : "Eliminar"}>
+                                <Trash2 size={13} />
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       );

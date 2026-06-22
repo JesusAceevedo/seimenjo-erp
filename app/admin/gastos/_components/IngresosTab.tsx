@@ -4,7 +4,7 @@
 // Tab de Ingresos (Ventas) — con paginación, búsqueda, columnas enriquecidas.
 
 import React, { useState, useMemo } from 'react';
-import { UploadCloud, Plus, FileCode, FileText, CreditCard, Mail, Search, ChevronLeft, ChevronRight, CheckCircle, Clock, Eye } from 'lucide-react';
+import { UploadCloud, Plus, FileCode, FileText, CreditCard, Mail, Search, ChevronLeft, ChevronRight, CheckCircle, Clock, Eye, Edit3, Trash2 } from 'lucide-react';
 import { formatCurrency } from '../../../../lib/formatters';
 import CargaXmlMasivaModal from './CargaXmlMasivaModal';
 import CargaManualModal from './CargaManualModal';
@@ -18,6 +18,8 @@ interface IngresosTabProps {
   onDownloadFile: (url: string) => void;
   onViewCfdi?: (xmlUrl: string) => void;
   onSendEmail: (pedidoId: string) => void;
+  onEditVenta: (venta: VentaFacturada) => void;
+  onDeleteVenta: (pedidoId: string) => void;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -55,6 +57,8 @@ export default function IngresosTab({
   onDownloadFile,
   onViewCfdi,
   onSendEmail,
+  onEditVenta,
+  onDeleteVenta,
 }: IngresosTabProps) {
 
   const [showXmlModal, setShowXmlModal] = useState(false);
@@ -68,13 +72,18 @@ export default function IngresosTab({
     const q = search.toLowerCase();
     return ventasFacturadas.filter((v) => {
       const invoice = v.facturas_clientes?.[0];
+      const totalAmount = v.facturas_clientes && v.facturas_clientes.length > 0
+        ? v.facturas_clientes.reduce((acc, f) => acc + (f.total || 0), 0)
+        : Number(v.precio_total || 0);
+
       const matchSearch = !q || (
         (invoice?.uuid_fiscal?.toLowerCase().includes(q)) ||
         (invoice?.serie_folio?.toLowerCase().includes(q)) ||
         v.numero_pedido?.toString().includes(q) ||
         v.clientes?.nombre_local?.toLowerCase().includes(q) ||
         v.clientes?.rfc?.toLowerCase().includes(q) ||
-        v.cliente_nombre?.toLowerCase().includes(q)
+        v.cliente_nombre?.toLowerCase().includes(q) ||
+        totalAmount.toString().includes(q)
       );
       const hasInvoice = !!(v.facturas_clientes && v.facturas_clientes.length > 0);
       const matchEstatus = !filtroEstatus ||
@@ -89,6 +98,49 @@ export default function IngresosTab({
   const pagina = Math.min(page, totalPages - 1);
   const visible = filtrados.slice(pagina * pageSize, (pagina + 1) * pageSize);
   const resetPage = () => setPage(0);
+
+  // Calcular KPIs acumulados (Ventas e IVA)
+  const kpis = useMemo(() => {
+    let totalMonto = 0;
+    let totalIva = 0;
+    const metodoTotals: Record<string, number> = {
+      Efectivo: 0,
+      Transferencia: 0,
+      Tarjeta: 0,
+      Cheque: 0,
+      Otros: 0,
+    };
+
+    filtrados.forEach((v) => {
+      const totalAmount = v.facturas_clientes && v.facturas_clientes.length > 0
+        ? v.facturas_clientes.reduce((acc, f) => acc + (f.total || 0), 0)
+        : Number(v.precio_total || 0);
+
+      const ivaAmount = v.facturas_clientes && v.facturas_clientes.length > 0
+        ? v.facturas_clientes.reduce((acc, f) => {
+            if (Number(f.iva_trasladado) > 0) return acc + Number(f.iva_trasladado);
+            if (f.subtotal && Number(f.total) > Number(f.subtotal)) return acc + (Number(f.total) - Number(f.subtotal));
+            return acc + (Number(f.total) - (Number(f.total) / 1.16));
+          }, 0)
+        : (Number(v.precio_total || 0) * 0.16);
+
+      totalMonto += totalAmount;
+      totalIva += ivaAmount;
+
+      const metodo = (v as any).metodo_pago || '';
+      if (metodoTotals[metodo] !== undefined) {
+        metodoTotals[metodo] += totalAmount;
+      } else {
+        metodoTotals.Otros += totalAmount;
+      }
+    });
+
+    return {
+      totalMonto,
+      totalIva,
+      metodoTotals,
+    };
+  }, [filtrados]);
 
   return (
     <div className="flex flex-col flex-1 font-sans min-h-0 overflow-hidden">
@@ -148,6 +200,53 @@ export default function IngresosTab({
         </div>
       </div>
 
+      {/* ── TARJETAS DE ACUMULADOS (KPIs) ─────────────────────────────────── */}
+      <div className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 bg-gray-50/50 dark:bg-gray-900/10 border-b border-gray-200 dark:border-gray-800 shrink-0">
+        {/* Card 1: Total Ingresos */}
+        <div className="bg-white dark:bg-gray-950 border border-gray-150 dark:border-gray-850 p-4 rounded-2xl shadow-sm flex items-center gap-3">
+          <div className="p-3 bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 rounded-xl flex items-center justify-center shrink-0">
+            <span className="text-emerald-600 dark:text-emerald-400 font-extrabold text-sm">$</span>
+          </div>
+          <div>
+            <span className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider block">Total Ingresos</span>
+            <span className="text-lg font-black text-gray-900 dark:text-white block font-mono">
+              {formatCurrency(kpis.totalMonto)}
+            </span>
+          </div>
+        </div>
+
+        {/* Card 2: IVA Trasladado */}
+        <div className="bg-white dark:bg-gray-950 border border-gray-150 dark:border-gray-850 p-4 rounded-2xl shadow-sm flex items-center gap-3">
+          <div className="p-3 bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded-xl flex items-center justify-center shrink-0">
+            <FileCode size={20} />
+          </div>
+          <div>
+            <span className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider block">IVA Trasladado</span>
+            <span className="text-lg font-black text-blue-650 dark:text-blue-400 block font-mono">
+              {formatCurrency(kpis.totalIva)}
+            </span>
+          </div>
+        </div>
+
+        {/* Card 3 y 4: Desglose por Método de Pago */}
+        <div className="lg:col-span-2 bg-white dark:bg-gray-950 border border-gray-150 dark:border-gray-850 p-4 rounded-2xl shadow-sm flex flex-col justify-center">
+          <div className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+            <CreditCard size={12} className="text-gray-450" />
+            <span>Ingresos por Método</span>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-[10px] font-mono">
+            {Object.entries(kpis.metodoTotals).map(([metodo, subtotal]) => (
+              <div key={metodo} className="p-2 bg-gray-50 dark:bg-gray-900/50 rounded-xl border border-gray-100 dark:border-gray-800 text-center">
+                <span className="text-[9px] text-gray-500 block truncate">{metodo}</span>
+                <span className="font-extrabold text-gray-800 dark:text-gray-200 block truncate">
+                  {formatCurrency(subtotal)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
       {/* ── TABLA ──────────────────────────────────────────────────────────── */}
       <div className="overflow-auto flex-1">
         <table className="w-full text-left border-collapse min-w-[900px] text-xs">
@@ -172,7 +271,11 @@ export default function IngresosTab({
                 ? v.facturas_clientes.reduce((acc, f) => acc + (f.total || 0), 0)
                 : v.precio_total;
               const ivaAmount = v.facturas_clientes && v.facturas_clientes.length > 0
-                ? v.facturas_clientes.reduce((acc, f) => acc + (f.iva_trasladado || 0), 0)
+                ? v.facturas_clientes.reduce((acc, f) => {
+                    if (Number(f.iva_trasladado) > 0) return acc + Number(f.iva_trasladado);
+                    if (f.subtotal && Number(f.total) > Number(f.subtotal)) return acc + (Number(f.total) - Number(f.subtotal));
+                    return acc + (Number(f.total) - (Number(f.total) / 1.16));
+                  }, 0)
                 : (Number(v.precio_total) * 0.16);
 
               return (
@@ -283,16 +386,34 @@ export default function IngresosTab({
 
                   {/* Acciones */}
                   <td className="p-3 text-center">
-                    {invoice ? (
-                      <button
-                        onClick={() => onSendEmail(v.id)}
-                        className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-[10px] font-bold transition-colors"
-                      >
-                        <Mail size={11} /> Enviar
-                      </button>
-                    ) : (
-                      <span className="text-gray-300 dark:text-gray-600 text-[10px]">—</span>
-                    )}
+                    <div className="flex flex-col gap-1 items-center justify-center">
+                      {invoice ? (
+                        <button
+                          onClick={() => onSendEmail(v.id)}
+                          className="inline-flex items-center justify-center gap-1 w-full px-2 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-[10px] font-bold transition-colors"
+                        >
+                          <Mail size={11} /> Enviar
+                        </button>
+                      ) : null}
+                      <div className="flex gap-1 justify-center w-full mt-1">
+                        <button
+                          onClick={() => onEditVenta(v)}
+                          disabled={!!v.movimiento_bancario_id}
+                          title={v.movimiento_bancario_id ? "No se puede editar porque está conciliado" : "Editar"}
+                          className={`flex-1 flex justify-center items-center py-1 rounded transition-colors ${v.movimiento_bancario_id ? 'bg-gray-100 dark:bg-gray-800 text-gray-400 cursor-not-allowed' : 'bg-blue-50 hover:bg-blue-100 text-blue-600 dark:bg-blue-900/20 dark:hover:bg-blue-900/40 dark:text-blue-400'}`}
+                        >
+                          <Edit3 size={12} />
+                        </button>
+                        <button
+                          onClick={() => onDeleteVenta(v.id)}
+                          disabled={!!v.movimiento_bancario_id}
+                          title={v.movimiento_bancario_id ? "No se puede eliminar porque está conciliado" : "Eliminar"}
+                          className={`flex-1 flex justify-center items-center py-1 rounded transition-colors ${v.movimiento_bancario_id ? 'bg-gray-100 dark:bg-gray-800 text-gray-400 cursor-not-allowed' : 'bg-red-50 hover:bg-red-100 text-red-600 dark:bg-red-900/20 dark:hover:bg-red-900/40 dark:text-red-400'}`}
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      </div>
+                    </div>
                   </td>
                 </tr>
               );

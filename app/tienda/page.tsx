@@ -27,6 +27,7 @@ export default function Tienda() {
   const [preciosEspeciales, setPreciosEspeciales] = useState<Record<string, number>>({});
   const [empresaNombre, setEmpresaNombre] = useState('Portal SEIMENJO');
   const [empresaLogoUrl, setEmpresaLogoUrl] = useState<string | null>(null);
+  const [logoError, setLogoError] = useState(false);
 
   const [carrito, setCarrito] = useState<ItemCarrito[]>([]);
   const [comentarios, setComentarios] = useState('');
@@ -133,7 +134,12 @@ export default function Tienda() {
               .maybeSingle();
             if (empData) {
               setEmpresaNombre(empData.nombre);
-              setEmpresaLogoUrl(empData.logo_url);
+              if (empData.logo_url && empData.logo_url !== 'null' && empData.logo_url !== 'undefined') {
+                setEmpresaLogoUrl(empData.logo_url);
+                setLogoError(false);
+              } else {
+                setEmpresaLogoUrl(null);
+              }
             }
           }
 
@@ -296,8 +302,8 @@ export default function Tienda() {
           <div className="flex justify-between h-16 items-center">
             <div className="flex items-center space-x-8">
               <div className="flex items-center">
-                {empresaLogoUrl ? (
-                  <Image src={empresaLogoUrl} alt="Logo" width={32} height={32} className="h-8 w-8 rounded-lg object-contain mr-2 border border-indigo-100 bg-white shadow-sm" />
+                {empresaLogoUrl && !logoError ? (
+                  <Image src={empresaLogoUrl} alt="Logo" onError={() => setLogoError(true)} width={32} height={32} className="h-8 w-8 rounded-lg object-contain mr-2 border border-indigo-100 bg-white shadow-sm" />
                 ) : (
                   <Sparkles className="h-6 w-6 text-indigo-600 mr-2 animate-pulse" />
                 )}

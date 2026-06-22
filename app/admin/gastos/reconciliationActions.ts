@@ -686,3 +686,99 @@ export async function eliminarEstatusCatalogItem(id: string, token: string): Pro
     return { success: false, error: err.message || 'Error al eliminar estatus' };
   }
 }
+
+// 8. ELIMINAR MOVIMIENTO BANCARIO (solo si NO está conciliado)
+export async function eliminarMovimientoBancario(movimientoId: string, token: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { empresaId } = await getUserEmpresaId(token);
+
+    const { data: conciliacion } = await supabaseAdmin
+      .from('conciliaciones_bancarias')
+      .select('id')
+      .eq('movimiento_id', movimientoId)
+      .eq('empresa_id', empresaId)
+      .limit(1)
+      .maybeSingle();
+
+    if (conciliacion) {
+      throw new Error('No se puede eliminar un movimiento bancario que ya se encuentra conciliado.');
+    }
+
+    await supabaseAdmin
+      .from('gastos')
+      .delete()
+      .eq('movimiento_bancario_id', movimientoId)
+      .eq('empresa_id', empresaId);
+
+    const { error } = await supabaseAdmin
+      .from('movimientos_bancarios')
+      .delete()
+      .eq('id', movimientoId)
+      .eq('empresa_id', empresaId);
+
+    if (error) throw error;
+    return { success: true };
+  } catch (err: any) {
+    console.error('Error deleting bank movement:', err);
+    return { success: false, error: err.message || 'Error al eliminar el movimiento bancario' };
+  }
+}
+
+// 9. EDITAR MOVIMIENTO BANCARIO (solo si NO está conciliado)
+export async function editarMovimientoBancario(
+  movimientoId: string,
+  updates: { fecha: string; concepto: string; retiro: number; deposito: number },
+  token: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { empresaId } = await getUserEmpresaId(token);
+
+    const { data: conciliacion } = await supabaseAdmin
+      .from('conciliaciones_bancarias')
+      .select('id')
+      .eq('movimiento_id', movimientoId)
+      .eq('empresa_id', empresaId)
+      .limit(1)
+      .maybeSingle();
+
+    if (conciliacion) {
+      throw new Error('No se puede editar un movimiento bancario que ya se encuentra conciliado.');
+    }
+
+    const rfc = extraerRfcDeConcepto(updates.concepto);
+    const monto = Math.abs(updates.deposito) - Math.abs(updates.retiro);
+    const tipo_movimiento = updates.deposito > 0 ? 'Deposito' : 'Retiro';
+
+    const { error } = await supabaseAdmin
+      .from('movimientos_bancarios')
+      .update({
+        fecha: updates.fecha,
+        concepto: updates.concepto,
+        retiro: Math.abs(updates.retiro),
+        deposito: Math.abs(updates.deposito),
+        monto: monto,
+        tipo_movimiento,
+        rfc_proveedor: rfc
+      })
+      .eq('id', movimientoId)
+      .eq('empresa_id', empresaId);
+
+    if (error) throw error;
+    
+    // Actualizar posible gasto vinculado por visibilidad
+    await supabaseAdmin
+      .from('gastos')
+      .update({
+        fecha_gasto: updates.fecha,
+        concepto: updates.concepto,
+        monto: Math.abs(monto)
+      })
+      .eq('movimiento_bancario_id', movimientoId)
+      .eq('empresa_id', empresaId);
+
+    return { success: true };
+  } catch (err: any) {
+    console.error('Error editing bank movement:', err);
+    return { success: false, error: err.message || 'Error al editar el movimiento bancario' };
+  }
+}

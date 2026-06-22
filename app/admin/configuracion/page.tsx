@@ -9,7 +9,7 @@ import { useThemeMode } from '../../../lib/useThemeMode';
 import { Repartidor, FormaPago, EstatusFactura, RegimenFiscal, UsoCfdi, CategoriaGasto, Proveedor, ProductoVariante } from '../types';
 import {
   Settings, Truck, CreditCard, FileCheck, Hash, Globe, FileText,
-  FolderOpen, Users, Plus, Trash2, Save, Sun, Moon, AlertTriangle, Package
+  FolderOpen, Users, Plus, Trash2, Save, Sun, Moon, AlertTriangle, Package, Soup, Edit
 } from 'lucide-react';
 import ProductosTab from './ProductosTab';
 import TicketConfigTab from './TicketConfigTab';
@@ -19,7 +19,22 @@ import { crearBucketsAlmacenamiento, provisionarAdminEmpresa } from '../actions/
 export default function ConfigPage() {
   const router = useRouter();
   const { isDarkMode, toggleDarkMode } = useThemeMode();
-  const [activeTab, setActiveTab] = useState<'ventas' | 'clientes' | 'facturacion' | 'productos' | 'tickets' | 'superusuario'>('ventas');
+  const [activeTab, setActiveTab] = useState<'ventas' | 'clientes' | 'facturacion' | 'productos' | 'tickets' | 'empresa' | 'superusuario'>('ventas');
+
+  // --- ESTADO PERFIL DE EMPRESA ACTIVA ---
+  const [empresaId, setEmpresaId] = useState<string | null>(null);
+  const [perfilEmpresa, setPerfilEmpresa] = useState<{
+    id: string;
+    nombre: string;
+    razon_social: string | null;
+    rfc: string | null;
+    codigo_postal: string | null;
+    email_contacto: string | null;
+    telefono: string | null;
+    logo_url: string | null;
+  } | null>(null);
+  const [guardandoPerfil, setGuardandoPerfil] = useState(false);
+  const [editingEmpresaId, setEditingEmpresaId] = useState<string | null>(null);
 
   // --- ESTADOS DE DATOS ---
   const [repartidores, setRepartidores] = useState<Repartidor[]>([]);
@@ -212,8 +227,35 @@ export default function ConfigPage() {
 
       if (staffData?.es_superusuario) {
         setEsSuperusuario(true);
-        await crearBucketsAlmacenamiento();
+        if (session) {
+          await crearBucketsAlmacenamiento(session.access_token);
+        }
         await loadSuperData();
+      }
+
+      // Cargar id de empresa activa y perfil
+      let activeEmpId = null;
+      const sessionData = localStorage.getItem('seimenjo_session');
+      if (sessionData) {
+        try {
+          const datosSesion = JSON.parse(sessionData);
+          activeEmpId = datosSesion.empresa_id;
+        } catch (e) {}
+      }
+      if (!activeEmpId) {
+        const { data: { user } } = await supabase.auth.getUser();
+        activeEmpId = user?.user_metadata?.empresa_id;
+      }
+      if (activeEmpId) {
+        setEmpresaId(activeEmpId);
+        const { data: empProfile } = await supabase
+          .from('empresas')
+          .select('id, nombre, razon_social, rfc, codigo_postal, email_contacto, telefono, logo_url')
+          .eq('id', activeEmpId)
+          .maybeSingle();
+        if (empProfile) {
+          setPerfilEmpresa(empProfile);
+        }
       }
 
       await loadAllData();
@@ -264,6 +306,36 @@ export default function ConfigPage() {
     }
   };
 
+  const handleSavePerfilEmpresa = async () => {
+    if (!perfilEmpresa || !empresaId) return;
+    if (!perfilEmpresa.nombre.trim()) return alert('El nombre comercial de la empresa es obligatorio.');
+    
+    setGuardandoPerfil(true);
+    try {
+      const { error } = await supabase
+        .from('empresas')
+        .update({
+          nombre: perfilEmpresa.nombre.trim(),
+          razon_social: perfilEmpresa.razon_social?.trim() || null,
+          rfc: perfilEmpresa.rfc?.trim() || null,
+          codigo_postal: perfilEmpresa.codigo_postal?.trim() || null,
+          email_contacto: perfilEmpresa.email_contacto?.trim() || null,
+          telefono: perfilEmpresa.telefono?.trim() || null,
+          logo_url: perfilEmpresa.logo_url || null,
+        })
+        .eq('id', empresaId);
+
+      if (error) throw error;
+      alert('¡Perfil de empresa actualizado con éxito!');
+      window.location.reload();
+    } catch (err: any) {
+      console.error(err);
+      alert('Error al guardar el perfil: ' + (err.message || 'Error desconocido'));
+    } finally {
+      setGuardandoPerfil(false);
+    }
+  };
+
   const handleUploadFile = async (file: File, bucket: string, folder: string) => {
     try {
       const fileExt = file.name.split('.').pop();
@@ -280,38 +352,73 @@ export default function ConfigPage() {
     }
   };
 
+  const handleEditEmpresaClick = (emp: any) => {
+    setEditingEmpresaId(emp.id);
+    setNuevaEmpresa({
+      nombre: emp.nombre || '',
+      rfc: emp.rfc || '',
+      razon_social: emp.razon_social || '',
+      codigo_postal: emp.codigo_postal || '',
+      regimen_fiscal_id: emp.regimen_fiscal_id || '',
+      email_contacto: emp.email_contacto || '',
+      telefono: emp.telefono || '',
+      moneda: emp.moneda || 'MXN',
+      logo_url: emp.logo_url || '',
+      logo_ticket_url: emp.logo_ticket_url || '',
+      csd_cer_url: emp.csd_cer_url || '',
+      csd_key_url: emp.csd_key_url || '',
+      csd_password_encriptada: emp.csd_password_encriptada || '',
+      limite_sucursales: emp.limite_sucursales || 3,
+      limite_usuarios: emp.limite_usuarios || 10,
+      facturacion_activa: !!emp.facturacion_activa
+    });
+  };
+
   const handleCrearEmpresa = async () => {
     if (!nuevaEmpresa.nombre.trim()) return alert('El nombre de la empresa es obligatorio.');
     try {
-      const { data, error } = await supabase
-        .from('empresas')
-        .insert([{
-          nombre: nuevaEmpresa.nombre,
-          rfc: nuevaEmpresa.rfc || null,
-          razon_social: nuevaEmpresa.razon_social || null,
-          codigo_postal: nuevaEmpresa.codigo_postal || null,
-          regimen_fiscal_id: nuevaEmpresa.regimen_fiscal_id || null,
-          email_contacto: nuevaEmpresa.email_contacto || null,
-          telefono: nuevaEmpresa.telefono || null,
-          moneda: nuevaEmpresa.moneda,
-          logo_url: nuevaEmpresa.logo_url || null,
-          logo_ticket_url: nuevaEmpresa.logo_ticket_url || null,
-          csd_cer_url: nuevaEmpresa.csd_cer_url || null,
-          csd_key_url: nuevaEmpresa.csd_key_url || null,
-          csd_password_encriptada: nuevaEmpresa.csd_password_encriptada || null,
-          limite_sucursales: nuevaEmpresa.limite_sucursales,
-          limite_usuarios: nuevaEmpresa.limite_usuarios,
-          facturacion_activa: nuevaEmpresa.facturacion_activa
-        }])
-        .select()
-        .single();
+      const payload = {
+        nombre: nuevaEmpresa.nombre.trim(),
+        rfc: nuevaEmpresa.rfc?.trim() || null,
+        razon_social: nuevaEmpresa.razon_social?.trim() || null,
+        codigo_postal: nuevaEmpresa.codigo_postal?.trim() || null,
+        regimen_fiscal_id: nuevaEmpresa.regimen_fiscal_id || null,
+        email_contacto: nuevaEmpresa.email_contacto?.trim() || null,
+        telefono: nuevaEmpresa.telefono?.trim() || null,
+        moneda: nuevaEmpresa.moneda,
+        logo_url: nuevaEmpresa.logo_url || null,
+        logo_ticket_url: nuevaEmpresa.logo_ticket_url || null,
+        csd_cer_url: nuevaEmpresa.csd_cer_url || null,
+        csd_key_url: nuevaEmpresa.csd_key_url || null,
+        csd_password_encriptada: nuevaEmpresa.csd_password_encriptada || null,
+        limite_sucursales: nuevaEmpresa.limite_sucursales,
+        limite_usuarios: nuevaEmpresa.limite_usuarios,
+        facturacion_activa: nuevaEmpresa.facturacion_activa
+      };
 
-      if (error) throw error;
+      if (editingEmpresaId) {
+        const { error } = await supabase
+          .from('empresas')
+          .update(payload)
+          .eq('id', editingEmpresaId);
 
-      // Auto-inicializar módulos
-      const modulosDefecto = ['ventas', 'clientes', 'gastos', 'facturacion', 'personal', 'configuracion'];
-      const insertsModulos = modulosDefecto.map(m => ({ empresa_id: data.id, modulo: m, activo: true }));
-      await supabase.from('modulos_empresa').insert(insertsModulos);
+        if (error) throw error;
+        alert('¡Empresa actualizada con éxito!');
+      } else {
+        const { data, error } = await supabase
+          .from('empresas')
+          .insert([payload])
+          .select()
+          .single();
+
+        if (error) throw error;
+
+        // Auto-inicializar módulos
+        const modulosDefecto = ['ventas', 'clientes', 'productos', 'gastos', 'personal', 'configuracion', 'facturacion', 'produccion'];
+        const insertsModulos = modulosDefecto.map(m => ({ empresa_id: data.id, modulo: m, activo: true }));
+        await supabase.from('modulos_empresa').insert(insertsModulos);
+        alert('¡Empresa creada e inicializada correctamente!');
+      }
 
       setNuevaEmpresa({
         nombre: '', rfc: '', razon_social: '', codigo_postal: '', regimen_fiscal_id: '',
@@ -319,11 +426,11 @@ export default function ConfigPage() {
         csd_cer_url: '', csd_key_url: '', csd_password_encriptada: '',
         limite_sucursales: 3, limite_usuarios: 10, facturacion_activa: false
       });
+      setEditingEmpresaId(null);
       await loadSuperData();
-      alert('Empresa creada e inicializada correctamente.');
     } catch (err: any) {
       console.error(err);
-      alert('Error al crear empresa: ' + err.message);
+      alert('Error al guardar empresa: ' + err.message);
     }
   };
 
@@ -388,12 +495,14 @@ export default function ConfigPage() {
 
     setCreandoAdmin(true);
     try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token || '';
       const res = await provisionarAdminEmpresa({
         empresaId: adminEmpresaId,
         nombre: nombreTrimmed,
         email: emailTrimmed,
         passwordTemporal: passwordTrimmed
-      });
+      }, token);
 
       if (!res.success) throw new Error(res.error);
 
@@ -530,6 +639,15 @@ export default function ConfigPage() {
               }`}
           >
             <FileText size={16} /> Configuración de Tickets
+          </button>
+          <button
+            onClick={() => setActiveTab('empresa')}
+            className={`px-5 py-2.5 rounded-xl text-sm font-semibold transition-all duration-300 flex items-center gap-2 ${activeTab === 'empresa'
+                ? 'bg-amber-600 text-white shadow-md'
+                : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-200/50 dark:hover:bg-gray-800/50'
+              }`}
+          >
+            <Settings size={16} /> Perfil de Empresa
           </button>
           {esSuperusuario && (
             <button
@@ -1232,8 +1350,119 @@ export default function ConfigPage() {
           )}
 
           {activeTab === 'tickets' && (
-            <div className="animate-in fade-in duration-305">
+            <div className="animate-in fade-in duration-300">
               <TicketConfigTab />
+            </div>
+          )}
+
+          {activeTab === 'empresa' && perfilEmpresa && (
+            <div className="bg-white dark:bg-gray-950 p-6 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-sm space-y-6 animate-in fade-in duration-300">
+              <h3 className="text-lg font-bold flex items-center gap-2">
+                <Settings className="text-amber-500" size={20} /> Perfil y Configuración de Empresa
+              </h3>
+              
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 p-6 bg-gray-50 dark:bg-gray-900/60 rounded-xl border border-gray-100 dark:border-gray-800 font-sans">
+                
+                {/* Logo Section */}
+                <div className="md:col-span-3 flex flex-col md:flex-row items-center gap-6 border-b border-gray-200 dark:border-gray-800 pb-6 mb-2">
+                  <div className="relative w-24 h-24 rounded-2xl border border-gray-200 dark:border-gray-700 bg-white flex items-center justify-center overflow-hidden shadow-inner shrink-0">
+                    {perfilEmpresa.logo_url ? (
+                      <img src={perfilEmpresa.logo_url} alt="Logo" className="w-full h-full object-contain" />
+                    ) : (
+                      <Soup className="text-amber-500 w-12 h-12" />
+                    )}
+                  </div>
+                  <div className="flex-1 space-y-2">
+                    <label className="text-xs font-bold text-gray-750 dark:text-gray-205">Logotipo de la Empresa (Público)</label>
+                    <p className="text-[11px] text-gray-500 dark:text-gray-400">Este logotipo aparecerá en la barra lateral superior de tu panel administrativo y en los portales B2B de tus clientes.</p>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="text-xs text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-amber-600/10 file:text-amber-500 hover:file:bg-amber-600/20 cursor-pointer"
+                      onChange={async e => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          const url = await handleUploadFile(file, 'empresas-logos', 'logos');
+                          if (url) {
+                            setPerfilEmpresa(prev => prev ? { ...prev, logo_url: url } : null);
+                          }
+                        }
+                      }}
+                    />
+                  </div>
+                </div>
+
+                {/* Fila 1 */}
+                <div>
+                  <label className="text-[10px] font-bold text-gray-500 uppercase">Nombre Comercial *</label>
+                  <input
+                    type="text"
+                    value={perfilEmpresa.nombre || ''}
+                    className="w-full mt-1 bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 p-2.5 rounded-lg text-xs text-gray-900 dark:text-white"
+                    onChange={e => setPerfilEmpresa({ ...perfilEmpresa, nombre: e.target.value })}
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold text-gray-500 uppercase">Razón Social</label>
+                  <input
+                    type="text"
+                    value={perfilEmpresa.razon_social || ''}
+                    className="w-full mt-1 bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 p-2.5 rounded-lg text-xs text-gray-900 dark:text-white uppercase"
+                    onChange={e => setPerfilEmpresa({ ...perfilEmpresa, razon_social: e.target.value.toUpperCase() })}
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold text-gray-500 uppercase">RFC</label>
+                  <input
+                    type="text"
+                    value={perfilEmpresa.rfc || ''}
+                    className="w-full mt-1 bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 p-2.5 rounded-lg text-xs uppercase text-gray-900 dark:text-white font-mono"
+                    onChange={e => setPerfilEmpresa({ ...perfilEmpresa, rfc: e.target.value.toUpperCase() })}
+                  />
+                </div>
+
+                {/* Fila 2 */}
+                <div>
+                  <label className="text-[10px] font-bold text-gray-500 uppercase">Código Postal Fiscal</label>
+                  <input
+                    type="text"
+                    value={perfilEmpresa.codigo_postal || ''}
+                    className="w-full mt-1 bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 p-2.5 rounded-lg text-xs text-gray-900 dark:text-white font-mono"
+                    onChange={e => setPerfilEmpresa({ ...perfilEmpresa, codigo_postal: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold text-gray-500 uppercase">Email de Contacto</label>
+                  <input
+                    type="email"
+                    value={perfilEmpresa.email_contacto || ''}
+                    className="w-full mt-1 bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 p-2.5 rounded-lg text-xs text-gray-900 dark:text-white"
+                    onChange={e => setPerfilEmpresa({ ...perfilEmpresa, email_contacto: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold text-gray-500 uppercase">Teléfono de Contacto</label>
+                  <input
+                    type="tel"
+                    value={perfilEmpresa.telefono || ''}
+                    className="w-full mt-1 bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 p-2.5 rounded-lg text-xs text-gray-900 dark:text-white font-mono"
+                    onChange={e => setPerfilEmpresa({ ...perfilEmpresa, telefono: e.target.value })}
+                  />
+                </div>
+
+                {/* Botón enviar */}
+                <div className="md:col-span-3 flex justify-end">
+                  <button
+                    onClick={handleSavePerfilEmpresa}
+                    disabled={guardandoPerfil}
+                    className="bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white px-6 py-3 rounded-xl font-bold text-xs transition-colors flex items-center gap-2 shadow-lg h-11"
+                  >
+                    {guardandoPerfil ? 'Guardando...' : 'Guardar Cambios de Perfil'}
+                  </button>
+                </div>
+
+              </div>
             </div>
           )}
 
@@ -1465,12 +1694,29 @@ export default function ConfigPage() {
                   </div>
 
                   {/* Botón enviar */}
-                  <div className="md:col-span-3 flex justify-end">
+                  <div className="md:col-span-3 flex justify-end gap-3">
+                    {editingEmpresaId && (
+                      <button
+                        onClick={() => {
+                          setEditingEmpresaId(null);
+                          setNuevaEmpresa({
+                            nombre: '', rfc: '', razon_social: '', codigo_postal: '', regimen_fiscal_id: '',
+                            email_contacto: '', telefono: '', moneda: 'MXN', logo_url: '', logo_ticket_url: '',
+                            csd_cer_url: '', csd_key_url: '', csd_password_encriptada: '',
+                            limite_sucursales: 3, limite_usuarios: 10, facturacion_activa: false
+                          });
+                        }}
+                        className="bg-gray-500 hover:bg-gray-600 text-white px-6 py-3 rounded-xl font-bold text-xs transition-colors h-11"
+                      >
+                        Cancelar Edición
+                      </button>
+                    )}
                     <button
                       onClick={handleCrearEmpresa}
                       className="bg-amber-600 hover:bg-amber-500 text-white px-6 py-3 rounded-xl font-bold text-xs transition-colors flex items-center gap-2 shadow-lg h-11"
                     >
-                      <Plus size={16} /> Dar de Alta Empresa Inquilina
+                      {editingEmpresaId ? <Save size={16} /> : <Plus size={16} />}
+                      {editingEmpresaId ? 'Guardar Cambios de Empresa' : 'Dar de Alta Empresa Inquilina'}
                     </button>
                   </div>
                 </div>
@@ -1489,7 +1735,7 @@ export default function ConfigPage() {
                     </thead>
                     <tbody className="divide-y divide-gray-100 dark:divide-gray-800/40">
                       {empresas.map(emp => {
-                        const modulosDisponibles = ['ventas', 'clientes', 'gastos', 'facturacion', 'personal', 'configuracion'];
+                        const modulosDisponibles = ['ventas', 'clientes', 'productos', 'gastos', 'personal', 'configuracion', 'facturacion', 'produccion'];
                         return (
                           <tr key={emp.id} className="hover:bg-gray-50 dark:hover:bg-gray-900/10">
                             <td className="p-3 font-mono text-[10px] text-gray-400">{emp.id}</td>
@@ -1514,10 +1760,18 @@ export default function ConfigPage() {
                                 })}
                               </div>
                             </td>
-                            <td className="p-3 text-right">
+                            <td className="p-3 text-right flex justify-end gap-2">
+                              <button
+                                onClick={() => handleEditEmpresaClick(emp)}
+                                className="text-gray-400 hover:text-amber-500 p-1 rounded-md transition-colors"
+                                title="Editar empresa"
+                              >
+                                <Edit size={15} />
+                              </button>
                               <button
                                 onClick={() => handleEliminarEmpresa(emp.id)}
                                 className="text-gray-400 hover:text-red-500 p-1 rounded-md transition-colors"
+                                title="Eliminar empresa"
                               >
                                 <Trash2 size={15} />
                               </button>

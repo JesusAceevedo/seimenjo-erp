@@ -12,6 +12,7 @@ export default function AdminLogin() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [logoUrl, setLogoUrl] = useState<string | null>(null);
+  const [logoError, setLogoError] = useState(false);
   const { isDarkMode, toggleDarkMode } = useThemeMode();
   const router = useRouter();
 
@@ -23,8 +24,11 @@ export default function AdminLogin() {
           .select('logo_url')
           .limit(1)
           .maybeSingle();
-        if (data?.logo_url) {
+        if (data?.logo_url && data.logo_url !== 'null' && data.logo_url !== 'undefined') {
           setLogoUrl(data.logo_url);
+          setLogoError(false);
+        } else {
+          setLogoUrl(null);
         }
       } catch (err) {
         console.error('Error fetching logo for login:', err);
@@ -122,8 +126,8 @@ export default function AdminLogin() {
 
         <div className="text-center mb-10">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          {logoUrl ? (
-            <img src={logoUrl} alt="Logo" className="w-16 h-16 rounded-2xl object-contain border border-amber-500/20 bg-white mx-auto mb-4" />
+          {logoUrl && !logoError ? (
+            <img src={logoUrl} alt="Logo" onError={() => setLogoError(true)} className="w-16 h-16 rounded-2xl object-contain border border-amber-500/20 bg-white mx-auto mb-4" />
           ) : (
             <div className="inline-flex mb-4 p-3 bg-amber-500/10 rounded-xl border border-amber-500/20">
               <LogIn className="w-8 h-8 text-amber-400" />

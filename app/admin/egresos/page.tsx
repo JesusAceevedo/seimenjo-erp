@@ -8,7 +8,7 @@ import { supabase } from '../../../lib/supabase';
 import { useThemeMode } from '../../../lib/useThemeMode';
 import { 
   Plus, Users, Sun, Moon, Eye, ChevronLeft, ChevronRight, FileText, Save, X, Receipt, Search,
-  TrendingUp, TrendingDown, Scale, CreditCard, Calendar, Filter, Trash2
+  TrendingUp, TrendingDown, Scale, CreditCard, Calendar, Filter, Trash2, Pencil
 } from 'lucide-react';
 import { toggleMovimientoVisibilidad } from '../gastos/reconciliationActions';
 
@@ -44,15 +44,26 @@ interface Gasto {
 export default function AdminGastos() {
   const router = useRouter();
 
-  const handleQuitarMovimiento = async (movimientoId: string, gastoId: string) => {
-    if (confirm('¿Deseas quitar este movimiento de egresos? Esto eliminará el gasto y lo desmarcará de la lista del banco.')) {
+  const handleEliminarGastoDefinitivo = async (gasto: Gasto) => {
+    if (!confirm('¿Estás seguro de que deseas eliminar este gasto permanentemente?')) return;
+    
+    if (gasto.movimiento_bancario_id) {
       const { data: { session } } = await supabase.auth.getSession();
       const token = session?.access_token || '';
-      const res = await toggleMovimientoVisibilidad(movimientoId, 'egresos', false, token);
+      const res = await toggleMovimientoVisibilidad(gasto.movimiento_bancario_id, 'egresos', false, token);
       if (res.success) {
-        setGastos(prev => prev.filter(g => g.id !== gastoId));
+        setGastos(prev => prev.filter(g => g.id !== gasto.id));
+        fetchPeriodData();
       } else {
-        alert(res.error || 'Error al quitar movimiento.');
+        alert(res.error || 'Error al eliminar el gasto conciliado.');
+      }
+    } else {
+      const { error } = await supabase.from('gastos').delete().eq('id', gasto.id);
+      if (!error) {
+        setGastos(prev => prev.filter(g => g.id !== gasto.id));
+        fetchPeriodData();
+      } else {
+        alert('Error al eliminar: ' + error.message);
       }
     }
   };
@@ -70,8 +81,6 @@ export default function AdminGastos() {
   const [gastos, setGastos] = useState<Gasto[]>([]);
   const [categorias, setCategorias] = useState<CategoriaGasto[]>([]);
   const [proveedores, setProveedores] = useState<Proveedor[]>([]);
-  const [conceptosDisponibles, setConceptosDisponibles] = useState<string[]>([]);
-  
   // Estados de UI y Filtros
   const { isDarkMode, toggleDarkMode } = useThemeMode();
   const [page, setPage] = useState(0);
@@ -107,8 +116,8 @@ export default function AdminGastos() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [nuevoProveedorNombre, setNuevoProveedorNombre] = useState('');
   const [nuevoProveedorRfc, setNuevoProveedorRfc] = useState('');
-  const [isConceptoOtro, setIsConceptoOtro] = useState(false);
   const [nuevoGasto, setNuevoGasto] = useState({
+    id: '',
     fecha_gasto: new Date().toISOString().split('T')[0],
     proveedor_id: '',
     categoria_id: '',
@@ -118,9 +127,31 @@ export default function AdminGastos() {
   });
 
   // --- CONSULTAS A BASE DE DATOS ---
+  const getEmpresaId = async () => {
+    let empresaId = null;
+    const sessionData = localStorage.getItem('seimenjo_session');
+    if (sessionData) {
+      try {
+        const datosSesion = JSON.parse(sessionData);
+        empresaId = datosSesion.empresa_id;
+      } catch (e) {}
+    }
+    if (!empresaId) {
+      const { data: { user } } = await supabase.auth.getUser();
+      empresaId = user?.user_metadata?.empresa_id;
+    }
+    return empresaId;
+  };
+
   const fetchPeriodData = useCallback(async () => {
     setIsLoading(true);
     try {
+      const empresaId = await getEmpresaId();
+      if (!empresaId) {
+        setIsLoading(false);
+        return;
+      }
+
       let startDateStr: string | null = null;
       let endDateStr: string | null = null;
 
@@ -143,7 +174,8 @@ export default function AdminGastos() {
       // 1. Consultar ventas del período
       let salesQuery = supabase
         .from('pedidos')
-        .select('precio_total, created_at, estatus_pago');
+        .select('precio_total, created_at, estatus_pago')
+        .eq('empresa_id', empresaId);
 
       // Si no se aplica filtro (rango todo), solo consideramos el mes en curso para los ingresos
       let salesStartDateStr = startDateStr;
@@ -170,7 +202,8 @@ export default function AdminGastos() {
       // 2. Consultar egresos del período
       let gastosQuery = supabase
         .from('gastos')
-        .select(`*, proveedores(nombre_comercial, rfc), categorias_gasto(nombre)`)
+        .select(`*, proveedores(id, nombre_comercial, rfc), categorias_gasto(id, nombre)`)
+        .eq('empresa_id', empresaId)
         .is('gasto_padre_id', null)
         .order('fecha_gasto', { ascending: false });
 
@@ -194,9 +227,12 @@ export default function AdminGastos() {
   }, [filtroRango, fechaInicio, fechaFin]);
 
   const fetchCatalogos = async () => {
+    const empresaId = await getEmpresaId();
+    if (!empresaId) return;
+
     const [cats, provs, formas] = await Promise.all([
-      supabase.from('categorias_gasto').select('*').order('nombre'),
-      supabase.from('proveedores').select('*').order('nombre_comercial'),
+      supabase.from('categorias_gasto').select('*').or(`empresa_id.is.null,empresa_id.eq.${empresaId}`).order('nombre'),
+      supabase.from('proveedores').select('*').or(`empresa_id.is.null,empresa_id.eq.${empresaId}`).order('nombre_comercial'),
       supabase.from('formas_pago').select('*').order('nombre', { ascending: true })
     ]);
     
@@ -206,23 +242,6 @@ export default function AdminGastos() {
     if (cats.data) setCategorias(cats.data);
     if (provs.data) setProveedores(provs.data);
     if (formas.data) setFormasPagoList(formas.data);
-  };
-
-  const cargarConceptosPorCategoria = async (categoriaId: string) => {
-    if (!categoriaId) {
-      setConceptosDisponibles([]);
-      return;
-    }
-    const { data, error } = await supabase
-      .from('conceptos_permitidos')
-      .select('concepto_nombre')
-      .eq('categoria_id', categoriaId);
-
-    if (error) {
-      console.error("Error al cargar conceptos:", error);
-    } else if (data) {
-      setConceptosDisponibles(data.map(item => item.concepto_nombre));
-    }
   };
 
   // Carga inicial y autenticación
@@ -304,7 +323,13 @@ export default function AdminGastos() {
         const proveedor = (g.proveedores?.nombre_comercial || '').toLowerCase();
         const proveedorRfc = (g.proveedores?.rfc || '').toLowerCase();
         const categoria = (g.categorias_gasto?.nombre || '').toLowerCase();
-        return concepto.includes(term) || proveedor.includes(term) || proveedorRfc.includes(term) || categoria.includes(term);
+        return (
+          concepto.includes(term) || 
+          proveedor.includes(term) || 
+          proveedorRfc.includes(term) || 
+          categoria.includes(term) ||
+          g.monto?.toString().includes(term)
+        );
       });
     }
 
@@ -346,34 +371,61 @@ export default function AdminGastos() {
       }
     }
 
-    // Insertar el gasto en la BD
-    const { error } = await supabase.from('gastos').insert([{
-      fecha_gasto: nuevoGasto.fecha_gasto,
-      proveedor_id: proveedorFinalId && proveedorFinalId !== 'nuevo' ? proveedorFinalId : null,
-      categoria_id: nuevoGasto.categoria_id,
-      concepto: nuevoGasto.concepto,
-      monto: Number(nuevoGasto.monto),
-      metodo_pago: nuevoGasto.metodo_pago
-      // NOTA: Se ha omitido 'registrado_por' temporalmente para evitar el error de foreign key
-      // registrado_por: (await supabase.auth.getUser()).data.user?.id 
-    }]);
+    const empresaId = await getEmpresaId();
+    if (!empresaId) return alert('No se pudo identificar la empresa actual. Cierra sesión e inténtalo de nuevo.');
 
-    if (!error) {
-      setIsModalOpen(false);
-      setNuevoProveedorNombre('');
-      setNuevoProveedorRfc('');
-      setIsConceptoOtro(false);
-      setConceptosDisponibles([]);
-      setNuevoGasto({
-        fecha_gasto: new Date().toISOString().split('T')[0],
-        proveedor_id: '', categoria_id: '', concepto: '', monto: '', metodo_pago: 'Efectivo'
-      });
-      fetchPeriodData();
-      fetchCatalogos();
+    // Insertar o actualizar el gasto en la BD
+    if (nuevoGasto.id) {
+      const { error } = await supabase.from('gastos').update({
+        fecha_gasto: nuevoGasto.fecha_gasto,
+        proveedor_id: proveedorFinalId && proveedorFinalId !== 'nuevo' ? proveedorFinalId : null,
+        categoria_id: nuevoGasto.categoria_id || null,
+        concepto: nuevoGasto.concepto,
+        monto: Number(nuevoGasto.monto),
+        metodo_pago: nuevoGasto.metodo_pago
+      }).eq('id', nuevoGasto.id).eq('empresa_id', empresaId);
+
+      if (!error) {
+        setIsModalOpen(false);
+        setNuevoProveedorNombre('');
+        setNuevoProveedorRfc('');
+        setNuevoGasto({
+          id: '',
+          fecha_gasto: new Date().toISOString().split('T')[0],
+          proveedor_id: '', categoria_id: '', concepto: '', monto: '', metodo_pago: 'Efectivo'
+        });
+        fetchPeriodData();
+        fetchCatalogos();
+      } else {
+        alert(`Error al actualizar: ${error.message} \n\nDetalles: ${error.details || 'Revisa la consola'}`);
+        console.error("Detalle completo del error Supabase:", error);
+      }
     } else {
-      // Ahora si hay un error, el sistema te lo notificará claramente en pantalla
-      alert(`Error de Base de Datos: ${error.message} \n\nDetalles: ${error.details || 'Revisa la consola'}`);
-      console.error("Detalle completo del error Supabase:", error);
+      const { error } = await supabase.from('gastos').insert([{
+        fecha_gasto: nuevoGasto.fecha_gasto,
+        proveedor_id: proveedorFinalId && proveedorFinalId !== 'nuevo' ? proveedorFinalId : null,
+        categoria_id: nuevoGasto.categoria_id || null,
+        concepto: nuevoGasto.concepto,
+        monto: Number(nuevoGasto.monto),
+        metodo_pago: nuevoGasto.metodo_pago,
+        empresa_id: empresaId
+      }]);
+
+      if (!error) {
+        setIsModalOpen(false);
+        setNuevoProveedorNombre('');
+        setNuevoProveedorRfc('');
+        setNuevoGasto({
+          id: '',
+          fecha_gasto: new Date().toISOString().split('T')[0],
+          proveedor_id: '', categoria_id: '', concepto: '', monto: '', metodo_pago: 'Efectivo'
+        });
+        fetchPeriodData();
+        fetchCatalogos();
+      } else {
+        alert(`Error al registrar: ${error.message} \n\nDetalles: ${error.details || 'Revisa la consola'}`);
+        console.error("Detalle completo del error Supabase:", error);
+      }
     }
   };
 
@@ -394,7 +446,14 @@ export default function AdminGastos() {
                 {isDarkMode ? <Sun size={20} /> : <Moon size={20} />}
               </button>
               <button 
-                onClick={() => setIsModalOpen(true)} 
+                onClick={() => {
+                  setNuevoGasto({
+                    id: '',
+                    fecha_gasto: new Date().toISOString().split('T')[0],
+                    proveedor_id: '', categoria_id: '', concepto: '', monto: '', metodo_pago: 'Efectivo'
+                  });
+                  setIsModalOpen(true);
+                }} 
                 className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg flex items-center gap-2 font-semibold shadow-lg transition-colors"
               >
                 <Plus size={18} /> Registrar Gasto Manual
@@ -578,17 +637,33 @@ export default function AdminGastos() {
                         - {formatCurrency(g.monto)}
                       </td>
                       <td className="p-4 text-center">
-                        {g.movimiento_bancario_id ? (
+                        <div className="flex justify-center items-center gap-2">
                           <button
-                            onClick={() => handleQuitarMovimiento(g.movimiento_bancario_id!, g.id)}
+                            onClick={() => {
+                              setNuevoGasto({
+                                id: g.id,
+                                fecha_gasto: g.fecha_gasto || new Date().toISOString().split('T')[0],
+                                proveedor_id: g.proveedores?.id || '',
+                                categoria_id: g.categorias_gasto?.id || '',
+                                concepto: g.concepto || '',
+                                monto: g.monto.toString(),
+                                metodo_pago: g.metodo_pago || 'Efectivo'
+                              });
+                              setIsModalOpen(true);
+                            }}
+                            className="p-1.5 text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-500/10 rounded transition-colors"
+                            title="Editar gasto"
+                          >
+                            <Pencil size={14} />
+                          </button>
+                          <button
+                            onClick={() => handleEliminarGastoDefinitivo(g)}
                             className="p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 rounded transition-colors"
-                            title="Quitar de egresos y desmarcar del banco"
+                            title={g.movimiento_bancario_id ? "Eliminar gasto y desmarcar del banco" : "Eliminar gasto"}
                           >
                             <Trash2 size={14} />
                           </button>
-                        ) : (
-                          <span className="text-gray-400 italic font-mono">-</span>
-                        )}
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -634,7 +709,7 @@ export default function AdminGastos() {
               
               <div className="flex justify-between items-center mb-6">
                 <h3 className="text-xl font-extrabold flex items-center gap-2 text-gray-900 dark:text-white">
-                  <Receipt className="text-blue-500"/> Captura de Gasto
+                  <Receipt className="text-blue-500"/> {nuevoGasto.id ? 'Editar Gasto' : 'Captura de Gasto'}
                 </h3>
                 <button onClick={() => setIsModalOpen(false)} className="text-gray-400 hover:text-red-500 transition-colors">
                   <X size={24} />
@@ -662,9 +737,7 @@ export default function AdminGastos() {
                       className="w-full mt-1 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-lg text-sm text-gray-900 dark:text-white" 
                       onChange={e => {
                         const id = e.target.value;
-                        setNuevoGasto({...nuevoGasto, categoria_id: id, concepto: ''});
-                        setIsConceptoOtro(false);
-                        cargarConceptosPorCategoria(id);
+                        setNuevoGasto({...nuevoGasto, categoria_id: id});
                       }}
                     >
                       <option value="">Selecciona la clasificación...</option>
@@ -711,43 +784,14 @@ export default function AdminGastos() {
                 {/* Concepto y Monto */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="md:col-span-2">
-                    <label className="text-xs font-semibold text-gray-500 dark:text-gray-400">¿Qué se compró? (Concepto)</label>
-                    <select 
-                      value={isConceptoOtro ? 'OTRO' : nuevoGasto.concepto}
-                      disabled={!nuevoGasto.categoria_id}
-                      className="w-full mt-1 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-lg text-sm text-gray-900 dark:text-white disabled:opacity-50" 
-                      onChange={e => {
-                        const val = e.target.value;
-                        if (val === 'OTRO') {
-                          setIsConceptoOtro(true);
-                          setNuevoGasto({...nuevoGasto, concepto: ''});
-                        } else {
-                          setIsConceptoOtro(false);
-                          setNuevoGasto({...nuevoGasto, concepto: val});
-                        }
-                      }}
-                    >
-                      <option value="">
-                        {nuevoGasto.categoria_id ? "Selecciona un concepto..." : "Primero selecciona una categoría arriba"}
-                      </option>
-                      {conceptosDisponibles.map(c => (
-                        <option key={c} value={c}>{c}</option>
-                      ))}
-                      {nuevoGasto.categoria_id && <option value="OTRO">Otro (especificar...)</option>}
-                    </select>
-
-                    {/* Campo de texto libre alternativo si seleccionan OTRO */}
-                    {isConceptoOtro && (
-                      <div className="mt-2 animate-in fade-in slide-in-from-top-2">
-                        <input 
-                          type="text" 
-                          placeholder="Escribe el concepto específico aquí..." 
-                          value={nuevoGasto.concepto}
-                          className="w-full bg-white dark:bg-gray-950 border border-blue-500 p-2.5 rounded-lg text-sm text-gray-900 dark:text-white focus:outline-none" 
-                          onChange={e => setNuevoGasto({...nuevoGasto, concepto: e.target.value})} 
-                        />
-                      </div>
-                    )}
+                    <label className="text-xs font-semibold text-gray-500 dark:text-gray-400">Descripción del Gasto u Observaciones</label>
+                    <input 
+                      type="text" 
+                      placeholder="Escribe la descripción o detalles del gasto..." 
+                      value={nuevoGasto.concepto}
+                      className="w-full mt-1 bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 p-2.5 rounded-lg text-sm text-gray-900 dark:text-white focus:outline-none focus:border-blue-500" 
+                      onChange={e => setNuevoGasto({...nuevoGasto, concepto: e.target.value})} 
+                    />
                   </div>
                   <div>
                     <label className="text-xs font-semibold text-gray-500 dark:text-gray-400">Total Pagado ($)</label>
@@ -780,7 +824,7 @@ export default function AdminGastos() {
                   Cancelar
                 </button>
                 <button onClick={handleGuardarGasto} className="flex-1 py-3 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-xl shadow-lg transition-colors flex items-center justify-center gap-2">
-                  <Save size={18}/> Guardar Gasto
+                  <Save size={18}/> {nuevoGasto.id ? 'Guardar Cambios' : 'Guardar Gasto'}
                 </button>
               </div>
 
