@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { formatCurrency } from '../../../../lib/formatters';
 import type { MovimientoBancario, EstatusConciliacion, GastoReconciliable, FormaPago } from '../../types';
+import { supabase } from '../../../../lib/supabase';
 
 // ── Tipos de estado que se pasan como props ──────────────────────────────────
 
@@ -103,7 +104,7 @@ export interface BancoTabProps {
   manualMatchSearch: string;
   setManualMatchSearch: (v: string) => void;
   handleOpenReconcileModal?: (m: MovimientoBancario) => void;
-  handleSaveReconciliation?: () => void;
+  handleSaveReconciliation?: (customGastosIds?: string[], customEstatusClave?: string) => void;
   handleToggleVisibility: (id: string, modulo: 'egresos'|'ingresos', visible: boolean) => void;
   handleUpdateCategoria?: (movimientoId: string, categoriaId: string) => void;
 
@@ -128,6 +129,12 @@ export interface BancoTabProps {
 
   // Archivos
   onDownloadFile: (url: string) => void;
+  onViewCfdi?: (xmlUrl: string) => void;
+
+  // Cuentas
+  selectedCuentaId: string;
+  setSelectedCuentaId: (id: string) => void;
+  handleUnlinkReconciliation?: (movimientoId: string) => void;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -135,9 +142,10 @@ export interface BancoTabProps {
 function filterMovimientos(
   movimientos: MovimientoBancario[],
   busqueda: string,
-  tipo: string,
-  estatus: string,
-  visibilidad: string,
+  tiposSelected: string[],
+  estatusSelected: string[],
+  visibilidadesSelected: string[],
+  categoriasSelected: string[],
   cuentaId: string
 ): MovimientoBancario[] {
   return movimientos.filter((m) => {
@@ -151,13 +159,94 @@ function filterMovimientos(
         !m.rfc_proveedor?.toLowerCase().includes(b)
       ) return false;
     }
-    if (tipo && m.tipo_movimiento !== tipo) return false;
-    if (estatus && m.estatus_conciliacion_bancaria?.clave !== estatus) return false;
-    if (visibilidad === 'visibles_egresos' && !m.visible_egresos) return false;
-    if (visibilidad === 'visibles_ingresos' && !m.visible_ingresos) return false;
-    if (visibilidad === 'ocultos' && (m.visible_egresos || m.visible_ingresos)) return false;
+    
+    // Tipo filter (exclusion checklist: checked = hide)
+    if (tiposSelected.includes(m.tipo_movimiento)) return false;
+    
+    // Estatus filter (exclusion checklist: checked = hide)
+    const estatusClave = m.estatus_conciliacion_bancaria?.clave || 'pendiente';
+    if (estatusSelected.includes(estatusClave)) return false;
+    
+    // Visibilidad filter (exclusion checklist: checked = hide)
+    if (visibilidadesSelected.length > 0) {
+      if (visibilidadesSelected.includes('visibles_egresos') && m.visible_egresos) return false;
+      if (visibilidadesSelected.includes('visibles_ingresos') && m.visible_ingresos) return false;
+      if (visibilidadesSelected.includes('ocultos') && !m.visible_egresos && !m.visible_ingresos) return false;
+    }
+
+    // Categoría filter (exclusion checklist: checked = hide)
+    const catId = m.categoria_movimiento_id || 'sin_categoria';
+    if (categoriasSelected.includes(catId)) return false;
+    
     return true;
   });
+}
+
+const SAT_FORMAS_PAGO_FE = [
+  { codigo: '01', nombre: 'Efectivo' },
+  { codigo: '02', nombre: 'Cheque nominativo' },
+  { codigo: '03', nombre: 'Transferencia electrónica' },
+  { codigo: '04', nombre: 'Tarjeta de crédito' },
+  { codigo: '05', nombre: 'Monedero electrónico' },
+  { codigo: '06', nombre: 'Dinero electrónico' },
+  { codigo: '08', nombre: 'Vales de despensa' },
+  { codigo: '12', nombre: 'Dación en pago' },
+  { codigo: '13', nombre: 'Pago por subrogación' },
+  { codigo: '14', nombre: 'Pago por consignación' },
+  { codigo: '15', nombre: 'Condonación' },
+  { codigo: '17', nombre: 'Compensación' },
+  { codigo: '23', font: 'Novación' },
+  { codigo: '24', nombre: 'Confusión' },
+  { codigo: '25', nombre: 'Remisión de deuda' },
+  { codigo: '26', nombre: 'Prescripción o caducidad' },
+  { codigo: '27', nombre: 'A satisfacción del acreedor' },
+  { codigo: '28', nombre: 'Tarjeta de débito' },
+  { codigo: '29', nombre: 'Tarjeta de servicios' },
+  { codigo: '30', nombre: 'Aplicación de anticipos' },
+  { codigo: '31', nombre: 'Intermediario pagos' },
+  { codigo: '99', nombre: 'Por definir' }
+];
+
+function getMetodoPagoLabel(codigo?: string): string {
+  if (!codigo) return 'Desconocido';
+  const cleanCode = codigo.trim().padStart(2, '0');
+  const found = SAT_FORMAS_PAGO_FE.find(fp => fp.codigo === cleanCode);
+  return found ? `${found.codigo} - ${found.nombre}` : `${cleanCode} - Otro`;
+}
+
+function obtenerMetodoPagoBanco(concepto: string): '01' | '03' | '04_28' | 'unknown' {
+  if (!concepto) return 'unknown';
+  const c = concepto.toUpperCase();
+  if (c.includes('EFECTIVO') || c.includes('CAJERO') || c.includes('RETIRO CAJERO') || c.includes('DEPOSITO CAJERO')) {
+    return '01'; // Efectivo
+  }
+  if (c.includes('SPEI') || c.includes('TRANSFERENCIA') || c.includes('TRF') || c.includes('TRANSF') || c.includes('TEF') || c.includes('TRASPASO')) {
+    return '03'; // Transferencia
+  }
+  if (c.includes('TARJETA') || c.includes('PAGO CON TARJETA') || c.includes('TDC') || c.includes('T.DEB') || c.includes('T.CRE') || c.includes('DEBITO') || c.includes('CREDITO')) {
+    return '04_28'; // Tarjeta
+  }
+  return 'unknown';
+}
+
+function detectarDiscrepanciaPago(conceptoBanco: string, metodoPagoGasto: string | null | undefined): { tieneDiscrepancia: boolean; detalle?: string } {
+  if (!metodoPagoGasto) return { tieneDiscrepancia: false };
+  const mpBanco = obtenerMetodoPagoBanco(conceptoBanco);
+  if (mpBanco === 'unknown') return { tieneDiscrepancia: false };
+
+  const cleanGastoCode = metodoPagoGasto.trim().padStart(2, '0');
+
+  if (mpBanco === '01' && cleanGastoCode !== '01') {
+    return { tieneDiscrepancia: true, detalle: 'El banco indica retiro en efectivo pero el comprobante indica pago electrónico.' };
+  }
+  if (mpBanco === '03' && cleanGastoCode !== '03') {
+    return { tieneDiscrepancia: true, detalle: 'El banco indica transferencia pero el comprobante indica tarjeta/efectivo.' };
+  }
+  if (mpBanco === '04_28' && cleanGastoCode !== '04' && cleanGastoCode !== '28') {
+    return { tieneDiscrepancia: true, detalle: 'El banco indica tarjeta pero el comprobante indica transferencia/efectivo.' };
+  }
+
+  return { tieneDiscrepancia: false };
 }
 
 // ── Componente principal ──────────────────────────────────────────────────────
@@ -189,11 +278,226 @@ export default function BancoTab({
   ventasFacturadas = [],
   onDownloadFile,
   onEditMovimiento,
+  selectedCuentaId,
+  setSelectedCuentaId,
+  onViewCfdi,
+  handleUnlinkReconciliation,
 }: BancoTabProps) {
 
-  const [selectedCuentaId, setSelectedCuentaId] = React.useState<string>('');
+  const [tiposSelected, setTiposSelected] = React.useState<string[]>([]);
+  const [estatusSelected, setEstatusSelected] = React.useState<string[]>([]);
+  const [visibilidadesSelected, setVisibilidadesSelected] = React.useState<string[]>([]);
+  const [categoriasSelected, setCategoriasSelected] = React.useState<string[]>([]);
+  const [selectedMovimientos, setSelectedMovimientos] = React.useState<string[]>([]);
 
-  const filtered = filterMovimientos(movimientos, busquedaBanco, filtroBancoTipo, filtroBancoEstatus, filtroBancoVisibilidad, selectedCuentaId);
+  const esMovimientoEfectivo = (concepto: string): boolean => {
+    if (!concepto) return false;
+    const c = concepto.toUpperCase();
+    return c.includes('EFECTIVO') || c.includes('CAJERO') || c.includes('RETIRO CAJERO') || c.includes('DEPOSITO CAJERO');
+  };
+
+  const autoEstatus = (gastosIds: string[]) => {
+    const selectedGastos = gastosReconciliables.filter(g => gastosIds.includes(g.id));
+    const hasXml = selectedGastos.some(g => !!g.xml_url) || !!reconcileModal.movimiento?.xml_url;
+    const hasTicket = selectedGastos.some(g => !!g.ticket_url) || !!reconcileModal.movimiento?.pdf_ticket_url;
+    
+    const isCash = reconcileModal.movimiento ? esMovimientoEfectivo(reconcileModal.movimiento.concepto) : false;
+    if (isCash) {
+      return hasTicket ? 'comprobado' : 'incompleto_comprobado';
+    } else {
+      const hasInvoice = (reconcileModal.movimiento?.tipo_movimiento === 'Deposito') || (gastosIds.length > 0);
+      if (!hasInvoice) {
+        return 'no_deducible';
+      } else if (hasXml) {
+        return 'comprobado';
+      } else {
+        return 'incompleto_comprobado';
+      }
+    }
+  };
+
+  const selectedGastosWithDiscrepancy = React.useMemo(() => {
+    if (!reconcileModal.movimiento || reconcileModal.gastosSeleccionados.length === 0) return [];
+    
+    return gastosReconciliables
+      .filter((g) => reconcileModal.gastosSeleccionados.includes(g.id))
+      .map((g) => {
+        const disc = detectarDiscrepanciaPago(reconcileModal.movimiento.concepto, g.metodo_pago);
+        return { gasto: g, disc };
+      })
+      .filter((item) => item.disc.tieneDiscrepancia);
+  }, [reconcileModal.movimiento, reconcileModal.gastosSeleccionados, gastosReconciliables]);
+
+  const handleBulkUpdateCategory = async (categoriaId: string) => {
+    if (selectedMovimientos.length === 0) return;
+    const catId = (categoriaId === '' || categoriaId === 'SIN_CATEGORIA') ? null : categoriaId;
+    try {
+      const { error } = await supabase
+        .from('movimientos_bancarios')
+        .update({ categoria_movimiento_id: catId })
+        .in('id', selectedMovimientos);
+      if (error) throw error;
+      
+      const movedIds = [...selectedMovimientos];
+      setSelectedMovimientos([]);
+      
+      if (handleUpdateCategoria && movedIds.length > 0) {
+        handleUpdateCategoria(movedIds[0], categoriaId === 'SIN_CATEGORIA' ? '' : categoriaId);
+      }
+    } catch (err: any) {
+      alert(`Error al asignar categorías de forma masiva: ${err.message}`);
+    }
+  };
+
+  const exportReconciliationStatsToExcel = async () => {
+    try {
+      const XLSX = await import('xlsx');
+      
+      const rows = movimientos.map((m) => {
+        const links = (m as any).conciliaciones_bancarias || [];
+        const estatus = m.estatus_conciliacion_bancaria?.nombre || 'Pendiente';
+        const categoria = m.categorias_movimiento_bancario?.nombre || 'Sin Categoría';
+        const fechaMov = m.fecha ? new Date(m.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : '';
+        const importeMov = m.tipo_movimiento === 'Retiro' ? -Math.abs(Number(m.monto)) : Math.abs(Number(m.monto));
+
+        if (links.length === 0) {
+          return {
+            'Fecha Movimiento': fechaMov,
+            'Concepto Movimiento': m.concepto || '',
+            'Tipo Movimiento': m.tipo_movimiento || '',
+            'Importe Banco': importeMov,
+            'Referencia Banco': m.referencia || '',
+            'RFC Movimiento': m.rfc_proveedor || '',
+            'Estatus Conciliación': estatus,
+            'Categoría Movimiento': categoria,
+            'Vinculado A': 'Sin vincular',
+            'Folio/Concepto Relacionado': '',
+            'Monto Asociado': 0,
+            'Proveedor/Cliente Relacionado': '',
+            'RFC Relacionado': '',
+            'Metodo Pago Relacionado': '',
+            'Tiene XML': m.xml_url ? 'Sí' : 'No',
+            'Tiene Ticket': m.pdf_ticket_url ? 'Sí' : 'No',
+            'Tiene PDF': m.pdf_factura_url ? 'Sí' : 'No',
+            'Archivos XML': m.xml_url || '',
+            'Archivos PDF': m.pdf_factura_url || '',
+            'Archivos Ticket': m.pdf_ticket_url || ''
+          };
+        }
+
+        return links.map((link: any) => {
+          const isGasto = !!link.gasto;
+          const relItem = isGasto ? link.gasto : link.pedido;
+          
+          let folioConcepto = '';
+          let montoAsoc = Number(link.monto_asociado || 0);
+          let relProvCliName = '';
+          let relRfc = '';
+          let relMetodoPago = '';
+          
+          let hasXml = 'No';
+          let hasTicket = 'No';
+          let hasPdf = 'No';
+          
+          let xmlUrlsStr = '';
+          let pdfUrlsStr = '';
+          let ticketUrlsStr = '';
+
+          if (isGasto) {
+            folioConcepto = relItem.concepto || '';
+            const provArr = relItem.proveedores;
+            const proveedor = Array.isArray(provArr) ? provArr[0] : provArr;
+            relProvCliName = proveedor?.nombre_comercial || '';
+            relRfc = proveedor?.rfc || '';
+            relMetodoPago = relItem.metodo_pago ? getMetodoPagoLabel(relItem.metodo_pago) : '';
+            
+            hasXml = relItem.xml_url ? 'Sí' : 'No';
+            hasTicket = relItem.ticket_url ? 'Sí' : 'No';
+            hasPdf = relItem.pdf_url ? 'Sí' : 'No';
+            
+            xmlUrlsStr = relItem.xml_url || '';
+            pdfUrlsStr = relItem.pdf_url || '';
+            ticketUrlsStr = relItem.ticket_url || '';
+          } else {
+            folioConcepto = `Pedido #${relItem.numero_pedido || ''}`;
+            const cliente = relItem.clientes;
+            relProvCliName = relItem.cliente_nombre || cliente?.nombre_local || '';
+            relRfc = cliente?.rfc || '';
+            
+            const facturas = relItem.facturas_clientes || [];
+            const firstFactura = facturas[0] || {};
+            
+            hasXml = firstFactura.xml_url ? 'Sí' : 'No';
+            hasTicket = firstFactura.ticket_url ? 'Sí' : 'No';
+            hasPdf = firstFactura.pdf_url ? 'Sí' : 'No';
+            
+            xmlUrlsStr = facturas.map((f: any) => f.xml_url).filter(Boolean).join(', ');
+            pdfUrlsStr = facturas.map((f: any) => f.pdf_url).filter(Boolean).join(', ');
+            ticketUrlsStr = facturas.map((f: any) => f.ticket_url).filter(Boolean).join(', ');
+          }
+
+          const finalHasXml = (m.xml_url || hasXml === 'Sí') ? 'Sí' : 'No';
+          const finalHasTicket = (m.pdf_ticket_url || hasTicket === 'Sí') ? 'Sí' : 'No';
+          const finalHasPdf = (m.pdf_factura_url || hasPdf === 'Sí') ? 'Sí' : 'No';
+
+          return {
+            'Fecha Movimiento': fechaMov,
+            'Concepto Movimiento': m.concepto || '',
+            'Tipo Movimiento': m.tipo_movimiento || '',
+            'Importe Banco': importeMov,
+            'Referencia Banco': m.referencia || '',
+            'RFC Movimiento': m.rfc_proveedor || '',
+            'Estatus Conciliación': estatus,
+            'Categoría Movimiento': categoria,
+            'Vinculado A': isGasto ? 'Egreso (Gasto)' : 'Venta (Pedido)',
+            'Folio/Concepto Relacionado': folioConcepto,
+            'Monto Asociado': montoAsoc,
+            'Proveedor/Cliente Relacionado': relProvCliName,
+            'RFC Relacionado': relRfc,
+            'Metodo Pago Relacionado': relMetodoPago,
+            'Tiene XML': finalHasXml,
+            'Tiene Ticket': finalHasTicket,
+            'Tiene PDF': finalHasPdf,
+            'Archivos XML': [m.xml_url, xmlUrlsStr].filter(Boolean).join(', '),
+            'Archivos PDF': [m.pdf_factura_url, pdfUrlsStr].filter(Boolean).join(', '),
+            'Archivos Ticket': [m.pdf_ticket_url, ticketUrlsStr].filter(Boolean).join(', ')
+          };
+        });
+      }).flat();
+
+      const ws = XLSX.utils.json_to_sheet(rows);
+      
+      const maxLens = Object.keys(rows[0] || {}).reduce((acc: any, key) => {
+        let maxL = key.length;
+        rows.forEach((row: any) => {
+          const val = String(row[key] || '');
+          if (val.length > maxL) maxL = val.length;
+        });
+        acc[key] = Math.min(maxL + 2, 40);
+        return acc;
+      }, {});
+
+      ws['!cols'] = Object.keys(maxLens).map(key => ({ wch: maxLens[key] }));
+
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Reporte Conciliación');
+
+      XLSX.writeFile(wb, 'Reporte_Conciliacion_Bancaria.xlsx');
+    } catch (err: any) {
+      console.error('Error generating Excel report:', err);
+      alert(`Error al generar reporte en Excel: ${err.message}`);
+    }
+  };
+
+  const filtered = filterMovimientos(
+    movimientos, 
+    busquedaBanco, 
+    tiposSelected, 
+    estatusSelected, 
+    visibilidadesSelected, 
+    categoriasSelected, 
+    selectedCuentaId
+  );
   const paginated = filtered.slice(bancoPage * bancoPageSize, (bancoPage + 1) * bancoPageSize);
   const totalPages = Math.max(1, Math.ceil(filtered.length / bancoPageSize));
 
@@ -228,24 +532,91 @@ export default function BancoTab({
 
         {/* ── SUB-TAB 1: MOVIMIENTOS ───────────────────────────────────────── */}
         {bancoSubTab === 'movimientos' && (
-          <div className="flex-1 flex flex-col md:flex-row gap-6 p-4 overflow-hidden min-h-0">
-            {/* Panel izquierdo: carga e ingesta */}
-            <div className="w-full md:w-80 flex flex-col gap-4 shrink-0 overflow-y-auto pr-1">
-              
-              {/* Selector de Cuenta y Cuadre */}
-              <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4 space-y-3 shadow-sm">
-                <h4 className="text-xs font-extrabold uppercase tracking-wide text-gray-500">Cuenta Bancaria</h4>
-                <select
-                  value={selectedCuentaId}
-                  onChange={(e) => setSelectedCuentaId(e.target.value)}
-                  className="w-full bg-gray-50 dark:bg-gray-950 border border-gray-300 dark:border-gray-700 rounded-lg p-2 text-sm text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-amber-500"
-                >
-                  <option value="">-- Seleccionar Cuenta --</option>
-                  {cuentasBancarias?.map(c => (
-                    <option key={c.id} value={c.id}>{c.nombre} ({c.moneda})</option>
-                  ))}
-                </select>
+          <div className="flex-1 flex flex-col gap-4 p-4 overflow-hidden min-h-0">
+            {/* Tabla de movimientos */}
+            <div className="flex-1 flex flex-col min-h-0 bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden shadow-sm">
+              {/* Filtros tipo Checklist */}
+              <div className="p-3.5 bg-gray-50/50 dark:bg-gray-900/40 border-b border-gray-200 dark:border-gray-800 flex flex-col gap-3.5 shrink-0">
+                {/* Búsqueda, Cuenta y Acciones agrupadas */}
+                <div className="flex gap-3 items-center flex-wrap">
+                  <div className="relative flex-1 min-w-[200px]">
+                    <input
+                      type="text"
+                      placeholder="Buscar concepto, ref, rfc..."
+                      value={busquedaBanco}
+                      onChange={(e) => { setBusquedaBanco(e.target.value); setBancoPage(0); }}
+                      className="w-full bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 px-3 py-2 rounded-lg text-xs outline-none focus:ring-1 focus:ring-amber-500 transition-all font-mono"
+                    />
+                  </div>
 
+                  <select
+                    value={selectedCuentaId}
+                    onChange={(e) => {
+                      setSelectedCuentaId(e.target.value);
+                      setBancoPage(0);
+                    }}
+                    className="bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 px-3 py-2 rounded-lg text-xs outline-none focus:ring-1 focus:ring-amber-500 transition-all text-gray-900 dark:text-gray-100 font-sans cursor-pointer font-semibold"
+                  >
+                    <option value="">-- Seleccionar Cuenta --</option>
+                    {cuentasBancarias?.map(c => (
+                      <option key={c.id} value={c.id}>{c.nombre} ({c.moneda})</option>
+                    ))}
+                  </select>
+
+                  <div className="relative overflow-hidden shrink-0">
+                    <input
+                      type="file"
+                      accept=".xlsx,.xls,.csv"
+                      onChange={handleExcelUpload}
+                      disabled={!selectedCuentaId || isUploading}
+                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
+                    />
+                    <button
+                      type="button"
+                      disabled={!selectedCuentaId || isUploading}
+                      className="px-3.5 py-2 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 shadow-md"
+                    >
+                      {isUploading ? <RefreshCw size={14} className="animate-spin" /> : <FileSpreadsheet size={14} />}
+                      {excelFile ? excelFile.name : 'Cargar Estado'}
+                    </button>
+                  </div>
+
+                  <button
+                    onClick={handleAutoReconcile}
+                    disabled={!selectedCuentaId}
+                    className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 shadow-md"
+                    title="Conciliación Inteligente Automática"
+                  >
+                    <Play size={14} />
+                    Conciliación Auto
+                  </button>
+
+                  <button
+                    onClick={exportReconciliationStatsToExcel}
+                    disabled={!selectedCuentaId}
+                    className="px-3.5 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 shadow-md"
+                    title="Exportar Reporte Excel"
+                  >
+                    <FileSpreadsheet size={14} />
+                    Exportar Reporte
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setTiposSelected([]);
+                      setEstatusSelected([]);
+                      setVisibilidadesSelected([]);
+                      setCategoriasSelected([]);
+                      setBusquedaBanco('');
+                      setBancoPage(0);
+                    }}
+                    className="px-3.5 py-2 bg-gray-200 dark:bg-gray-800 text-gray-700 dark:text-gray-300 rounded-lg text-xs font-bold hover:bg-gray-300 dark:hover:bg-gray-700 transition-all shrink-0"
+                  >
+                    Restablecer Filtros
+                  </button>
+                </div>
+
+                {/* Resumen Horizontal de Saldos */}
                 {selectedCuentaId && (() => {
                   const cuenta = cuentasBancarias?.find(c => c.id === selectedCuentaId);
                   const depositos = filtered.filter(m => m.tipo_movimiento === 'Deposito').reduce((acc, m) => acc + Number(m.monto), 0);
@@ -254,90 +625,229 @@ export default function BancoTab({
                   const saldoCalculado = saldoInicial + depositos - retiros;
 
                   return (
-                    <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-800 space-y-2">
-                      <h4 className="text-xs font-extrabold uppercase tracking-wide text-gray-500 mb-2">Cuadre de Saldos</h4>
-                      <div className="flex justify-between items-center text-xs">
-                        <span className="text-gray-500 dark:text-gray-400">Saldo Inicial:</span>
-                        <span className="font-mono font-medium">{formatCurrency(saldoInicial)}</span>
+                    <div className="flex gap-6 items-center bg-gray-50/50 dark:bg-gray-900/30 p-2.5 rounded-xl border border-gray-200 dark:border-gray-800 text-[11px] font-sans flex-wrap shrink-0">
+                      <span className="text-[10px] font-extrabold text-gray-400 dark:text-gray-500 uppercase tracking-wider">
+                        Cuadre de Saldos:
+                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-gray-550 dark:text-gray-400 font-medium">Saldo Inicial:</span>
+                        <span className="font-mono font-bold text-gray-800 dark:text-gray-200">{formatCurrency(saldoInicial)}</span>
                       </div>
-                      <div className="flex justify-between items-center text-xs">
-                        <span className="text-emerald-600 dark:text-emerald-500">+ Depósitos:</span>
-                        <span className="font-mono font-medium text-emerald-600 dark:text-emerald-500">{formatCurrency(depositos)}</span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-emerald-600 dark:text-emerald-500 font-medium">+ Depósitos:</span>
+                        <span className="font-mono font-bold text-emerald-600 dark:text-emerald-500">{formatCurrency(depositos)}</span>
                       </div>
-                      <div className="flex justify-between items-center text-xs">
-                        <span className="text-red-600 dark:text-red-500">- Retiros:</span>
-                        <span className="font-mono font-medium text-red-600 dark:text-red-500">{formatCurrency(retiros)}</span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-red-600 dark:text-red-500 font-medium">- Retiros:</span>
+                        <span className="font-mono font-bold text-red-600 dark:text-red-400">{formatCurrency(retiros)}</span>
                       </div>
-                      <div className="flex justify-between items-center pt-2 border-t border-gray-100 dark:border-gray-800">
-                        <span className="text-sm font-bold text-gray-700 dark:text-gray-300">Saldo ERP:</span>
-                        <span className="font-mono font-bold text-sm text-gray-900 dark:text-gray-100">{formatCurrency(saldoCalculado)}</span>
+                      <div className="h-4 w-px bg-gray-300 dark:bg-gray-700 hidden sm:block" />
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-bold text-gray-700 dark:text-gray-300">Saldo ERP:</span>
+                        <span className="font-mono font-extrabold text-xs text-gray-900 dark:text-white bg-amber-500/10 dark:bg-amber-500/20 px-2 py-0.5 rounded-md border border-amber-500/20">
+                          {formatCurrency(saldoCalculado)}
+                        </span>
                       </div>
                     </div>
                   );
                 })()}
-              </div>
 
-              <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4 space-y-3 shadow-sm">
-                <h4 className="text-xs font-extrabold uppercase tracking-wide text-gray-500">Cargar Estado de Cuenta</h4>
-                <div className="relative border border-dashed border-gray-300 dark:border-gray-700 rounded-xl p-4 text-center hover:bg-gray-50 dark:hover:bg-gray-900/60 transition-all cursor-pointer">
-                  <input type="file" accept=".xlsx,.xls,.csv" onChange={handleExcelUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
-                  <FileSpreadsheet className="mx-auto h-8 w-8 text-amber-500 mb-2" />
-                  <p className="text-xs font-semibold">{excelFile ? excelFile.name : 'Subir Excel / CSV'}</p>
-                  <p className="text-[10px] text-gray-400 mt-1">Formatos .xlsx, .xls o .csv</p>
+                {/* Grid de Checklists de Filtro */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-xs font-sans">
+                  {/* Tipo */}
+                  <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 p-3 rounded-xl flex flex-col shadow-sm">
+                    <span className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2 block">Tipo de Movimiento</span>
+                    <div className="space-y-1.5 flex-1">
+                      <label className="flex items-center gap-2 cursor-pointer text-gray-700 dark:text-gray-300 text-[11px] font-semibold hover:text-gray-900 dark:hover:text-white">
+                        <input
+                          type="checkbox"
+                          checked={tiposSelected.includes('Deposito')}
+                          onChange={(e) => {
+                            const newTipos = e.target.checked ? [...tiposSelected, 'Deposito'] : tiposSelected.filter(t => t !== 'Deposito');
+                            setTiposSelected(newTipos);
+                            setBancoPage(0);
+                          }}
+                          className="w-3.5 h-3.5 rounded text-amber-500 focus:ring-amber-500 border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950"
+                        />
+                        <span>Depósitos (+)</span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer text-gray-700 dark:text-gray-300 text-[11px] font-semibold hover:text-gray-900 dark:hover:text-white">
+                        <input
+                          type="checkbox"
+                          checked={tiposSelected.includes('Retiro')}
+                          onChange={(e) => {
+                            const newTipos = e.target.checked ? [...tiposSelected, 'Retiro'] : tiposSelected.filter(t => t !== 'Retiro');
+                            setTiposSelected(newTipos);
+                            setBancoPage(0);
+                          }}
+                          className="w-3.5 h-3.5 rounded text-amber-500 focus:ring-amber-500 border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950"
+                        />
+                        <span>Retiros (-)</span>
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* Estatus */}
+                  <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 p-3 rounded-xl flex flex-col shadow-sm">
+                    <span className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2 block">Estatus Conciliación</span>
+                    <div className="space-y-1.5 flex-1 max-h-24 overflow-y-auto pr-1">
+                      {estatusCatalog.map((e) => (
+                        <label key={e.id} className="flex items-center gap-2 cursor-pointer text-gray-700 dark:text-gray-300 text-[11px] font-semibold hover:text-gray-900 dark:hover:text-white">
+                          <input
+                            type="checkbox"
+                            checked={estatusSelected.includes(e.clave)}
+                            onChange={(chk) => {
+                              const newEstatus = chk.target.checked ? [...estatusSelected, e.clave] : estatusSelected.filter(es => es !== e.clave);
+                              setEstatusSelected(newEstatus);
+                              setBancoPage(0);
+                            }}
+                            className="w-3.5 h-3.5 rounded text-amber-500 focus:ring-amber-500 border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950"
+                          />
+                          <span>{e.nombre}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Visibilidad ERP */}
+                  <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 p-3 rounded-xl flex flex-col shadow-sm">
+                    <span className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2 block">Visibilidad ERP</span>
+                    <div className="space-y-1.5 flex-1">
+                      <label className="flex items-center gap-2 cursor-pointer text-gray-700 dark:text-gray-300 text-[11px] font-semibold hover:text-gray-900 dark:hover:text-white">
+                        <input
+                          type="checkbox"
+                          checked={visibilidadesSelected.includes('visibles_egresos')}
+                          onChange={(e) => {
+                            const newVis = e.target.checked ? [...visibilidadesSelected, 'visibles_egresos'] : visibilidadesSelected.filter(v => v !== 'visibles_egresos');
+                            setVisibilidadesSelected(newVis);
+                            setBancoPage(0);
+                          }}
+                          className="w-3.5 h-3.5 rounded text-amber-500 focus:ring-amber-500 border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950"
+                        />
+                        <span>Ver en Egresos</span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer text-gray-700 dark:text-gray-300 text-[11px] font-semibold hover:text-gray-900 dark:hover:text-white">
+                        <input
+                          type="checkbox"
+                          checked={visibilidadesSelected.includes('visibles_ingresos')}
+                          onChange={(e) => {
+                            const newVis = e.target.checked ? [...visibilidadesSelected, 'visibles_ingresos'] : visibilidadesSelected.filter(v => v !== 'visibles_ingresos');
+                            setVisibilidadesSelected(newVis);
+                            setBancoPage(0);
+                          }}
+                          className="w-3.5 h-3.5 rounded text-amber-500 focus:ring-amber-500 border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950"
+                        />
+                        <span>Ver en Ingresos</span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer text-gray-700 dark:text-gray-300 text-[11px] font-semibold hover:text-gray-900 dark:hover:text-white">
+                        <input
+                          type="checkbox"
+                          checked={visibilidadesSelected.includes('ocultos')}
+                          onChange={(e) => {
+                            const newVis = e.target.checked ? [...visibilidadesSelected, 'ocultos'] : visibilidadesSelected.filter(v => v !== 'ocultos');
+                            setVisibilidadesSelected(newVis);
+                            setBancoPage(0);
+                          }}
+                          className="w-3.5 h-3.5 rounded text-amber-500 focus:ring-amber-500 border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950"
+                        />
+                        <span>Ocultos en ERP</span>
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* Categoría */}
+                  <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 p-3 rounded-xl flex flex-col shadow-sm">
+                    <span className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2 block">Categoría de Movimiento</span>
+                    <div className="space-y-1.5 flex-1 max-h-24 overflow-y-auto pr-1">
+                      <label className="flex items-center gap-2 cursor-pointer text-gray-700 dark:text-gray-300 text-[11px] font-semibold hover:text-gray-900 dark:hover:text-white">
+                        <input
+                          type="checkbox"
+                          checked={categoriasSelected.includes('sin_categoria')}
+                          onChange={(chk) => {
+                            const newCats = chk.target.checked ? [...categoriasSelected, 'sin_categoria'] : categoriasSelected.filter(c => c !== 'sin_categoria');
+                            setCategoriasSelected(newCats);
+                            setBancoPage(0);
+                          }}
+                          className="w-3.5 h-3.5 rounded text-amber-500 focus:ring-amber-500 border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950"
+                        />
+                        <span className="italic text-gray-400">Sin Categoría</span>
+                      </label>
+                      {categoriasMovimiento?.map((c) => (
+                        <label key={c.id} className="flex items-center gap-2 cursor-pointer text-gray-700 dark:text-gray-300 text-[11px] font-semibold hover:text-gray-900 dark:hover:text-white">
+                          <input
+                            type="checkbox"
+                            checked={categoriasSelected.includes(c.id)}
+                            onChange={(chk) => {
+                              const newCats = chk.target.checked ? [...categoriasSelected, c.id] : categoriasSelected.filter(cs => cs !== c.id);
+                              setCategoriasSelected(newCats);
+                              setBancoPage(0);
+                            }}
+                            className="w-3.5 h-3.5 rounded text-amber-500 focus:ring-amber-500 border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950"
+                          />
+                          <span>{c.nombre}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               </div>
-              <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4 space-y-3 shadow-sm">
-                <h4 className="text-xs font-extrabold uppercase tracking-wide text-gray-500">Acciones Inteligentes</h4>
-                <button
-                  onClick={handleAutoReconcile}
-                  disabled={isUploading}
-                  className="w-full py-2.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-md transition-all flex items-center justify-center gap-1.5"
-                >
-                  {isUploading ? <RefreshCw size={14} className="animate-spin" /> : <Play size={14} />}
-                  Conciliación Inteligente
-                </button>
-                <p className="text-[10px] text-gray-400 italic">
-                  Cruza automáticamente por Monto, RFC y proximidad de fecha.
-                </p>
-              </div>
-            </div>
 
-            {/* Tabla de movimientos */}
-            <div className="flex-1 flex flex-col min-h-0 bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden shadow-sm">
-              {/* Filtros */}
-              <div className="p-3 bg-gray-50/50 dark:bg-gray-900/40 border-b border-gray-200 dark:border-gray-800 flex flex-wrap gap-2.5 items-center shrink-0">
-                <input
-                  type="text"
-                  placeholder="Buscar concepto, ref, rfc..."
-                  value={busquedaBanco}
-                  onChange={(e) => { setBusquedaBanco(e.target.value); setBancoPage(0); }}
-                  className="flex-1 min-w-[150px] bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 px-3 py-1.5 rounded-lg text-xs outline-none focus:ring-1 focus:ring-amber-500 transition-all font-mono"
-                />
-                <select value={filtroBancoTipo} onChange={(e) => { setFiltroBancoTipo(e.target.value); setBancoPage(0); }}
-                  className="bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 px-2 py-1.5 rounded-lg text-xs outline-none focus:ring-1 focus:ring-amber-500 transition-all">
-                  <option value="">Todos los tipos</option>
-                  <option value="Deposito">Depósitos (+)</option>
-                  <option value="Retiro">Retiros (-)</option>
-                </select>
-                <select value={filtroBancoEstatus} onChange={(e) => { setFiltroBancoEstatus(e.target.value); setBancoPage(0); }}
-                  className="bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 px-2 py-1.5 rounded-lg text-xs outline-none focus:ring-1 focus:ring-amber-500 transition-all">
-                  <option value="">Todos los estatus</option>
-                  {estatusCatalog.map((e) => <option key={e.id} value={e.clave}>{e.nombre}</option>)}
-                </select>
-                <select value={filtroBancoVisibilidad} onChange={(e) => { setFiltroBancoVisibilidad(e.target.value); setBancoPage(0); }}
-                  className="bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 px-2 py-1.5 rounded-lg text-xs outline-none focus:ring-1 focus:ring-amber-500 transition-all">
-                  <option value="todos">Toda visibilidad</option>
-                  <option value="visibles_egresos">Ver en Egresos</option>
-                  <option value="visibles_ingresos">Ver en Ingresos</option>
-                  <option value="ocultos">Ocultos en ERP</option>
-                </select>
-              </div>
+              {/* Barra de Acciones Masivas */}
+              {selectedMovimientos.length > 0 && (
+                <div className="p-3 bg-amber-500/10 border-b border-amber-200 dark:border-amber-900/50 flex items-center justify-between text-xs font-semibold animate-in slide-in-from-top-2 duration-200 gap-4 flex-wrap">
+                  <div className="flex items-center gap-2">
+                    <span className="text-amber-800 dark:text-amber-400 font-bold">
+                      {selectedMovimientos.length} movimientos seleccionados
+                    </span>
+                    <button
+                      onClick={() => setSelectedMovimientos([])}
+                      className="text-[10px] text-gray-550 hover:text-red-500 underline"
+                    >
+                      Desmarcar todos
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] text-gray-600 dark:text-gray-400 font-bold">Asignar Categoría en Lote:</span>
+                    <select
+                      onChange={(e) => {
+                        if (e.target.value !== '') {
+                          handleBulkUpdateCategory(e.target.value);
+                          e.target.value = '';
+                        }
+                      }}
+                      className="bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 px-2 py-1 rounded text-xs outline-none focus:ring-1 focus:ring-amber-500 text-gray-800 dark:text-gray-200 font-medium"
+                    >
+                      <option value="">-- Seleccionar categoría --</option>
+                      <option value="SIN_CATEGORIA">- Sin Categoría -</option>
+                      {categoriasMovimiento?.map(c => (
+                        <option key={c.id} value={c.id}>{c.nombre}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              )}
 
               {/* Tabla */}
               <div className="flex-1 overflow-auto">
                 <table className="w-full text-left border-collapse text-xs min-w-[850px]">
                   <thead>
                     <tr className="bg-gray-50 dark:bg-gray-900/50 border-b border-gray-200 dark:border-gray-800 text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+                      <th className="p-3 w-10 text-center">
+                        <input
+                          type="checkbox"
+                          checked={paginated.length > 0 && paginated.every(m => selectedMovimientos.includes(m.id))}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              const visibleIds = paginated.map(m => m.id);
+                              setSelectedMovimientos(prev => Array.from(new Set([...prev, ...visibleIds])));
+                            } else {
+                              const visibleIds = paginated.map(m => m.id);
+                              setSelectedMovimientos(prev => prev.filter(id => !visibleIds.includes(id)));
+                            }
+                          }}
+                          className="w-3.5 h-3.5 text-amber-500 focus:ring-amber-500 border-gray-300 dark:border-gray-700 rounded bg-white dark:bg-gray-950"
+                        />
+                      </th>
                       <th className="p-3 w-24">Fecha</th>
                       <th className="p-3">Detalle / Concepto</th>
                       <th className="p-3 w-36">Categoría</th>
@@ -350,13 +860,27 @@ export default function BancoTab({
                   </thead>
                   <tbody className="divide-y divide-gray-100 dark:divide-gray-800/60 font-sans">
                     {paginated.length === 0 ? (
-                      <tr><td colSpan={8} className="p-8 text-center text-gray-400 italic">No se encontraron movimientos bancarios</td></tr>
+                      <tr><td colSpan={9} className="p-8 text-center text-gray-400 italic">No se encontraron movimientos bancarios</td></tr>
                     ) : paginated.map((m) => {
                       const color = m.estatus_conciliacion_bancaria?.color || '#9CA3AF';
                       const dateStr = new Date(m.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' });
                       const isRetiro = m.tipo_movimiento === 'Retiro';
                       return (
                         <tr key={m.id} className="hover:bg-gray-50 dark:hover:bg-gray-900/10 transition-colors">
+                          <td className="p-3 text-center w-10">
+                            <input
+                              type="checkbox"
+                              checked={selectedMovimientos.includes(m.id)}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setSelectedMovimientos(prev => [...prev, m.id]);
+                                } else {
+                                  setSelectedMovimientos(prev => prev.filter(id => id !== m.id));
+                                }
+                              }}
+                              className="w-3.5 h-3.5 text-amber-500 focus:ring-amber-500 border-gray-300 dark:border-gray-700 rounded bg-white dark:bg-gray-950"
+                            />
+                          </td>
                           <td className="p-3 font-mono text-gray-500">{dateStr}</td>
                           <td className="p-3">
                             <div className="font-bold text-gray-800 dark:text-gray-200">{m.concepto}</div>
@@ -368,6 +892,77 @@ export default function BancoTab({
                                 </span>
                               )}
                             </div>
+
+                            {/* Mostrar detalles de la conciliación si existen */}
+                            {m.conciliaciones_bancarias && m.conciliaciones_bancarias.length > 0 && (
+                              <div className="mt-2 space-y-1.5">
+                                {m.conciliaciones_bancarias.map((link: any, idx: number) => {
+                                  const isGasto = !!link.gasto;
+                                  const item = isGasto ? link.gasto : link.pedido;
+                                  if (!item) return null;
+                                  
+                                  const dateDocStr = item.fecha_gasto || item.fecha_pedido
+                                    ? new Date(item.fecha_gasto || item.fecha_pedido).toLocaleDateString('es-MX', { timeZone: 'UTC' })
+                                    : 'Sin fecha';
+                                    
+                                  const rfc = isGasto 
+                                    ? item.proveedores?.rfc 
+                                    : item.clientes?.rfc;
+                                    
+                                  const nombre = isGasto 
+                                    ? item.proveedores?.nombre_comercial 
+                                    : (item.cliente_nombre || item.clientes?.nombre_local);
+                                    
+                                  const metodo = isGasto && item.metodo_pago 
+                                    ? getMetodoPagoLabel(item.metodo_pago) 
+                                    : null;
+
+                                  return (
+                                    <div key={idx} className="p-2.5 rounded-xl bg-emerald-50/60 dark:bg-emerald-950/20 border border-emerald-100 dark:border-emerald-900/40 text-[10px] text-gray-600 dark:text-gray-300 font-sans space-y-1 shadow-sm">
+                                      <div className="flex justify-between items-center font-semibold text-emerald-800 dark:text-emerald-400 gap-2 flex-wrap">
+                                        <span>🔗 {isGasto ? 'Egreso (Gasto)' : 'Venta (Pedido)'}: {isGasto ? item.concepto : `Pedido #${item.numero_pedido}`}</span>
+                                        <div className="flex items-center gap-2">
+                                          <span className="font-mono bg-emerald-100/60 dark:bg-emerald-900/50 px-1.5 py-0.5 rounded text-[9px] font-bold">
+                                            Asoc: {formatCurrency(link.monto_asociado)}
+                                          </span>
+                                          {handleUnlinkReconciliation && (
+                                            <button
+                                              type="button"
+                                              onClick={() => handleUnlinkReconciliation(m.id)}
+                                              className="text-red-550 hover:text-white hover:bg-red-500 dark:hover:bg-red-650 px-1.5 py-0.5 rounded text-[9px] font-bold border border-red-200 dark:border-red-900/50 transition-all flex items-center gap-0.5"
+                                              title="Desvincular o quitar conciliación"
+                                            >
+                                              <X size={10} /> Desvincular
+                                            </button>
+                                          )}
+                                        </div>
+                                      </div>
+                                      <div className="flex flex-wrap gap-x-2 gap-y-0.5 text-gray-550 dark:text-gray-400 text-[9px] font-medium">
+                                        {dateDocStr && <span><strong>Fecha XML:</strong> {dateDocStr}</span>}
+                                        {nombre && (
+                                          <>
+                                            <span>•</span>
+                                            <span><strong>Asignado a:</strong> {nombre} {rfc && <span className="font-mono text-[8px] bg-gray-200/55 dark:bg-gray-800 px-1 py-0.2 rounded text-gray-500">({rfc})</span>}</span>
+                                          </>
+                                        )}
+                                        {metodo && (
+                                          <>
+                                            <span>•</span>
+                                            <span><strong>Método Pago:</strong> {metodo}</span>
+                                          </>
+                                        )}
+                                        {item.monto !== undefined && (
+                                          <>
+                                            <span>•</span>
+                                            <span><strong>Importe Total:</strong> {formatCurrency(isGasto ? item.monto : item.precio_total)}</span>
+                                          </>
+                                        )}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
                           </td>
                           <td className="p-3">
                             <select
@@ -419,12 +1014,21 @@ export default function BancoTab({
                                 </button>
                               )) : <button disabled className="p-1 rounded text-[10px] text-gray-300 cursor-not-allowed"><FileCode size={13} /></button>}
                               {/* PDF Factura */}
-                              {m.pdf_factura_url ? m.pdf_factura_url.split(',').filter(Boolean).map((url, i, a) => (
-                                <button key={i} onClick={() => onDownloadFile(url)}
-                                  className="p-1 rounded text-[10px] text-red-500 hover:bg-red-500/10 flex items-center gap-0.5" title={`PDF ${i + 1}`}>
-                                  <FileText size={13} />{a.length > 1 && <span className="text-[8px] font-bold font-mono">{i + 1}</span>}
+                              {m.pdf_factura_url ? (
+                                m.pdf_factura_url.split(',').filter(Boolean).map((url, i, a) => (
+                                  <button key={i} onClick={() => onDownloadFile(url)}
+                                    className="p-1 rounded text-[10px] text-red-500 hover:bg-red-500/10 flex items-center gap-0.5" title={`PDF ${i + 1}`}>
+                                    <FileText size={13} />{a.length > 1 && <span className="text-[8px] font-bold font-mono">{i + 1}</span>}
+                                  </button>
+                                ))
+                              ) : m.xml_url && onViewCfdi ? (
+                                <button onClick={() => onViewCfdi(m.xml_url!.split(',')[0])}
+                                  className="p-1 rounded text-[10px] text-red-500 hover:bg-red-500/10 flex items-center gap-0.5" title="Ver Representación PDF">
+                                  <FileText size={13} />
                                 </button>
-                              )) : <button disabled className="p-1 rounded text-[10px] text-gray-300 cursor-not-allowed"><FileText size={13} /></button>}
+                              ) : (
+                                <button disabled className="p-1 rounded text-[10px] text-gray-300 cursor-not-allowed"><FileText size={13} /></button>
+                              )}
                               {/* Ticket */}
                               {m.pdf_ticket_url ? m.pdf_ticket_url.split(',').filter(Boolean).map((url, i, a) => (
                                 <button key={i} onClick={() => onDownloadFile(url)}
@@ -462,7 +1066,7 @@ export default function BancoTab({
               {/* Paginación */}
               <div className="p-3 bg-gray-50/50 dark:bg-gray-900/40 border-t border-gray-200 dark:border-gray-800 flex justify-between items-center text-xs shrink-0 select-none">
                 <span className="text-gray-500">
-                  Mostrando {bancoPage * bancoPageSize + 1}–{Math.min((bancoPage + 1) * bancoPageSize, filtered.length)} de {filtered.length} movimientos
+                  Mostrando {filtered.length === 0 ? 0 : bancoPage * bancoPageSize + 1}–{Math.min((bancoPage + 1) * bancoPageSize, filtered.length)} de {filtered.length} movimientos
                 </span>
                 <div className="flex gap-1">
                   <button disabled={bancoPage === 0} onClick={() => setBancoPage(bancoPage - 1)}
@@ -672,31 +1276,101 @@ export default function BancoTab({
                   .filter((g) => {
                     if (!manualMatchSearch.trim()) return true;
                     const s = manualMatchSearch.toLowerCase();
-                    return g.concepto?.toLowerCase().includes(s) || String(g.monto).includes(s);
+                    const provArr = g.proveedores;
+                    const proveedor = Array.isArray(provArr) ? provArr[0] : provArr;
+                    return (
+                      g.concepto?.toLowerCase().includes(s) || 
+                      String(g.monto).includes(s) ||
+                      proveedor?.nombre_comercial?.toLowerCase().includes(s) ||
+                      proveedor?.rfc?.toLowerCase().includes(s)
+                    );
                   })
-                  .map((g) => (
-                    <label key={g.id} className="flex items-center gap-3 p-2.5 hover:bg-gray-50 dark:hover:bg-gray-900/30 cursor-pointer">
-                      <input type="checkbox" checked={reconcileModal.gastosSeleccionados.includes(g.id)}
-                        onChange={() => {
-                          setReconcileModal((p) => {
-                            const sel = [...p.gastosSeleccionados];
-                            const idx = sel.indexOf(g.id);
-                            idx > -1 ? sel.splice(idx, 1) : sel.push(g.id);
-                            return { ...p, gastosSeleccionados: sel };
-                          });
-                        }}
-                        className="w-4 h-4 rounded text-amber-500 focus:ring-amber-500" />
-                      <div className="flex-1 min-w-0">
-                        <div className="text-xs font-semibold text-gray-800 dark:text-gray-200 truncate">{g.concepto}</div>
-                        <div className="text-[10px] text-gray-400">{formatCurrency(g.monto)} — {g.fecha_gasto ? new Date(g.fecha_gasto).toLocaleDateString() : 'Sin fecha'}</div>
+                  .map((g) => {
+                    const provArr = g.proveedores;
+                    const proveedor = Array.isArray(provArr) ? provArr[0] : provArr;
+                    return (
+                      <div key={g.id} className="flex items-center justify-between gap-3 p-2.5 hover:bg-gray-50 dark:hover:bg-gray-900/30 border-b border-gray-100 dark:border-gray-900 last:border-0 font-sans">
+                        <label className="flex items-center gap-3 flex-1 min-w-0 cursor-pointer">
+                          <input type="checkbox" checked={reconcileModal.gastosSeleccionados.includes(g.id)}
+                            onChange={() => {
+                              setReconcileModal((p) => {
+                                const sel = [...p.gastosSeleccionados];
+                                const idx = sel.indexOf(g.id);
+                                idx > -1 ? sel.splice(idx, 1) : sel.push(g.id);
+                                
+                                const nextStatus = autoEstatus(sel);
+                                
+                                return { 
+                                  ...p, 
+                                  gastosSeleccionados: sel,
+                                  estatusClave: nextStatus
+                                };
+                              });
+                            }}
+                            className="w-4 h-4 rounded text-amber-500 focus:ring-amber-500 bg-white dark:bg-gray-950 border-gray-300 dark:border-gray-700" />
+                          <div className="flex-1 min-w-0">
+                            <div className="text-xs font-semibold text-gray-800 dark:text-gray-200 truncate">{g.concepto}</div>
+                            <div className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5 flex flex-wrap gap-x-2 gap-y-0.5 items-center font-medium">
+                              <span className="font-bold text-gray-700 dark:text-gray-300">{formatCurrency(g.monto)}</span>
+                              <span>•</span>
+                              <span>{g.fecha_gasto ? new Date(g.fecha_gasto).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : 'Sin fecha'}</span>
+                              {proveedor?.nombre_comercial && (
+                                <>
+                                  <span>•</span>
+                                  <span className="text-blue-600 dark:text-blue-400 font-semibold">{proveedor.nombre_comercial}</span>
+                                </>
+                              )}
+                              {g.metodo_pago && (
+                                <>
+                                  <span>•</span>
+                                  <span className="bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-400 px-1.5 py-0.5 rounded text-[9px] font-bold">
+                                    {getMetodoPagoLabel(g.metodo_pago)}
+                                  </span>
+                                </>
+                              )}
+                            </div>
+                          </div>
+                        </label>
+                        
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (handleSaveReconciliation) {
+                              const nextStatus = autoEstatus([g.id]);
+                              handleSaveReconciliation([g.id], nextStatus);
+                            }
+                          }}
+                          className="px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-[10px] font-bold shadow transition-all shrink-0"
+                        >
+                          Conciliar
+                        </button>
                       </div>
-                    </label>
-                  ))}
+                    );
+                  })}
                 {gastosReconciliables.length === 0 && (
                   <div className="p-4 text-center text-xs text-gray-400 italic">No hay egresos sin conciliar</div>
                 )}
               </div>
             </div>
+
+            {selectedGastosWithDiscrepancy.length > 0 && (
+              <div className="p-3.5 bg-amber-50 dark:bg-amber-955/20 border border-amber-250 dark:border-amber-900 rounded-xl text-amber-800 dark:text-amber-400 text-xs flex flex-col gap-1.5 font-sans shadow-sm">
+                <span className="font-extrabold flex items-center gap-1">
+                  ⚠️ Advertencia Fiscal de Conciliación
+                </span>
+                <ul className="list-disc pl-4 space-y-1 font-medium">
+                  {selectedGastosWithDiscrepancy.map((item) => (
+                    <li key={item.gasto.id}>
+                      El egreso <strong>"{item.gasto.concepto}"</strong> indica forma de pago {item.gasto.metodo_pago ? getMetodoPagoLabel(item.gasto.metodo_pago) : 'Desconocida'}, pero el retiro bancario es electrónico/tarjeta/efectivo.
+                      <p className="italic text-[10px] opacity-90 mt-0.5">{item.disc.detalle}</p>
+                    </li>
+                  ))}
+                </ul>
+                <p className="mt-1 text-[10px] font-semibold text-amber-700 dark:text-amber-300">
+                  Tip: Para mantener la congruencia fiscal, te recomendamos cambiar el estatus resultante a "Movimiento no Deducible" en el selector inferior.
+                </p>
+              </div>
+            )}
 
             {/* Estatus a asignar */}
             <div>
@@ -718,7 +1392,7 @@ export default function BancoTab({
                 className="flex-1 py-2.5 border border-gray-300 dark:border-gray-700 rounded-xl text-xs font-semibold hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-50">
                 Cancelar
               </button>
-              <button onClick={handleSaveReconciliation} disabled={reconcileModal.loading || !reconcileModal.estatusClave}
+              <button onClick={() => handleSaveReconciliation && handleSaveReconciliation()} disabled={reconcileModal.loading || !reconcileModal.estatusClave}
                 className="flex-1 py-2.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-md flex items-center justify-center gap-2">
                 {reconcileModal.loading ? <><RefreshCw size={14} className="animate-spin" /> Guardando...</> : <><Check size={14} /> Guardar Conciliación</>}
               </button>

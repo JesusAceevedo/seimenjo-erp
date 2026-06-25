@@ -82,7 +82,52 @@ export default function DocumentViewer({ open, onClose, title, documents }: Docu
   const activeDoc = documents[activeIndex];
 
   return (
-    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex flex-col z-[100] font-sans">
+    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex flex-col z-[100] font-sans cfdi-modal-backdrop">
+      <style dangerouslySetInnerHTML={{ __html: `
+        @media print {
+          /* Hide everything except print area */
+          body * {
+            visibility: hidden !important;
+          }
+          #cfdi-print-area, #cfdi-print-area * {
+            visibility: visible !important;
+          }
+          /* Reset body and parents of print area to avoid top blank space and clipping */
+          body {
+            margin: 0 !important;
+            padding: 0 !important;
+            overflow: visible !important;
+          }
+          .cfdi-modal-backdrop,
+          .cfdi-modal-wrapper,
+          .cfdi-modal-container,
+          .cfdi-modal-content {
+            position: static !important;
+            display: block !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            width: 100% !important;
+            height: auto !important;
+            max-height: none !important;
+            overflow: visible !important;
+            border: none !important;
+            background: transparent !important;
+            backdrop-filter: none !important;
+            filter: none !important;
+            box-shadow: none !important;
+          }
+          #cfdi-print-area {
+            position: absolute !important;
+            left: 0 !important;
+            top: 0 !important;
+            width: 100% !important;
+            border: none !important;
+            box-shadow: none !important;
+            padding: 0 !important;
+            margin: 0 !important;
+          }
+        }
+      `}} />
       {/* HEADER */}
       <div className="bg-gray-900 text-white p-4 flex justify-between items-center shadow-md shrink-0">
         <div>
@@ -114,14 +159,7 @@ export default function DocumentViewer({ open, onClose, title, documents }: Docu
           {activeDoc?.type === 'cfdi' && (
             <button
               onClick={() => {
-                const printContents = document.getElementById('cfdi-print-area')?.innerHTML;
-                if (printContents) {
-                  const originalContents = document.body.innerHTML;
-                  document.body.innerHTML = printContents;
-                  window.print();
-                  document.body.innerHTML = originalContents;
-                  window.location.reload();
-                }
+                window.print();
               }}
               className="px-3 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-500 font-bold text-xs flex items-center gap-2"
               title="Imprimir a PDF"
@@ -151,14 +189,14 @@ export default function DocumentViewer({ open, onClose, title, documents }: Docu
       </div>
 
       {/* CONTENT */}
-      <div className="flex-1 overflow-hidden p-4 md:p-6 bg-gray-950 flex justify-center">
+      <div className="flex-1 overflow-hidden p-4 md:p-6 bg-gray-950 flex justify-center cfdi-modal-wrapper">
         {documents.length === 0 ? (
           <div className="text-gray-500 flex flex-col items-center justify-center h-full">
             <AlertCircle size={48} className="mb-4 opacity-50" />
             <p>No hay documentos disponibles para visualizar.</p>
           </div>
         ) : (
-          <div className="w-full max-w-5xl h-full bg-white dark:bg-gray-900 rounded-xl overflow-hidden shadow-2xl border border-gray-200 dark:border-gray-800 flex flex-col relative">
+          <div className="w-full max-w-5xl h-full bg-white dark:bg-gray-900 rounded-xl overflow-hidden shadow-2xl border border-gray-200 dark:border-gray-800 flex flex-col relative cfdi-modal-container">
             {loading && (
               <div className="absolute inset-0 bg-white/80 dark:bg-gray-900/80 flex items-center justify-center z-10">
                 <RefreshCw className="w-8 h-8 animate-spin text-amber-500" />
@@ -181,7 +219,7 @@ export default function DocumentViewer({ open, onClose, title, documents }: Docu
                 title={`PDF Viewer ${activeDoc.label}`}
               />
             ) : activeDoc.type === 'cfdi' ? (
-              <div className="flex-1 overflow-auto p-4 bg-gray-100 dark:bg-gray-800">
+              <div className="flex-1 overflow-auto p-4 bg-gray-100 dark:bg-gray-800 cfdi-modal-content">
                 {cfdiData && (
                   <div id="cfdi-print-area" className="bg-white text-black p-8 border rounded-xl shadow-inner font-sans text-sm mx-auto max-w-3xl">
                     <div className="flex justify-between items-start border-b-2 border-gray-800 pb-4 mb-6">

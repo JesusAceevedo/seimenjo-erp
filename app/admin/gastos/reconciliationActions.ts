@@ -2,6 +2,25 @@
 
 import { supabaseAdmin, getUserEmpresaId } from '../../../lib/supabaseAdmin';
 
+function parseNumberClean(val: any): number {
+  if (val === undefined || val === null) return 0;
+  if (typeof val === 'number') return val;
+  const cleanStr = String(val).replace(/[^0-9.-]/g, '');
+  const num = parseFloat(cleanStr);
+  return isNaN(num) ? 0 : num;
+}
+
+function parseDateOnly(dateStr: string | null | undefined): Date | null {
+  if (!dateStr) return null;
+  const match = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (match) {
+    return new Date(parseInt(match[1]), parseInt(match[2]) - 1, parseInt(match[3]));
+  }
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return null;
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+
 // Helper to extract RFC from bank description (SAT CFDI RFC Regex)
 function extraerRfcDeConcepto(concepto: string): string | null {
   if (!concepto) return null;
@@ -10,11 +29,131 @@ function extraerRfcDeConcepto(concepto: string): string | null {
   return match ? match[1].toUpperCase() : null;
 }
 
+const BASIC_STATUSES = [
+  {
+    clave: 'pendiente',
+    nombre: 'Pendiente de Conciliar',
+    descripcion: 'El movimiento no ha sido verificado o conciliado',
+    color: '#9CA3AF',
+    empresa_id: null
+  },
+  {
+    clave: 'comprobado',
+    nombre: 'Comprobado',
+    descripcion: 'Completamente comprobado con XML de factura y/o ticket',
+    color: '#10B981',
+    empresa_id: null
+  },
+  {
+    clave: 'incompleto',
+    nombre: 'Incompleto',
+    descripcion: 'Le hace falta algún documento como XML, PDF de Factura o Ticket',
+    color: '#F59E0B',
+    empresa_id: null
+  },
+  {
+    clave: 'incompleto_comprobado',
+    nombre: 'Incompleto y Comprobado',
+    descripcion: 'Aparece en el banco y está comprobado, pero le falta algún archivo/documento',
+    color: '#3B82F6',
+    empresa_id: null
+  },
+  {
+    clave: 'no_deducible',
+    nombre: 'Movimiento no Deducible',
+    descripcion: 'Falta la factura o no está comprobado en el estado de cuenta (excepto efectivo)',
+    color: '#EF4444',
+    empresa_id: null
+  },
+  {
+    clave: 'no_facturable',
+    nombre: 'Movimiento no Facturable',
+    descripcion: 'Comisiones, impuestos, nóminas u otros que no requieren factura deducible',
+    color: '#8B5CF6',
+    empresa_id: null
+  },
+  {
+    clave: 'no_detectado',
+    nombre: 'Movimiento no detectado',
+    descripcion: 'El importe no coincide con ningún registro del sistema o la fecha es posterior a la factura.',
+    color: '#EF4444',
+    empresa_id: null
+  },
+  {
+    clave: 'conciliado',
+    nombre: 'Conciliado',
+    descripcion: 'El movimiento coincide con el banco y está conciliado',
+    color: '#10B981',
+    empresa_id: null
+  }
+];
+
+export async function ensureBasicStatuses(): Promise<void> {
+  try {
+    const { data: current, error } = await supabaseAdmin
+      .from('estatus_conciliacion_bancaria')
+      .select('clave');
+    if (error) throw error;
+
+    const existingClaves = new Set(current?.map(c => (c.clave || '').toLowerCase()) || []);
+    const toInsert = BASIC_STATUSES.filter(s => !existingClaves.has(s.clave));
+
+    if (toInsert.length > 0) {
+      const { error: insertError } = await supabaseAdmin
+        .from('estatus_conciliacion_bancaria')
+        .insert(toInsert);
+      if (insertError) {
+        console.error('Error auto-healing basic statuses:', insertError);
+      }
+    }
+  } catch (err) {
+    console.error('Failed to ensure basic statuses:', err);
+  }
+}
+
 // Helper to check if concept indicates a Cash transaction
 function esMovimientoEfectivo(concepto: string): boolean {
   if (!concepto) return false;
   const c = concepto.toUpperCase();
   return c.includes('EFECTIVO') || c.includes('CAJERO') || c.includes('RETIRO CAJERO') || c.includes('DEPOSITO CAJERO');
+}
+
+function obtenerMetodoPagoBanco(concepto: string): '01' | '03' | '04_28' | 'unknown' {
+  if (!concepto) return 'unknown';
+  const c = concepto.toUpperCase();
+  if (c.includes('EFECTIVO') || c.includes('CAJERO') || c.includes('RETIRO CAJERO') || c.includes('DEPOSITO CAJERO')) {
+    return '01'; // Efectivo
+  }
+  if (c.includes('SPEI') || c.includes('TRANSFERENCIA') || c.includes('TRF') || c.includes('TRANSF') || c.includes('TEF') || c.includes('TRASPASO')) {
+    return '03'; // Transferencia
+  }
+  if (c.includes('TARJETA') || c.includes('PAGO CON TARJETA') || c.includes('TDC') || c.includes('T.DEB') || c.includes('T.CRE') || c.includes('DEBITO') || c.includes('CREDITO')) {
+    return '04_28'; // Tarjeta
+  }
+  return 'unknown';
+}
+
+function detectarDiscrepanciaPago(conceptoBanco: string, metodoPagoGasto: string | null | undefined): { tieneDiscrepancia: boolean; detalle?: string } {
+  if (!metodoPagoGasto) return { tieneDiscrepancia: false };
+  const mpBanco = obtenerMetodoPagoBanco(conceptoBanco);
+  if (mpBanco === 'unknown') return { tieneDiscrepancia: false };
+
+  const cleanGastoCode = metodoPagoGasto.trim().padStart(2, '0');
+
+  // Si el banco indica Efectivo (01) pero el gasto indica otra cosa (transferencia o tarjeta)
+  if (mpBanco === '01' && cleanGastoCode !== '01') {
+    return { tieneDiscrepancia: true, detalle: 'El banco indica retiro en efectivo pero el comprobante indica pago electrónico.' };
+  }
+  // Si el banco indica Transferencia (03) pero el gasto indica otra cosa
+  if (mpBanco === '03' && cleanGastoCode !== '03') {
+    return { tieneDiscrepancia: true, detalle: 'El banco indica transferencia pero el comprobante indica tarjeta/efectivo.' };
+  }
+  // Si el banco indica Tarjeta pero el gasto indica otra cosa (no es 04 ni 28)
+  if (mpBanco === '04_28' && cleanGastoCode !== '04' && cleanGastoCode !== '28') {
+    return { tieneDiscrepancia: true, detalle: 'El banco indica tarjeta pero el comprobante indica transferencia/efectivo.' };
+  }
+
+  return { tieneDiscrepancia: false };
 }
 
 // 1. IMPORTAR MOVIMIENTOS BANCARIOS DESDE EXCEL / CSV
@@ -26,9 +165,11 @@ export async function importarMovimientosBancarios(
     deposito?: number | string;
     referencia?: string;
   }[],
-  token: string
+  token: string,
+  cuentaBancariaId?: string
 ): Promise<{ success: boolean; count?: number; error?: string }> {
   try {
+    await ensureBasicStatuses();
     const { empresaId } = await getUserEmpresaId(token);
 
     // Get Pendiente status ID
@@ -41,8 +182,8 @@ export async function importarMovimientosBancarios(
     const estatusId = statusPendiente?.id;
 
     const formattedMovements = movements.map((m) => {
-      const r = Math.abs(Number(m.retiro) || 0);
-      const d = Math.abs(Number(m.deposito) || 0);
+      const r = Math.abs(parseNumberClean(m.retiro));
+      const d = Math.abs(parseNumberClean(m.deposito));
       const montoVal = d - r;
       const tipo = d > 0 ? 'Deposito' : 'Retiro';
       const rfc = extraerRfcDeConcepto(m.concepto);
@@ -103,14 +244,95 @@ export async function importarMovimientosBancarios(
         estatus_conciliacion_id: estatusId,
         rfc_proveedor: rfc,
         empresa_id: empresaId,
+        cuenta_bancaria_id: cuentaBancariaId || null,
         visible_egresos: false,
         visible_ingresos: false
       };
     });
 
+    // Check for duplicates in the DB for this company and account
+    let query = supabaseAdmin
+      .from('movimientos_bancarios')
+      .select('fecha, concepto, monto, referencia, cuenta_bancaria_id')
+      .eq('empresa_id', empresaId);
+
+    if (cuentaBancariaId) {
+      query = query.eq('cuenta_bancaria_id', cuentaBancariaId);
+    } else {
+      query = query.is('cuenta_bancaria_id', null);
+    }
+
+    const { data: existingMovements, error: fetchErr } = await query;
+    if (fetchErr) throw fetchErr;
+
+    const makeKey = (item: {
+      fecha: string;
+      concepto: string;
+      monto: number;
+      referencia?: string | null;
+      cuenta_bancaria_id?: string | null;
+    }) => {
+      const dateStr = item.fecha ? item.fecha.substring(0, 10) : '';
+      const conceptStr = (item.concepto || '').trim().toLowerCase();
+      const amountVal = Number(item.monto || 0).toFixed(2);
+      const refStr = (item.referencia || '').trim().toLowerCase();
+      const accId = item.cuenta_bancaria_id || '';
+      return `${dateStr}|${conceptStr}|${amountVal}|${refStr}|${accId}`;
+    };
+
+    // Count key occurrences in database
+    const dbKeyCounts: Record<string, number> = {};
+    existingMovements?.forEach((m) => {
+      const key = makeKey({
+        fecha: m.fecha,
+        concepto: m.concepto,
+        monto: m.monto,
+        referencia: m.referencia,
+        cuenta_bancaria_id: m.cuenta_bancaria_id,
+      });
+      dbKeyCounts[key] = (dbKeyCounts[key] || 0) + 1;
+    });
+
+    // Count key occurrences in the current import batch
+    const fileKeyCounts: Record<string, number> = {};
+    formattedMovements.forEach((m) => {
+      const key = makeKey({
+        fecha: m.fecha,
+        concepto: m.concepto,
+        monto: m.monto,
+        referencia: m.referencia,
+        cuenta_bancaria_id: m.cuenta_bancaria_id,
+      });
+      fileKeyCounts[key] = (fileKeyCounts[key] || 0) + 1;
+    });
+
+    // Filter to only new movements (matching based on occurrence counts)
+    const addedKeyCounts: Record<string, number> = {};
+    const newMovements = formattedMovements.filter((m) => {
+      const key = makeKey({
+        fecha: m.fecha,
+        concepto: m.concepto,
+        monto: m.monto,
+        referencia: m.referencia,
+        cuenta_bancaria_id: m.cuenta_bancaria_id,
+      });
+      const dbCount = dbKeyCounts[key] || 0;
+      const addedCount = addedKeyCounts[key] || 0;
+
+      if (dbCount + addedCount < fileKeyCounts[key]) {
+        addedKeyCounts[key] = addedCount + 1;
+        return true;
+      }
+      return false;
+    });
+
+    if (newMovements.length === 0) {
+      return { success: true, count: 0 };
+    }
+
     const { data, error } = await supabaseAdmin
       .from('movimientos_bancarios')
-      .insert(formattedMovements)
+      .insert(newMovements)
       .select('id');
 
     if (error) throw error;
@@ -202,7 +424,11 @@ export async function toggleMovimientoVisibilidad(
 // 3. CONCILIACIÓN INTELIGENTE / AUTOMÁTICA
 export async function autoConciliarMovimientos(token: string): Promise<{ success: boolean; matchedCount: number; error?: string }> {
   try {
+    await ensureBasicStatuses();
     const { empresaId } = await getUserEmpresaId(token);
+    if (!empresaId || empresaId === 'null') {
+      throw new Error('Empresa inválida o no asignada to user.');
+    }
 
     // Get all reconciliation statuses
     const { data: catalog } = await supabaseAdmin
@@ -211,16 +437,27 @@ export async function autoConciliarMovimientos(token: string): Promise<{ success
 
     const getStatusId = (clave: string) => catalog?.find((c) => c.clave === clave)?.id || null;
 
+    const statusPendiente = getStatusId('pendiente');
+    if (!statusPendiente || statusPendiente === 'null') {
+      throw new Error("No se encontró el estatus 'pendiente' en el catálogo.");
+    }
     const statusComprobado = getStatusId('comprobado');
     const statusIncompletoComprobado = getStatusId('incompleto_comprobado');
     const statusNoDeducible = getStatusId('no_deducible');
+    const statusNoDetectado = getStatusId('no_detectado');
+    const statusConciliado = getStatusId('conciliado') || getStatusId('CONCILIADO') || statusComprobado;
 
-    // 1. Get bank movements for this company that are 'pendiente'
+    // 1. Get bank movements for this company that are candidates (pendiente, no_detectado, no_deducible, or null)
+    const statusFilter = ['estatus_conciliacion_id.is.null'];
+    if (statusPendiente) statusFilter.push(`estatus_conciliacion_id.eq.${statusPendiente}`);
+    if (statusNoDetectado) statusFilter.push(`estatus_conciliacion_id.eq.${statusNoDetectado}`);
+    if (statusNoDeducible) statusFilter.push(`estatus_conciliacion_id.eq.${statusNoDeducible}`);
+
     const { data: movements, error: movsErr } = await supabaseAdmin
       .from('movimientos_bancarios')
       .select('*')
       .eq('empresa_id', empresaId)
-      .eq('estatus_conciliacion_id', getStatusId('pendiente'))
+      .or(statusFilter.join(','))
       .order('fecha', { ascending: true });
 
     if (movsErr) throw movsErr;
@@ -291,9 +528,12 @@ export async function autoConciliarMovimientos(token: string): Promise<{ success
             const sameAmount = Math.abs(Number(g.monto) - absMonto) < 0.05;
             if (!sameAmount) return false;
 
-            const gDate = new Date(g.fecha_gasto || g.fecha || '');
-            const mDate = new Date(mov.fecha);
-            const validDate = gDate <= mDate;
+            const gDate = parseDateOnly(g.fecha_gasto || g.fecha);
+            const mDate = parseDateOnly(mov.fecha);
+            if (!gDate || !mDate) return false;
+
+            // La fecha de la factura (gDate) es anterior o igual al pago (mDate)
+            const validDate = gDate.getTime() <= mDate.getTime();
 
             if (mov.rfc_proveedor && g.proveedores?.rfc) {
               const rfcMatch = mov.rfc_proveedor.toUpperCase() === g.proveedores.rfc.toUpperCase();
@@ -303,19 +543,37 @@ export async function autoConciliarMovimientos(token: string): Promise<{ success
             return validDate;
           })
           .sort((a, b) => {
-            const diffA = new Date(mov.fecha).getTime() - new Date(a.fecha_gasto || a.fecha || '').getTime();
-            const diffB = new Date(mov.fecha).getTime() - new Date(b.fecha_gasto || b.fecha || '').getTime();
-            return diffA - diffB;
+            const dateA = parseDateOnly(a.fecha_gasto || a.fecha)?.getTime() || 0;
+            const dateB = parseDateOnly(b.fecha_gasto || b.fecha)?.getTime() || 0;
+            const mDateTime = parseDateOnly(mov.fecha)?.getTime() || 0;
+            return Math.abs(dateA - mDateTime) - Math.abs(dateB - mDateTime);
           });
 
         const bestMatch = matches[0];
 
         if (bestMatch) {
-          await supabaseAdmin
-            .from('gastos')
-            .update({ movimiento_bancario_id: mov.id, estatus_facturado: true })
-            .eq('id', bestMatch.id)
-            .eq('empresa_id', empresaId);
+          const disc = detectarDiscrepanciaPago(mov.concepto, bestMatch.metodo_pago);
+          let targetStatusId = statusConciliado;
+          
+          if (disc.tieneDiscrepancia) {
+            targetStatusId = statusNoDeducible || statusConciliado;
+            await supabaseAdmin
+              .from('gastos')
+              .update({ 
+                movimiento_bancario_id: mov.id, 
+                estatus_facturado: true,
+                es_deducible: false,
+                comentarios: `[DISCREPANCIA FISCAL: ${disc.detalle}]${bestMatch.comentarios ? ' | ' + bestMatch.comentarios : ''}`.substring(0, 1000)
+              })
+              .eq('id', bestMatch.id)
+              .eq('empresa_id', empresaId);
+          } else {
+            await supabaseAdmin
+              .from('gastos')
+              .update({ movimiento_bancario_id: mov.id, estatus_facturado: true })
+              .eq('id', bestMatch.id)
+              .eq('empresa_id', empresaId);
+          }
 
           await supabaseAdmin.from('conciliaciones_bancarias').insert({
             movimiento_id: mov.id,
@@ -324,18 +582,10 @@ export async function autoConciliarMovimientos(token: string): Promise<{ success
             empresa_id: empresaId
           });
 
-          const hasInvoiceXml = !!bestMatch.xml_url || !!mov.xml_url;
-          const hasInvoicePdf = !!bestMatch.pdf_url || !!mov.pdf_factura_url;
-          const hasTicket = !!bestMatch.ticket_url || !!mov.pdf_ticket_url;
-
-          const targetStatus = (hasInvoiceXml && hasInvoicePdf && hasTicket)
-            ? statusComprobado
-            : statusIncompletoComprobado;
-
           await supabaseAdmin
             .from('movimientos_bancarios')
             .update({
-              estatus_conciliacion_id: targetStatus,
+              estatus_conciliacion_id: targetStatusId,
               visible_egresos: true,
               xml_url: mov.xml_url || bestMatch.xml_url || null,
               pdf_factura_url: mov.pdf_factura_url || bestMatch.pdf_url || null,
@@ -351,9 +601,10 @@ export async function autoConciliarMovimientos(token: string): Promise<{ success
 
           matchedCount++;
         } else {
+          // Si no se encuentra coincidencia, cambiar estatus a "Movimiento no detectado" (statusNoDetectado)
           await supabaseAdmin
             .from('movimientos_bancarios')
-            .update({ estatus_conciliacion_id: statusNoDeducible })
+            .update({ estatus_conciliacion_id: statusNoDetectado || statusNoDeducible })
             .eq('id', mov.id)
             .eq('empresa_id', empresaId);
         }
@@ -364,14 +615,20 @@ export async function autoConciliarMovimientos(token: string): Promise<{ success
             const sameAmount = Math.abs(Number(p.precio_total) - absMonto) < 0.05;
             if (!sameAmount) return false;
 
-            const pDate = new Date(p.fecha_pedido || p.created_at || '');
-            const mDate = new Date(mov.fecha);
-            return pDate <= mDate;
+            const pDate = parseDateOnly(p.fecha_pedido || p.created_at);
+            const mDate = parseDateOnly(mov.fecha);
+            if (!pDate || !mDate) return false;
+
+            // La fecha del pedido/factura (pDate) es anterior o igual al pago (mDate)
+            const validDate = pDate.getTime() <= mDate.getTime();
+
+            return validDate;
           })
           .sort((a, b) => {
-            const diffA = new Date(mov.fecha).getTime() - new Date(a.fecha_pedido || a.created_at || '').getTime();
-            const diffB = new Date(mov.fecha).getTime() - new Date(b.fecha_pedido || b.created_at || '').getTime();
-            return diffA - diffB;
+            const dateA = parseDateOnly(a.fecha_pedido || a.created_at)?.getTime() || 0;
+            const dateB = parseDateOnly(b.fecha_pedido || b.created_at)?.getTime() || 0;
+            const mDateTime = parseDateOnly(mov.fecha)?.getTime() || 0;
+            return Math.abs(dateA - mDateTime) - Math.abs(dateB - mDateTime);
           });
 
         const bestMatch = matches[0];
@@ -400,7 +657,7 @@ export async function autoConciliarMovimientos(token: string): Promise<{ success
           await supabaseAdmin
             .from('movimientos_bancarios')
             .update({
-              estatus_conciliacion_id: statusComprobado,
+              estatus_conciliacion_id: statusConciliado,
               visible_ingresos: true,
               xml_url: clientInvoice?.xml_url || null,
               pdf_factura_url: clientInvoice?.pdf_url || null,
@@ -415,6 +672,13 @@ export async function autoConciliarMovimientos(token: string): Promise<{ success
           }
 
           matchedCount++;
+        } else {
+          // Si no se encuentra coincidencia para depósito, cambiar estatus a "Movimiento no detectado" (statusNoDetectado)
+          await supabaseAdmin
+            .from('movimientos_bancarios')
+            .update({ estatus_conciliacion_id: statusNoDetectado || statusNoDeducible })
+            .eq('id', mov.id)
+            .eq('empresa_id', empresaId);
         }
       }
     }
@@ -475,9 +739,14 @@ export async function guardarConciliacionManual(
     let associatedTicket = null;
 
     if (mov.tipo_movimiento === 'Retiro' && payload.gastosIds.length > 0) {
+      const isNoDeducible = payload.estatusClave === 'no_deducible';
       const { error: linkErr } = await supabaseAdmin
         .from('gastos')
-        .update({ movimiento_bancario_id: movimientoId, estatus_facturado: true })
+        .update({ 
+          movimiento_bancario_id: movimientoId, 
+          estatus_facturado: true,
+          ...(isNoDeducible ? { es_deducible: false } : {})
+        })
         .in('id', payload.gastosIds)
         .eq('empresa_id', empresaId);
 
@@ -555,7 +824,6 @@ export async function guardarConciliacionManual(
     let targetStatusClave = payload.estatusClave || 'pendiente';
     if (!payload.estatusClave) {
       const hasXml = !!payload.xmlUrl || !!mov.xml_url || !!associatedXml;
-      const hasPdf = !!payload.pdfFacturaUrl || !!mov.pdf_factura_url || !!associatedPdf;
       const hasTicket = !!payload.pdfTicketUrl || !!mov.pdf_ticket_url || !!associatedTicket;
       const isCash = esMovimientoEfectivo(mov.concepto);
 
@@ -565,7 +833,7 @@ export async function guardarConciliacionManual(
         const hasInvoice = (mov.tipo_movimiento === 'Deposito') || (payload.gastosIds.length > 0);
         if (!hasInvoice) {
           targetStatusClave = 'no_deducible';
-        } else if (hasXml && hasPdf && hasTicket) {
+        } else if (hasXml) {
           targetStatusClave = 'comprobado';
         } else {
           targetStatusClave = 'incompleto_comprobado';
@@ -604,6 +872,7 @@ export async function guardarConciliacionManual(
 // 5. OBTENER CATALOGO DE ESTATUS DE CONCILIACIÓN
 export async function getEstatusCatalog(token: string): Promise<{ success: boolean; catalog?: any[]; error?: string }> {
   try {
+    await ensureBasicStatuses();
     const { empresaId } = await getUserEmpresaId(token);
 
     const { data, error } = await supabaseAdmin
@@ -624,7 +893,7 @@ export async function getEstatusCatalog(token: string): Promise<{ success: boole
 export async function guardarEstatusCatalogItem(
   payload: {
     id?: string;
-    clave: string;
+    clave?: string;
     nombre: string;
     descripcion?: string;
     color: string;
@@ -647,10 +916,11 @@ export async function guardarEstatusCatalogItem(
 
       if (error) throw error;
     } else {
+      const clave = (payload.clave || payload.nombre).toLowerCase().replace(/\s+/g, '_');
       const { error } = await supabaseAdmin
         .from('estatus_conciliacion_bancaria')
         .insert({
-          clave: payload.clave.toLowerCase().replace(/\s+/g, '_'),
+          clave,
           nombre: payload.nombre,
           descripcion: payload.descripcion || null,
           color: payload.color,
@@ -780,5 +1050,72 @@ export async function editarMovimientoBancario(
   } catch (err: any) {
     console.error('Error editing bank movement:', err);
     return { success: false, error: err.message || 'Error al editar el movimiento bancario' };
+  }
+}
+
+// 10. DESCONCILIAR MOVIMIENTO BANCARIO
+export async function desconciliarMovimientoBancario(
+  movimientoId: string,
+  token: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { empresaId } = await getUserEmpresaId(token);
+
+    // 1. Get the Pendiente status ID
+    const { data: statusPendiente } = await supabaseAdmin
+      .from('estatus_conciliacion_bancaria')
+      .select('id')
+      .eq('clave', 'pendiente')
+      .single();
+
+    const estatusId = statusPendiente?.id || null;
+
+    // 2. Remove bank movement references from linked gastos
+    const { error: resetGastosErr } = await supabaseAdmin
+      .from('gastos')
+      .update({ movimiento_bancario_id: null })
+      .eq('movimiento_bancario_id', movimientoId)
+      .eq('empresa_id', empresaId);
+
+    if (resetGastosErr) throw resetGastosErr;
+
+    // 3. Remove bank movement references from linked pedidos
+    const { error: resetPedidosErr } = await supabaseAdmin
+      .from('pedidos')
+      .update({ movimiento_bancario_id: null, estatus_pago: 'Pendiente' })
+      .eq('movimiento_bancario_id', movimientoId)
+      .eq('empresa_id', empresaId);
+
+    if (resetPedidosErr) throw resetPedidosErr;
+
+    // 4. Delete the junction entries in conciliaciones_bancarias
+    const { error: deleteJuncErr } = await supabaseAdmin
+      .from('conciliaciones_bancarias')
+      .delete()
+      .eq('movimiento_id', movimientoId)
+      .eq('empresa_id', empresaId);
+
+    if (deleteJuncErr) throw deleteJuncErr;
+
+    // 5. Update the movements table: reset status, files, and visibility
+    const { error: updateMovErr } = await supabaseAdmin
+      .from('movimientos_bancarios')
+      .update({
+        estatus_conciliacion_id: estatusId,
+        visible_egresos: false,
+        visible_ingresos: false,
+        xml_url: null,
+        pdf_factura_url: null,
+        pdf_ticket_url: null
+      })
+      .eq('id', movimientoId)
+      .eq('empresa_id', empresaId);
+
+    if (updateMovErr) throw updateMovErr;
+
+    return { success: true };
+  } catch (err: any) {
+    console.error('Error unlinking reconciliation:', err);
+    return { success: false, error: err.message || 'Error al desconciliar el movimiento bancario' };
   }
 }

@@ -133,9 +133,15 @@ export default function OnboardingWizard({ empresaId, onSuccess }: OnboardingWiz
       if (!codigoPostal.trim()) return setErrorMsg('El código postal fiscal es obligatorio.');
       if (!selectedRegimenId) return setErrorMsg('Debes seleccionar un régimen fiscal.');
     } else if (step === 3) {
-      if (!cerFile && !csdCerUrl) return setErrorMsg('El archivo de certificado (.cer) es obligatorio.');
-      if (!keyFile && !csdKeyUrl) return setErrorMsg('El archivo de llave (.key) es obligatorio.');
-      if (!csdPassword.trim()) return setErrorMsg('La contraseña del sello digital es obligatoria.');
+      const tieneCer = !!cerFile || !!csdCerUrl;
+      const tieneKey = !!keyFile || !!csdKeyUrl;
+      const tienePassword = !!csdPassword.trim();
+      
+      if (tieneCer || tieneKey || tienePassword) {
+        if (!tieneCer) return setErrorMsg('El archivo de certificado (.cer) es obligatorio si deseas configurar los sellos.');
+        if (!tieneKey) return setErrorMsg('El archivo de llave (.key) es obligatorio si deseas configurar los sellos.');
+        if (!tienePassword) return setErrorMsg('La contraseña del sello digital es obligatoria si deseas configurar los sellos.');
+      }
     }
     setStep(step + 1);
   };
@@ -393,7 +399,7 @@ export default function OnboardingWizard({ empresaId, onSuccess }: OnboardingWiz
           {step === 3 && (
             <div className="space-y-4 animate-fadeIn">
               <h3 className="text-sm font-bold text-slate-800 dark:text-slate-200 uppercase tracking-wider flex items-center gap-2">
-                Paso 3: Carga de Certificados Digitales (CSD)
+                Paso 3: Carga de Certificados Digitales (CSD) <span className="text-xs text-amber-500 font-normal normal-case">(Opcional)</span>
               </h3>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -406,7 +412,7 @@ export default function OnboardingWizard({ empresaId, onSuccess }: OnboardingWiz
                     onChange={e => e.target.files && setCerFile(e.target.files[0])}
                   />
                   <FileCode className="text-amber-500 w-10 h-10 mb-2" />
-                  <span className="text-xs font-bold text-slate-700 dark:text-slate-300 block">Certificado Fiscal (.cer)</span>
+                  <span className="text-xs font-bold text-slate-700 dark:text-slate-300 block">Certificado Fiscal (.cer) <span className="text-[10px] text-slate-400 font-normal">(Opcional)</span></span>
                   <span className="text-[10px] text-slate-400 dark:text-slate-500 block mt-1 truncate max-w-full">
                     {cerFile ? cerFile.name : 'Arrastra o haz clic para subir'}
                   </span>
@@ -421,7 +427,7 @@ export default function OnboardingWizard({ empresaId, onSuccess }: OnboardingWiz
                     onChange={e => e.target.files && setKeyFile(e.target.files[0])}
                   />
                   <KeyRound className="text-amber-500 w-10 h-10 mb-2" />
-                  <span className="text-xs font-bold text-slate-700 dark:text-slate-300 block">Llave Privada (.key)</span>
+                  <span className="text-xs font-bold text-slate-700 dark:text-slate-300 block">Llave Privada (.key) <span className="text-[10px] text-slate-400 font-normal">(Opcional)</span></span>
                   <span className="text-[10px] text-slate-400 dark:text-slate-500 block mt-1 truncate max-w-full">
                     {keyFile ? keyFile.name : 'Arrastra o haz clic para subir'}
                   </span>
@@ -429,10 +435,10 @@ export default function OnboardingWizard({ empresaId, onSuccess }: OnboardingWiz
               </div>
 
               <div>
-                <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">Contraseña del Certificado (CSD)</label>
+                <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">Contraseña del Certificado (CSD) <span className="text-[9px] text-slate-400 font-normal">(Opcional)</span></label>
                 <input
                   type="password"
-                  placeholder="Contraseña del sello digital"
+                  placeholder="Contraseña del sello digital (dejar en blanco si no se cargan archivos)"
                   value={csdPassword}
                   className="w-full mt-1 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-3 rounded-xl text-sm text-slate-900 dark:text-white placeholder-slate-400 focus:ring-2 focus:ring-amber-500/20 outline-none"
                   onChange={e => setCsdPassword(e.target.value)}

@@ -1170,10 +1170,8 @@ export default function ConfigPage() {
                   <input type="text" placeholder="Ej. Conciliado" value={nuevoEstatusConciliacion.nombre} className="flex-1 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-xl text-sm outline-none" onChange={e => setNuevoEstatusConciliacion({...nuevoEstatusConciliacion, nombre: e.target.value})} />
                   <input type="color" value={nuevoEstatusConciliacion.color} onChange={e => setNuevoEstatusConciliacion({...nuevoEstatusConciliacion, color: e.target.value})} className="w-10 h-10 p-1 rounded bg-white border border-gray-300"/>
                   <button onClick={() => {
-                     // Since handleSaveItem doesn't add empresa_id directly, we rely on RLS trigger or we just pass it if needed. Actually, handleSaveItem just takes fields. 
-                     // Wait, we can't easily get empresa_id here if it's not in scope, but RLS or default or user's setup might handle it.
-                     // The user said "recuerda que van ligados a una sucursal y a una empresa". Let's assume the DB trigger or policy sets it, or they can just save it.
-                     handleSaveItem('estatus_conciliacion_bancaria', nuevoEstatusConciliacion, setEstatusConciliacion, 'nombre', () => setNuevoEstatusConciliacion({ nombre: '', color: '#94a3b8' }))
+                     const clave = nuevoEstatusConciliacion.nombre.toLowerCase().replace(/\s+/g, '_');
+                     handleSaveItem('estatus_conciliacion_bancaria', { ...nuevoEstatusConciliacion, clave }, setEstatusConciliacion, 'nombre', () => setNuevoEstatusConciliacion({ nombre: '', color: '#94a3b8' }))
                   }} className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2.5 rounded-xl font-bold text-sm flex items-center gap-1"><Plus size={16}/> Agregar</button>
                 </div>
                 <div className="overflow-hidden rounded-xl border border-gray-100 dark:border-gray-800">

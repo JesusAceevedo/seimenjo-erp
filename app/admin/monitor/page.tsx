@@ -11,6 +11,38 @@ import { enviarFacturaPorCorreo } from '../gastos/actions';
 import { eliminarDetallesPedido } from './actions';
 import { Pedido, Cliente, ProductoVariante, Repartidor, FormaPago, PrecioEspecialMap, DetallePedido } from '../types';
 
+const SAT_FORMAS_PAGO = [
+  { codigo: '01', nombre: 'Efectivo' },
+  { codigo: '02', nombre: 'Cheque nominativo' },
+  { codigo: '03', nombre: 'Transferencia electrónica' },
+  { codigo: '04', nombre: 'Tarjeta de crédito' },
+  { codigo: '05', nombre: 'Monedero electrónico' },
+  { codigo: '06', nombre: 'Dinero electrónico' },
+  { codigo: '08', nombre: 'Vales de despensa' },
+  { codigo: '12', nombre: 'Dación en pago' },
+  { codigo: '13', nombre: 'Pago por subrogación' },
+  { codigo: '14', nombre: 'Pago por consignación' },
+  { codigo: '15', nombre: 'Condonación' },
+  { codigo: '17', nombre: 'Compensación' },
+  { codigo: '23', nombre: 'Novación' },
+  { codigo: '24', nombre: 'Confusión' },
+  { codigo: '25', nombre: 'Remisión de deuda' },
+  { codigo: '26', nombre: 'Prescripción o caducidad' },
+  { codigo: '27', nombre: 'A satisfacción del acreedor' },
+  { codigo: '28', nombre: 'Tarjeta de débito' },
+  { codigo: '29', nombre: 'Tarjeta de servicios' },
+  { codigo: '30', nombre: 'Aplicación de anticipos' },
+  { codigo: '31', nombre: 'Intermediario pagos' },
+  { codigo: '99', nombre: 'Por definir' }
+];
+
+function getMetodoPagoLabel(codigo?: string): string {
+  if (!codigo) return '—';
+  const cleanCode = codigo.trim().padStart(2, '0');
+  const found = SAT_FORMAS_PAGO.find(fp => fp.codigo === cleanCode);
+  return found ? `${found.codigo} - ${found.nombre}` : `${cleanCode} - Otro`;
+}
+
 // --- ESTADOS INICIALES (Optimizados fuera del componente para no recrearlos en cada render) ---
 const getPedidoInicial = () => ({
   cliente_id: '',
@@ -79,6 +111,7 @@ export default function AdminMonitor() {
   const { isDarkMode, toggleDarkMode } = useThemeMode();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [liquidarModal, setLiquidarModal] = useState({ open: false, pedido: null as unknown, fecha: '', costo_envio: 0, entregado_por: '', metodo_pago: '' });
+  const [verTodosMetodos, setVerTodosMetodos] = useState(false);
   const [emailModal, setEmailModal] = useState<{ open: boolean; details: any | null }>({ open: false, details: null });
   const [isSendingEmail, setIsSendingEmail] = useState(false);
   const [idPedidoEditar, setIdPedidoEditar] = useState<string | null>(null);
@@ -795,7 +828,7 @@ export default function AdminMonitor() {
                       </td>
                       <td className="p-4 text-right space-y-1">
                         <div className="font-bold text-sm text-gray-900 dark:text-white">{formatCurrency(p.precio_total)}</div>
-                        <div className="text-gray-500 text-[10px] uppercase font-semibold">{p.metodo_pago || ''}</div>
+                        <div className="text-gray-500 text-[10px] uppercase font-semibold">{getMetodoPagoLabel(p.metodo_pago)}</div>
                         <div className="space-y-1 mt-1">
                           <div>
                             <span className={`px-2 py-0.5 rounded-full text-[10px] ${p.estatus_pago === 'Liquidado' ? 'bg-emerald-100 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-500/20' : 'bg-red-100 dark:bg-red-500/10 text-red-700 dark:text-red-400 border border-red-200 dark:border-red-500/20'}`}>
@@ -1030,12 +1063,37 @@ export default function AdminMonitor() {
                   <input type="date" value={liquidarModal.fecha} className="w-full mt-1 bg-gray-50 dark:bg-gray-950 border border-gray-300 dark:border-gray-700 text-gray-900 dark:text-white p-2 rounded-lg text-sm" style={{ colorScheme: isDarkMode ? 'dark' : 'light' }} onChange={e => setLiquidarModal({ ...liquidarModal, fecha: e.target.value })} />
                 </div>
                 <div>
-                  <label className="text-xs font-semibold text-gray-500 dark:text-gray-400">Forma de Pago</label>
-                  <select value={liquidarModal.metodo_pago} className="w-full mt-1 bg-gray-50 dark:bg-gray-950 border border-gray-300 dark:border-gray-700 text-gray-900 dark:text-white p-2 rounded-lg text-sm" onChange={e => setLiquidarModal({ ...liquidarModal, metodo_pago: e.target.value })}>
+                  <div className="flex justify-between items-center">
+                    <label className="text-xs font-semibold text-gray-500 dark:text-gray-400">Forma de Pago</label>
+                    <button
+                      type="button"
+                      onClick={() => setVerTodosMetodos(!verTodosMetodos)}
+                      className="text-[10px] text-amber-600 dark:text-amber-500 hover:underline font-bold"
+                    >
+                      {verTodosMetodos ? "Mostrar solo comunes" : "Ver todos los códigos SAT"}
+                    </button>
+                  </div>
+                  <select 
+                    value={liquidarModal.metodo_pago} 
+                    className="w-full mt-1 bg-gray-50 dark:bg-gray-950 border border-gray-300 dark:border-gray-700 text-gray-900 dark:text-white p-2 rounded-lg text-sm" 
+                    onChange={e => setLiquidarModal({ ...liquidarModal, metodo_pago: e.target.value })}
+                  >
                     <option value="">Seleccionar forma de pago...</option>
                     {formasPagoList.map(f => (
-                      <option key={f.id} value={f.nombre}>{f.nombre}</option>
+                      <option key={f.id} value={f.codigo || ''}>
+                        {f.codigo ? `${f.codigo} - ${f.nombre}` : f.nombre}
+                      </option>
                     ))}
+                    {verTodosMetodos && (
+                      <>
+                        <option disabled className="text-gray-400 font-bold border-t">--- Todos los Códigos SAT ---</option>
+                        {SAT_FORMAS_PAGO.filter(sat => !formasPagoList.some(f => f.codigo === sat.codigo)).map(sat => (
+                          <option key={sat.codigo} value={sat.codigo}>
+                            {sat.codigo} - {sat.nombre}
+                          </option>
+                        ))}
+                      </>
+                    )}
                   </select>
                 </div>
                 <div>

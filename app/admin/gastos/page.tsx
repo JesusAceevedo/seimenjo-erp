@@ -14,7 +14,8 @@ import {
   comprobarEgresoConFacturas,
   guardarProveedor,
   eliminarProveedor,
-  obtenerFacturasPorProveedor
+  obtenerFacturasPorProveedor,
+  sincronizarMetodosPagoXml
 } from './actions';
 import {
   importarMovimientosBancarios,
@@ -24,7 +25,8 @@ import {
   getEstatusCatalog,
   guardarEstatusCatalogItem,
   eliminarEstatusCatalogItem,
-  eliminarMovimientoBancario
+  eliminarMovimientoBancario,
+  desconciliarMovimientoBancario
 } from './reconciliationActions';
 import { eliminarGasto, eliminarPedidoSano } from './actions';
 import { EditGastoModal, EditVentaModal, EditMovimientoModal } from './_components/EditModals';
@@ -46,6 +48,8 @@ interface GastoFacturado {
   concepto: string;
   monto: number;
   iva_acreditable?: number;
+  metodo_pago?: string;
+  es_deducible?: boolean;
   proveedores?: { nombre_comercial: string; rfc: string };
   categoria_id?: string | null;
   categorias_gasto?: { id: string; nombre: string } | null;
@@ -99,6 +103,14 @@ interface GastoReconciliable {
   xml_url?: string;
   pdf_url?: string;
   ticket_url?: string;
+  metodo_pago?: string;
+  proveedores?: {
+    nombre_comercial: string;
+    rfc: string;
+  } | {
+    nombre_comercial: string;
+    rfc: string;
+  }[] | null;
 }
 
 interface Cliente {
@@ -269,6 +281,7 @@ export default function AdvancedBillingModule() {
   const [gastosFacturados, setGastosFacturados] = useState<GastoFacturado[]>([]);
   const [categoriasGasto, setCategoriasGasto] = useState<any[]>([]);
   const [cuentasBancarias, setCuentasBancarias] = useState<any[]>([]);
+  const [selectedCuentaId, setSelectedCuentaId] = useState<string>('');
   const [ventasFacturadas, setVentasFacturadas] = useState<VentaFacturada[]>([]);
   const [pedidosPendientes, setPedidosPendientes] = useState<PedidoPendiente[]>([]);
   const [gastosPendientes, setGastosPendientes] = useState<GastoPendiente[]>([]);
@@ -317,6 +330,15 @@ export default function AdvancedBillingModule() {
   // --- ESTADOS DE UI / PROCESAMIENTO ---
   const [isUploading, setIsUploading] = useState(false);
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
+
+  useEffect(() => {
+    if (message && message.type !== 'info') {
+      const timer = setTimeout(() => {
+        setMessage(null);
+      }, 6000);
+      return () => clearTimeout(timer);
+    }
+  }, [message]);
   const [emailModal, setEmailModal] = useState<{ open: boolean; details: any | null }>({ open: false, details: null });
 
   // --- CARGA DE DATOS ---
@@ -325,12 +347,12 @@ export default function AdvancedBillingModule() {
       const empresaId = await getEmpresaId();
       if (!empresaId) return;
 
-      // 1. Gastos facturados (con XML)
+      // 1. Gastos facturados y no deducibles (con XML o marcados como no deducibles/solo ticket)
       const { data: gFac } = await supabase
         .from('gastos')
         .select('*, proveedores(nombre_comercial, rfc), categorias_gasto(nombre), padre:gastos!gasto_padre_id(concepto)')
         .eq('empresa_id', empresaId)
-        .not('uuid_fiscal', 'is', null)
+        .or('uuid_fiscal.not.is.null,es_deducible.eq.false')
         .order('fecha_gasto', { ascending: false });
       setGastosFacturados(gFac || []);
 
@@ -363,6 +385,7 @@ export default function AdvancedBillingModule() {
         .eq('empresa_id', empresaId)
         .is('uuid_fiscal', null)
         .eq('estatus_facturado', false)
+        .eq('es_deducible', true)
         .is('gasto_padre_id', null)
         .order('fecha_gasto', { ascending: false });
       setGastosPendientes(gPend || []);
@@ -370,7 +393,7 @@ export default function AdvancedBillingModule() {
       // 10. Gastos sin conciliar (para conciliación manual bancaria: con o sin XML, pero sin movimiento bancario enlazado)
       const { data: gReconcile } = await supabase
         .from('gastos')
-        .select('id, concepto, monto, fecha_gasto, xml_url, pdf_url, ticket_url')
+        .select('id, concepto, monto, fecha_gasto, xml_url, pdf_url, ticket_url, metodo_pago, proveedores(nombre_comercial, rfc)')
         .eq('empresa_id', empresaId)
         .is('movimiento_bancario_id', null)
         .is('gasto_padre_id', null)
@@ -403,10 +426,37 @@ export default function AdvancedBillingModule() {
         .order('nombre_comercial', { ascending: true });
       setProveedores(provs || []);
 
-      // 7. Movimientos bancarios (con catálogo enlazado)
+      // 7. Movimientos bancarios (con catálogo enlazado y relaciones)
       const { data: movs } = await supabase
         .from('movimientos_bancarios')
-        .select('*, estatus_conciliacion_bancaria(*), categorias_movimiento_bancario(*)')
+        .select(`
+          *,
+          estatus_conciliacion_bancaria(*),
+          categorias_movimiento_bancario(*),
+          conciliaciones_bancarias(
+            monto_asociado,
+            gasto:gastos(
+              id,
+              concepto,
+              monto,
+              fecha_gasto,
+              xml_url,
+              pdf_url,
+              ticket_url,
+              metodo_pago,
+              proveedores(nombre_comercial, rfc)
+            ),
+            pedido:pedidos(
+              id,
+              numero_pedido,
+              precio_total,
+              cliente_nombre,
+              fecha_pedido,
+              clientes(nombre_local, rfc),
+              facturas_clientes(*)
+            )
+          )
+        `)
         .eq('empresa_id', empresaId)
         .order('fecha', { ascending: false });
       setMovimientos(movs || []);
@@ -431,6 +481,14 @@ export default function AdvancedBillingModule() {
         .select('*')
         .order('nombre', { ascending: true });
       setCategoriasMovimiento(catMovs || []);
+
+      // 13. Cuentas bancarias
+      const { data: cbData } = await supabase
+        .from('cuentas_bancarias')
+        .select('*')
+        .eq('empresa_id', empresaId)
+        .order('nombre', { ascending: true });
+      setCuentasBancarias(cbData || []);
 
     } catch (err: unknown) {
       console.error('Error fetching data:', err);
@@ -534,7 +592,7 @@ export default function AdvancedBillingModule() {
       }).filter(m => m.fecha && m.concepto);
 
       const token = await getSessionToken();
-      const res = await importarMovimientosBancarios(formatted, token);
+      const res = await importarMovimientosBancarios(formatted, token, selectedCuentaId);
       if (res.success) {
         setMessage({ text: `Importados ${res.count} movimientos bancarios correctamente.`, type: 'success' });
         await fetchData();
@@ -563,6 +621,26 @@ export default function AdvancedBillingModule() {
       }
     } catch (err: any) {
       setMessage({ text: err.message || 'Error al conciliar', type: 'error' });
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  const handleUnlinkReconciliation = async (movimientoId: string) => {
+    if (!confirm('¿Estás seguro de que deseas desvincular o quitar la conciliación de este movimiento bancario?')) return;
+    setIsUploading(true);
+    setMessage({ text: 'Desvinculando conciliación...', type: 'info' });
+    try {
+      const token = await getSessionToken();
+      const res = await desconciliarMovimientoBancario(movimientoId, token);
+      if (res.success) {
+        setMessage({ text: 'Conciliación eliminada correctamente.', type: 'success' });
+        await fetchData();
+      } else {
+        throw new Error(res.error);
+      }
+    } catch (err: any) {
+      setMessage({ text: err.message || 'Error al desconciliar', type: 'error' });
     } finally {
       setIsUploading(false);
     }
@@ -813,19 +891,30 @@ export default function AdvancedBillingModule() {
     );
   };
 
-  const handleSaveManualReconcile = async () => {
+  const handleSaveManualReconcile = async (customGastosIds?: string[], customEstatusClave?: string) => {
     if (!reconcileModal.movimiento) return;
-    setReconcileModal(prev => ({ ...prev, loading: true, error: '' }));
+    
+    const gastosIds = customGastosIds || reconcileModal.gastosSeleccionados;
+    const estatusClave = customEstatusClave || reconcileModal.estatusClave;
+    
+    setReconcileModal(prev => ({ 
+      ...prev, 
+      loading: true, 
+      error: '',
+      ...(customGastosIds ? { gastosSeleccionados: customGastosIds } : {}),
+      ...(customEstatusClave ? { estatusClave: customEstatusClave } : {})
+    }));
+    
     try {
       const token = await getSessionToken();
       const res = await guardarConciliacionManual(reconcileModal.movimiento.id, {
-        gastosIds: reconcileModal.gastosSeleccionados,
+        gastosIds,
         pedidosIds: reconcileModal.pedidosSeleccionados,
         xmlUrl: reconcileModal.xmlUrl,
         pdfFacturaUrl: reconcileModal.pdfFacturaUrl,
         pdfTicketUrl: reconcileModal.pdfTicketUrl,
         storageProvider: reconcileModal.storageProvider,
-        estatusClave: reconcileModal.estatusClave
+        estatusClave
       }, token);
 
       if (res.success) {
@@ -1354,15 +1443,7 @@ export default function AdvancedBillingModule() {
       return;
     }
 
-    // Validar PDF
-    if (pdfStorageProvider === 'Supabase' && !pdfFile) {
-      setMessage({ text: 'Debes seleccionar el archivo PDF correspondiente para subir.', type: 'error' });
-      return;
-    }
-    if (pdfStorageProvider === 'GoogleDrive' && !pdfUrlInput.trim()) {
-      setMessage({ text: 'Debes ingresar el enlace de Google Drive para el PDF.', type: 'error' });
-      return;
-    }
+
 
     if (!parsedXmlData) {
       setMessage({ text: 'El XML no pudo ser analizado. Verifica su estructura.', type: 'error' });
@@ -1571,20 +1652,31 @@ export default function AdvancedBillingModule() {
 
         {/* FEEDBACK DE ESTADO */}
         {message && (
-          <div className={`p-4 rounded-xl border mb-6 flex items-start gap-3 animate-in fade-in duration-300 ${message.type === 'success'
+          <div className={`p-4 rounded-xl border mb-6 flex items-start justify-between gap-3 animate-in fade-in duration-300 ${message.type === 'success'
               ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800/50'
               : message.type === 'error'
                 ? 'bg-red-50 dark:bg-red-950/40 text-red-800 dark:text-red-400 border-red-200 dark:border-red-800/50'
                 : 'bg-blue-50 dark:bg-blue-950/40 text-blue-800 dark:text-blue-400 border-blue-200 dark:border-blue-800/50'
             }`}>
-            {message.type === 'success' ? (
-              <CheckCircle className="w-5 h-5 mt-0.5 shrink-0" />
-            ) : message.type === 'error' ? (
-              <AlertTriangle className="w-5 h-5 mt-0.5 shrink-0" />
-            ) : (
-              <RefreshCw className="w-5 h-5 mt-0.5 shrink-0 animate-spin" />
+            <div className="flex items-start gap-3">
+              {message.type === 'success' ? (
+                <CheckCircle className="w-5 h-5 mt-0.5 shrink-0" />
+              ) : message.type === 'error' ? (
+                <AlertTriangle className="w-5 h-5 mt-0.5 shrink-0" />
+              ) : (
+                <RefreshCw className="w-5 h-5 mt-0.5 shrink-0 animate-spin" />
+              )}
+              <div className="text-sm font-medium">{message.text}</div>
+            </div>
+            {message.type !== 'info' && (
+              <button
+                onClick={() => setMessage(null)}
+                className="text-gray-400 hover:text-gray-650 dark:hover:text-gray-300 transition-colors p-0.5 rounded-lg hover:bg-gray-150/50 dark:hover:bg-gray-800/50 shrink-0"
+                title="Cerrar mensaje"
+              >
+                <X size={15} />
+              </button>
             )}
-            <div className="text-sm font-medium">{message.text}</div>
           </div>
         )}
 
@@ -1630,12 +1722,48 @@ export default function AdvancedBillingModule() {
               <EgresosTab
                 gastosFacturados={gastosFacturados}
                 categorias={categoriasGasto}
+                formasPago={formasPago}
                 onUpdateCategoria={handleUpdateCategoriaGasto}
+                onUpdateMetodoPago={async (id, metodo) => {
+                  try {
+                    const matchingFp = formasPago.find(f => f.codigo === metodo);
+                    const formaPagoId = matchingFp ? matchingFp.id : null;
+
+                    const { error } = await supabase.from('gastos').update({ 
+                      metodo_pago: metodo,
+                      forma_pago_id: formaPagoId
+                    }).eq('id', id);
+                    if (error) throw error;
+                    
+                    setGastosFacturados(prev => prev.map(g => g.id === id ? { 
+                      ...g, 
+                      metodo_pago: metodo || undefined,
+                      forma_pago_id: formaPagoId || undefined
+                    } : g));
+                  } catch (err: any) {
+                    alert(`Error al actualizar método de pago: ${err.message}`);
+                  }
+                }}
+                onSincronizarPagos={async () => {
+                  try {
+                    const token = await getSessionToken();
+                    const res = await sincronizarMetodosPagoXml(token);
+                    if (res.success) {
+                      alert(`Sincronización terminada. Se corrigieron ${res.count} registros.`);
+                      await fetchData(); // Recargar los datos actualizados
+                    } else {
+                      throw new Error(res.error);
+                    }
+                  } catch (err: any) {
+                    alert(`Error al sincronizar: ${err.message}`);
+                  }
+                }}
                 onOpenComprobacionAcumulada={() => setComprobacionAcumuladaModal(prev => ({ ...prev, open: true }))}
                 onDownloadFile={handleDownloadFile}
                 onViewCfdi={setCfdiViewerUrl}
                 onDeleteGasto={handleDeleteGasto}
                 onEditGasto={setEditingGasto}
+                onRefresh={fetchData}
               />
             )}
 
@@ -1649,6 +1777,7 @@ export default function AdvancedBillingModule() {
                 onViewCfdi={setCfdiViewerUrl}
                 onDeleteVenta={handleDeleteVenta}
                 onEditVenta={setEditingVenta}
+                onRefresh={fetchData}
               />
             )}
 
@@ -1702,6 +1831,10 @@ export default function AdvancedBillingModule() {
                 onDownloadFile={handleDownloadFile}
                 handleDeleteMovimiento={handleDeleteMovimiento}
                 onEditMovimiento={setEditingMovimiento}
+                selectedCuentaId={selectedCuentaId}
+                setSelectedCuentaId={setSelectedCuentaId}
+                onViewCfdi={setCfdiViewerUrl}
+                handleUnlinkReconciliation={handleUnlinkReconciliation}
               />
             )}
 
@@ -2516,6 +2649,65 @@ export default function AdvancedBillingModule() {
           xmlUrl={cfdiViewerUrl} 
           onClose={() => setCfdiViewerUrl(null)} 
         />
+      )}
+
+      {/* MODAL DE MAPEO DE COLUMNAS DE EXCEL */}
+      {showMappingModal && (
+        <div className="fixed inset-0 bg-black/60 dark:bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4 transition-all">
+          <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-6 rounded-2xl w-full max-w-lg shadow-2xl text-gray-900 dark:text-gray-100 flex flex-col font-sans">
+            <h3 className="text-base font-extrabold flex items-center gap-2 text-amber-500 mb-2">
+              <FileSpreadsheet size={18} /> Confirmar Mapeo de Columnas
+            </h3>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
+              Hemos detectado las siguientes columnas en tu archivo. Ajusta la correspondencia si es necesario antes de continuar.
+            </p>
+
+            <div className="space-y-3 mb-6">
+              {[
+                { field: 'fecha', label: 'Columna de Fecha (Obligatorio)', required: true },
+                { field: 'concepto', label: 'Columna de Concepto / Detalle (Obligatorio)', required: true },
+                { field: 'retiro', label: 'Columna de Retiros / Cargos / Egresos', required: false },
+                { field: 'deposito', label: 'Columna de Depósitos / Abonos / Ingresos', required: false },
+                { field: 'referencia', label: 'Columna de Referencia / ID de Transacción', required: false }
+              ].map(({ field, label }) => (
+                <div key={field}>
+                  <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">{label}</label>
+                  <select
+                    value={(columnMapping as any)[field]}
+                    onChange={(e) => setColumnMapping(prev => ({ ...prev, [field]: e.target.value }))}
+                    className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-xl text-xs outline-none focus:ring-1 focus:ring-amber-500"
+                  >
+                    <option value="">-- No asociar / Vacío --</option>
+                    {excelHeaders.map(header => (
+                      <option key={header} value={header}>{header}</option>
+                    ))}
+                  </select>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowMappingModal(false);
+                  setExcelFile(null);
+                }}
+                className="flex-1 py-2.5 border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-300 rounded-xl font-semibold hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors text-xs"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmImport}
+                disabled={!columnMapping.fecha || !columnMapping.concepto}
+                className="flex-1 py-2.5 bg-amber-500 hover:bg-amber-600 disabled:bg-gray-200 dark:disabled:bg-gray-850 disabled:text-gray-400 dark:disabled:text-gray-500 text-white font-bold rounded-xl shadow-md transition-colors flex items-center justify-center gap-1.5 text-xs disabled:opacity-50"
+              >
+                Confirmar e Importar
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* MODALES DE EDICIÓN RÁPIDA */}

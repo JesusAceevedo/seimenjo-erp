@@ -214,10 +214,11 @@ export async function guardarFacturaEnBaseDatos(payload: {
               forma_pago_id: formaPagoId,
               estatus_factura_id: estatusFacturaId,
               estatus_facturado: true,
-              metodo_pago: xmlData.formaPagoCode === '01' ? 'Efectivo' : 'Transferencia',
+              metodo_pago: mapFormaPagoCodeToMetodo(xmlData.formaPagoCode),
               gasto_padre_id: parentGasto.id,
               movimiento_bancario_id: parentGasto.movimiento_bancario_id,
-              empresa_id: empresaId
+              empresa_id: empresaId,
+              es_deducible: true
             })
             .select()
             .single();
@@ -280,8 +281,9 @@ export async function guardarFacturaEnBaseDatos(payload: {
             forma_pago_id: formaPagoId,
             estatus_factura_id: estatusFacturaId,
             estatus_facturado: true,
-            metodo_pago: xmlData.formaPagoCode === '01' ? 'Efectivo' : 'Transferencia',
-            empresa_id: empresaId
+            metodo_pago: mapFormaPagoCodeToMetodo(xmlData.formaPagoCode),
+            empresa_id: empresaId,
+            es_deducible: true
           })
           .select();
 
@@ -798,8 +800,9 @@ export async function procesarLoteFacturas(payloads: {
                  forma_pago_id: formaPagoId,
                  estatus_factura_id: estatusFacturaId,
                  estatus_facturado: true,
-                 metodo_pago: xmlData.formaPagoCode === '01' ? 'Efectivo' : 'Transferencia',
-                 empresa_id: empresaId
+                 metodo_pago: mapFormaPagoCodeToMetodo(xmlData.formaPagoCode),
+                 empresa_id: empresaId,
+                 es_deducible: true
                });
              if (!insErr) agregados++; else { errores++; detallesErrores.push(`Error al insertar Gasto UUID ${xmlData.uuid}: ${insErr.message}`); console.error('InsErrGasto:', insErr); }
           } else {
@@ -910,5 +913,232 @@ export async function eliminarPedidoSano(pedidoId: string, token: string): Promi
   } catch (err: any) {
     const message = err?.message || (typeof err === 'string' ? err : JSON.stringify(err));
     return { success: false, error: message || 'Error al eliminar el pedido' };
+  }
+}
+function mapFormaPagoCodeToMetodo(code: string): string {
+  return code ? code.trim().padStart(2, '0') : '99';
+}
+
+export async function sincronizarMetodosPagoXml(token?: string) {
+  try {
+    const { empresaId } = await getUserEmpresaId(token ?? '');
+    const supabase = supabaseAdmin;
+
+    // Traer todos los gastos de la empresa que tienen XML
+    const { data: gastos, error } = await supabase
+      .from('gastos')
+      .select('id, metodo_pago, forma_pago_id, xml_url')
+      .eq('empresa_id', empresaId)
+      .not('xml_url', 'is', null);
+
+    if (error) throw error;
+    if (!gastos || gastos.length === 0) return { success: true, count: 0 };
+
+    let corregidos = 0;
+
+    for (const g of gastos) {
+      if (!g.xml_url) continue;
+      const urls = g.xml_url.split(',').filter(Boolean);
+      if (urls.length === 0) continue;
+
+      try {
+        let text = '';
+        if (urls[0].startsWith('http://') || urls[0].startsWith('https://')) {
+          const res = await fetch(urls[0]);
+          if (!res.ok) continue;
+          text = await res.text();
+        } else {
+          // Download directly from Supabase Storage
+          const { data: fileData, error: downloadErr } = await supabase.storage.from('facturas').download(urls[0]);
+          if (downloadErr || !fileData) {
+            console.error("Error downloading XML from storage for Gasto " + g.id, downloadErr);
+            continue;
+          }
+          text = await fileData.text();
+        }
+
+        const formaPagoMatch = 
+          text.match(/FormaPago\s*=\s*['"]([^'"]+)['"]/i) || 
+          text.match(/formaDePago\s*=\s*['"]([^'"]+)['"]/i) ||
+          text.match(/FormaDePagoP\s*=\s*['"]([^'"]+)['"]/i) ||
+          text.match(/formaDePagoP\s*=\s*['"]([^'"]+)['"]/i);
+
+        if (formaPagoMatch && formaPagoMatch[1]) {
+          const codigo = formaPagoMatch[1];
+          const correcto = mapFormaPagoCodeToMetodo(codigo);
+          const formaPagoId = await getFormaPagoIdByCode(correcto);
+
+          if (correcto && (g.metodo_pago !== correcto || g.forma_pago_id !== formaPagoId)) {
+            await supabase.from('gastos').update({ 
+              metodo_pago: correcto,
+              forma_pago_id: formaPagoId
+            }).eq('id', g.id);
+            corregidos++;
+          }
+        }
+      } catch (e) {
+        console.error("Error procesando XML de gasto " + g.id, e);
+      }
+    }
+
+    return { success: true, count: corregidos };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+}
+
+export async function consultarSatYActualizarCfdi(
+  tipo: 'gasto' | 'venta',
+  re: string,
+  rr: string,
+  tt: number,
+  uuid: string,
+  token: string
+): Promise<{ success: boolean; estado: 'Vigente' | 'Cancelado' | 'No Encontrado'; actualizado: boolean; error?: string }> {
+  try {
+    const { empresaId } = await getUserEmpresaId(token);
+    
+    // Formatear el total a 6 decimales con relleno de ceros a la izquierda (total de 18 caracteres)
+    const parts = Number(tt).toFixed(6).split('.');
+    const integerPart = parts[0].padStart(10, '0');
+    const decimalPart = parts[1];
+    const ttFormatted = `${integerPart}.${decimalPart}`;
+
+    const expresionImpresa = `?re=${re}&rr=${rr}&tt=${ttFormatted}&id=${uuid}`;
+
+    const soapEnvelope = `<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:tem="http://tempuri.org/">
+   <soapenv:Header/>
+   <soapenv:Body>
+      <tem:Consulta>
+         <tem:expresionImpresa><![CDATA[${expresionImpresa}]]></tem:expresionImpresa>
+      </tem:Consulta>
+   </soapenv:Body>
+</soapenv:Envelope>`;
+
+    const response = await fetch('https://consultaqr.facturaelectronica.sat.gob.mx/ConsultaCFDIService.svc', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'text/xml;charset=utf-8',
+        'SOAPAction': 'http://tempuri.org/IConsultaCFDIService/Consulta'
+      },
+      body: soapEnvelope,
+      next: { revalidate: 0 }
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const xmlText = await response.text();
+    
+    let estado: 'Vigente' | 'Cancelado' | 'No Encontrado' = 'No Encontrado';
+    const estadoMatch = xmlText.match(/<a:Estado>([^<]+)<\/a:Estado>/) || xmlText.match(/<Estado>([^<]+)<\/Estado>/);
+    if (estadoMatch) {
+      const est = estadoMatch[1].trim();
+      if (est === 'Vigente') estado = 'Vigente';
+      else if (est === 'Cancelado') estado = 'Cancelado';
+    }
+
+    let actualizado = false;
+
+    if (estado === 'Cancelado') {
+      const targetTable = tipo === 'gasto' ? 'gastos' : 'facturas_clientes';
+      
+      let canceladoEstatusId = null;
+      const { data: canceladoEstatus } = await supabaseAdmin
+        .from('estatus_factura')
+        .select('id')
+        .ilike('nombre', 'Cancelado')
+        .maybeSingle();
+
+      if (canceladoEstatus) {
+        canceladoEstatusId = canceladoEstatus.id;
+      } else {
+        const { data: newStatus, error: insErr } = await supabaseAdmin
+          .from('estatus_factura')
+          .insert({ nombre: 'Cancelado' })
+          .select('id')
+          .single();
+        if (!insErr && newStatus) {
+          canceladoEstatusId = newStatus.id;
+        }
+      }
+
+      const { data: record } = await supabaseAdmin
+        .from(targetTable)
+        .select('*')
+        .ilike('uuid_fiscal', uuid)
+        .eq('empresa_id', empresaId)
+        .maybeSingle();
+
+      if (record) {
+        if (tipo === 'gasto') {
+          // Check if it was reconciled
+          const { data: concs } = await supabaseAdmin
+            .from('conciliaciones_bancarias')
+            .select('movimiento_id')
+            .eq('gasto_id', record.id)
+            .eq('empresa_id', empresaId);
+
+          if (concs && concs.length > 0) {
+            const { data: pendienteStatus } = await supabaseAdmin
+              .from('estatus_conciliacion_bancaria')
+              .select('id')
+              .eq('clave', 'pendiente')
+              .maybeSingle();
+
+            const movIds = concs.map(c => c.movimiento_id).filter(Boolean);
+            if (movIds.length > 0 && pendienteStatus) {
+              await supabaseAdmin
+                .from('movimientos_bancarios')
+                .update({ estatus_conciliacion_id: pendienteStatus.id })
+                .in('id', movIds)
+                .eq('empresa_id', empresaId);
+            }
+
+            await supabaseAdmin
+              .from('conciliaciones_bancarias')
+              .delete()
+              .eq('gasto_id', record.id)
+              .eq('empresa_id', empresaId);
+          }
+
+          // Update Gasto to cancelled status and zero amounts
+          const { error: updErr } = await supabaseAdmin
+            .from('gastos')
+            .update({
+              monto: 0,
+              subtotal: 0,
+              iva_acreditable: 0,
+              estatus_factura_id: canceladoEstatusId,
+              estatus_facturado: false,
+              movimiento_bancario_id: null
+            })
+            .eq('id', record.id)
+            .eq('empresa_id', empresaId);
+
+          if (!updErr) actualizado = true;
+        } else {
+          // For sales (facturas_clientes)
+          const { error: updErr } = await supabaseAdmin
+            .from('facturas_clientes')
+            .update({
+              total: 0,
+              subtotal: 0,
+              iva_trasladado: 0,
+              estatus_factura_id: canceladoEstatusId
+            })
+            .eq('id', record.id)
+            .eq('empresa_id', empresaId);
+
+          if (!updErr) actualizado = true;
+        }
+      }
+    }
+
+    return { success: true, estado, actualizado };
+  } catch (err: any) {
+    console.error('Error in consultarSatYActualizarCfdi:', err);
+    return { success: false, estado: 'No Encontrado', actualizado: false, error: err.message };
   }
 }

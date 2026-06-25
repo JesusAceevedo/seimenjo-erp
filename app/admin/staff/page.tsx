@@ -57,12 +57,18 @@ export default function StaffPage() {
 
   // --- ESTADOS FORMULARIO PERFIL ---
   const [nuevoPerfilNombre, setNuevoPerfilNombre] = useState('');
-  const [permisosPerfil, setPermisosPerfil] = useState({
+  const initialStatePermisos = {
     ventas: { read: true, write: false },
     clientes: { read: true, write: false },
+    productos: { read: true, write: false },
+    proveedores: { read: true, write: false },
     gastos: { read: true, write: false },
-    facturacion: { read: true, write: false }
-  });
+    inventario: { read: true, write: false },
+    expediente: { read: true, write: false },
+    facturacion: { read: true, write: false },
+    configuracion: { read: true, write: false }
+  };
+  const [permisosPerfil, setPermisosPerfil] = useState<Record<string, { read: boolean; write: boolean }>>(initialStatePermisos);
 
   // --- ESTADOS FORMULARIO USUARIO STAFF ---
   const [nuevoStaff, setNuevoStaff] = useState({
@@ -199,12 +205,7 @@ export default function StaffPage() {
       alert('Perfil creado correctamente.');
       setNuevoPerfilNombre('');
       // Reset permisos
-      setPermisosPerfil({
-        ventas: { read: true, write: false },
-        clientes: { read: true, write: false },
-        gastos: { read: true, write: false },
-        facturacion: { read: true, write: false }
-      });
+      setPermisosPerfil(initialStatePermisos);
       await loadData(empresaId, esSuperusuario);
     } catch (err: unknown) {
       if (err instanceof Error) {
@@ -234,7 +235,7 @@ export default function StaffPage() {
     }
   };
 
-  const togglePermiso = (modulo: 'ventas' | 'clientes' | 'gastos' | 'facturacion', accion: 'read' | 'write') => {
+  const togglePermiso = (modulo: string, accion: 'read' | 'write') => {
     setPermisosPerfil(prev => ({
       ...prev,
       [modulo]: {
@@ -385,10 +386,13 @@ export default function StaffPage() {
                 <div>
                   <label className="text-[10px] font-bold text-gray-500 uppercase block mb-2">Asignación de Permisos del Módulo</label>
                   <div className="space-y-3 bg-white dark:bg-gray-950 p-3 rounded-lg border border-gray-200 dark:border-gray-800">
-                    {(['ventas', 'clientes', 'gastos', 'facturacion'] as const).map(mod => (
+                    {(['ventas', 'clientes', 'productos', 'proveedores', 'gastos', 'inventario', 'expediente', 'facturacion', 'configuracion']).map(mod => (
                       <div key={mod} className="flex justify-between items-center text-xs">
                         <span className="font-semibold text-gray-700 dark:text-gray-300">
-                          {mod === 'ventas' ? 'Pedidos' : mod === 'gastos' ? 'Egresos' : mod === 'facturacion' ? 'Facturación' : 'Clientes'}
+                          {mod === 'ventas' ? 'Pedidos' : 
+                           mod === 'gastos' ? 'Egresos / Gastos' : 
+                           mod === 'facturacion' ? 'Facturación' : 
+                           mod.charAt(0).toUpperCase() + mod.slice(1)}
                         </span>
                         <div className="flex gap-4">
                           <button
@@ -445,7 +449,10 @@ export default function StaffPage() {
                           {Object.entries(perf.permisos || {}).map(([mod, rules]: [string, {read:boolean; write:boolean}]) => (
                             <div key={mod}>
                               <span className="font-bold text-gray-500 uppercase">
-                                {mod === 'ventas' ? 'Pedidos' : mod === 'gastos' ? 'Egresos' : mod === 'facturacion' ? 'Facturación' : mod}:
+                                {mod === 'ventas' ? 'Pedidos' : 
+                                 mod === 'gastos' ? 'Egresos' : 
+                                 mod === 'facturacion' ? 'Facturación' : 
+                                 mod}:
                               </span>{' '}
                               <span className="text-gray-400">
                                 {rules.read ? 'Lectura' : ''}

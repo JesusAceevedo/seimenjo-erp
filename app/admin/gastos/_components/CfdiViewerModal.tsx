@@ -207,8 +207,52 @@ export default function CfdiViewerModal({ xmlUrl, onClose }: CfdiViewerModalProp
   };
 
   return (
-    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-[200] p-4 transition-all">
-      <div className="bg-gray-100 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-4 rounded-2xl w-full max-w-4xl shadow-2xl max-h-[95vh] flex flex-col font-sans relative">
+    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-[200] p-4 transition-all cfdi-modal-backdrop">
+      <style dangerouslySetInnerHTML={{ __html: `
+        @media print {
+          /* Hide everything except print area */
+          body * {
+            visibility: hidden !important;
+          }
+          #cfdi-print-area, #cfdi-print-area * {
+            visibility: visible !important;
+          }
+          /* Reset body and parents of print area to avoid top blank space and clipping */
+          body {
+            margin: 0 !important;
+            padding: 0 !important;
+            overflow: visible !important;
+          }
+          .cfdi-modal-backdrop,
+          .cfdi-modal-container,
+          .cfdi-modal-content {
+            position: static !important;
+            display: block !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            width: 100% !important;
+            height: auto !important;
+            max-height: none !important;
+            overflow: visible !important;
+            border: none !important;
+            background: transparent !important;
+            backdrop-filter: none !important;
+            filter: none !important;
+            box-shadow: none !important;
+          }
+          #cfdi-print-area {
+            position: absolute !important;
+            left: 0 !important;
+            top: 0 !important;
+            width: 100% !important;
+            border: none !important;
+            box-shadow: none !important;
+            padding: 0 !important;
+            margin: 0 !important;
+          }
+        }
+      `}} />
+      <div className="bg-gray-100 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-4 rounded-2xl w-full max-w-4xl shadow-2xl max-h-[95vh] flex flex-col font-sans relative cfdi-modal-container">
         {/* Header Options */}
         <div className="flex justify-between items-center mb-4 shrink-0 bg-white dark:bg-gray-950 p-4 rounded-xl border border-gray-200 dark:border-gray-800">
           <div className="flex items-center gap-3">
@@ -218,14 +262,7 @@ export default function CfdiViewerModal({ xmlUrl, onClose }: CfdiViewerModalProp
           <div className="flex items-center gap-3">
             <button
               onClick={() => {
-                const printContents = document.getElementById('cfdi-print-area')?.innerHTML;
-                if (printContents) {
-                  const originalContents = document.body.innerHTML;
-                  document.body.innerHTML = printContents;
-                  window.print();
-                  document.body.innerHTML = originalContents;
-                  window.location.reload(); // Reload to restore React state cleanly
-                }
+                window.print();
               }}
               disabled={loading || !cfdiData}
               className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-bold flex items-center gap-2 disabled:opacity-50"
@@ -242,7 +279,7 @@ export default function CfdiViewerModal({ xmlUrl, onClose }: CfdiViewerModalProp
         </div>
 
         {/* Content Area */}
-        <div className="flex-1 overflow-y-auto rounded-xl custom-scrollbar pb-4">
+        <div className="flex-1 overflow-y-auto rounded-xl custom-scrollbar pb-4 cfdi-modal-content">
           {renderContent()}
         </div>
       </div>

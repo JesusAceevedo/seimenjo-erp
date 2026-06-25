@@ -52,18 +52,44 @@ export async function verifyStaffUser(token: string): Promise<{ empresaId: strin
 // ---------------------------------------------------------------------------
 // Helper: Mapear código SAT de forma de pago a ID en BD
 // ---------------------------------------------------------------------------
-export async function getFormaPagoIdByCode(code: string): Promise<number | null> {
+export async function getFormaPagoIdByCode(code: string): Promise<string | null> {
   try {
-    const { data } = await supabaseAdmin.from('formas_pago').select('id, nombre');
-    if (!data || data.length === 0) return null;
+    const cleanCode = code ? code.trim().padStart(2, '0') : '99';
+    // 1. Intentar coincidencia directa por la columna codigo
+    const { data: directMatch } = await supabaseAdmin
+      .from('formas_pago')
+      .select('id')
+      .eq('codigo', cleanCode)
+      .maybeSingle();
 
-    let term = 'Efectivo';
-    if (code === '03') term = 'Transferencia';
-    else if (code === '04' || code === '28') term = 'Tarjeta';
-    else if (code === '02') term = 'Cheque';
+    if (directMatch) return directMatch.id;
 
-    const match = data.find(f => f.nombre.toLowerCase().includes(term.toLowerCase()));
-    return match ? match.id : data[0].id;
+    // 2. Si no hay coincidencia directa, obtener todo el catálogo para fallbacks
+    const { data: allFp } = await supabaseAdmin.from('formas_pago').select('id, nombre, codigo');
+    if (!allFp || allFp.length === 0) return null;
+
+    let match = allFp.find(f => f.codigo === cleanCode);
+    if (!match) {
+      // Coincidencia por prefijo en el nombre por compatibilidad
+      match = allFp.find(f => f.nombre.toLowerCase().startsWith(cleanCode.toLowerCase() + ' - ') || f.nombre.toLowerCase().startsWith(cleanCode.toLowerCase() + ' '));
+    }
+    if (!match) {
+      let term = 'Efectivo';
+      if (cleanCode === '03') term = 'Transferencia';
+      else if (cleanCode === '04') term = 'Tarjeta de Crédito';
+      else if (cleanCode === '28') term = 'Tarjeta de Débito';
+      else if (cleanCode === '02') term = 'Cheque';
+      else if (cleanCode === '99') term = 'Por definir';
+
+      match = allFp.find(f => f.nombre.toLowerCase() === term.toLowerCase());
+      if (!match && (cleanCode === '04' || cleanCode === '28')) {
+        match = allFp.find(f => f.nombre.toLowerCase().includes('tarjeta'));
+      }
+      if (!match) {
+        match = allFp.find(f => f.nombre.toLowerCase().includes(term.toLowerCase()));
+      }
+    }
+    return match ? match.id : allFp[0].id;
   } catch (err) {
     console.error('Error auto-mapping FormaPago:', err);
     return null;

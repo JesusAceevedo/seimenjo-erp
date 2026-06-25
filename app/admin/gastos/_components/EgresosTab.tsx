@@ -15,12 +15,16 @@ import type { GastoFacturado, CategoriaGasto } from '../../types';
 interface EgresosTabProps {
   gastosFacturados: GastoFacturado[];
   categorias: CategoriaGasto[];
+  formasPago?: any[];
   onOpenComprobacionAcumulada: () => void;
   onDownloadFile: (url: string) => void;
   onViewCfdi?: (xmlUrl: string) => void;
   onUpdateCategoria: (gastoId: string, categoriaId: string | null) => void;
+  onUpdateMetodoPago?: (gastoId: string, metodo: string | null) => void;
+  onSincronizarPagos?: () => Promise<void>;
   onEditGasto: (gasto: GastoFacturado) => void;
   onDeleteGasto: (gastoId: string) => void;
+  onRefresh?: () => void;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -28,15 +32,50 @@ interface EgresosTabProps {
 const PAGE_SIZE_OPTIONS = [10, 20, 50];
 
 const METODO_BADGE: Record<string, { bg: string; text: string; label: string }> = {
-  Efectivo:      { bg: 'bg-emerald-100 dark:bg-emerald-900/30', text: 'text-emerald-700 dark:text-emerald-400', label: 'Efectivo' },
-  Transferencia: { bg: 'bg-blue-100 dark:bg-blue-900/30',     text: 'text-blue-700 dark:text-blue-400',     label: 'Transferencia' },
-  Tarjeta:       { bg: 'bg-violet-100 dark:bg-violet-900/30', text: 'text-violet-700 dark:text-violet-400', label: 'Tarjeta' },
-  Cheque:        { bg: 'bg-amber-100 dark:bg-amber-900/30',   text: 'text-amber-700 dark:text-amber-400',   label: 'Cheque' },
+  '01': { bg: 'bg-emerald-100 dark:bg-emerald-900/30', text: 'text-emerald-700 dark:text-emerald-400', label: '01 - Efectivo' },
+  '02': { bg: 'bg-amber-100 dark:bg-amber-900/30',     text: 'text-amber-700 dark:text-amber-400',     label: '02 - Cheque' },
+  '03': { bg: 'bg-blue-100 dark:bg-blue-900/30',       text: 'text-blue-700 dark:text-blue-400',       label: '03 - Transferencia' },
+  '04': { bg: 'bg-violet-100 dark:bg-violet-900/30',   text: 'text-violet-700 dark:text-violet-400',   label: '04 - T. Crédito' },
+  '28': { bg: 'bg-purple-100 dark:bg-purple-900/30',   text: 'text-purple-700 dark:text-purple-400',   label: '28 - T. Débito' },
+  '99': { bg: 'bg-gray-200 dark:bg-gray-800',          text: 'text-gray-700 dark:text-gray-300',       label: '99 - Por definir' },
 };
+
+const SAT_FORMAS_PAGO = [
+  { codigo: '01', nombre: 'Efectivo' },
+  { codigo: '02', nombre: 'Cheque nominativo' },
+  { codigo: '03', nombre: 'Transferencia electrónica' },
+  { codigo: '04', nombre: 'Tarjeta de crédito' },
+  { codigo: '05', nombre: 'Monedero electrónico' },
+  { codigo: '06', nombre: 'Dinero electrónico' },
+  { codigo: '08', nombre: 'Vales de despensa' },
+  { codigo: '12', nombre: 'Dación en pago' },
+  { codigo: '13', nombre: 'Pago por subrogación' },
+  { codigo: '14', nombre: 'Pago por consignación' },
+  { codigo: '15', nombre: 'Condonación' },
+  { codigo: '17', nombre: 'Compensación' },
+  { codigo: '23', nombre: 'Novación' },
+  { codigo: '24', nombre: 'Confusión' },
+  { codigo: '25', nombre: 'Remisión de deuda' },
+  { codigo: '26', nombre: 'Prescripción o caducidad' },
+  { codigo: '27', nombre: 'A satisfacción del acreedor' },
+  { codigo: '28', nombre: 'Tarjeta de débito' },
+  { codigo: '29', nombre: 'Tarjeta de servicios' },
+  { codigo: '30', nombre: 'Aplicación de anticipos' },
+  { codigo: '31', nombre: 'Intermediario pagos' },
+  { codigo: '99', nombre: 'Por definir' }
+];
+
+function getMetodoPagoLabel(codigo?: string): string {
+  if (!codigo) return 'Desconocido';
+  const cleanCode = codigo.trim().padStart(2, '0');
+  const found = SAT_FORMAS_PAGO.find(fp => fp.codigo === cleanCode);
+  return found ? `${found.codigo} - ${found.nombre}` : `${cleanCode} - Otro`;
+}
 
 function MetodoBadge({ metodo }: { metodo?: string }) {
   if (!metodo) return <span className="text-gray-400 text-[10px] italic">—</span>;
-  const style = METODO_BADGE[metodo] ?? { bg: 'bg-gray-100 dark:bg-gray-800', text: 'text-gray-600 dark:text-gray-300', label: metodo };
+  const cleanCode = metodo.trim().padStart(2, '0');
+  const style = METODO_BADGE[cleanCode] ?? { bg: 'bg-gray-100 dark:bg-gray-800', text: 'text-gray-600 dark:text-gray-300', label: getMetodoPagoLabel(cleanCode) };
   return (
     <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${style.bg} ${style.text}`}>
       <CreditCard size={9} /> {style.label}
@@ -49,12 +88,16 @@ function MetodoBadge({ metodo }: { metodo?: string }) {
 export default function EgresosTab({
   gastosFacturados,
   categorias,
+  formasPago = [],
   onOpenComprobacionAcumulada,
   onDownloadFile,
   onViewCfdi,
   onUpdateCategoria,
+  onUpdateMetodoPago,
+  onSincronizarPagos,
   onEditGasto,
   onDeleteGasto,
+  onRefresh,
 }: EgresosTabProps) {
 
   // Paginación
@@ -62,11 +105,37 @@ export default function EgresosTab({
   const [manualModal, setManualModal] = useState<{isOpen: boolean, id?: string}>({isOpen: false});
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(PAGE_SIZE_OPTIONS[0]);
+  const [sincronizando, setSincronizando] = useState(false);
+
+  const handleSincronizarPagos = async () => {
+    if (!onSincronizarPagos) return;
+    if (!confirm('¿Deseas leer los XML de los registros cargados para corregir automáticamente los métodos de pago (ej. 28 -> Tarjeta de Débito)?')) return;
+    setSincronizando(true);
+    try {
+      await onSincronizarPagos();
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setSincronizando(false);
+    }
+  };
 
   // Búsqueda y filtros
   const [search, setSearch] = useState('');
   const [filtroMetodo, setFiltroMetodo] = useState('');
   const [filtroCategoria, setFiltroCategoria] = useState('');
+  const [verTodos, setVerTodos] = useState(false);
+  const [verTodosFiltro, setVerTodosFiltro] = useState(false);
+
+  // Filtros Checkbox tipo Excel
+  const [filtrosEstatus, setFiltrosEstatus] = useState({
+    conciliado: true,
+    sin_conciliar: true,
+    con_ticket: true,
+    sin_documento: true,
+    deducible: true,
+    no_deducible: true
+  });
 
   // Filtrado
   const filtrados = useMemo(() => {
@@ -82,9 +151,29 @@ export default function EgresosTab({
       );
       const matchMetodo = !filtroMetodo || g.metodo_pago === filtroMetodo;
       const matchCat = !filtroCategoria || g.categoria_id === filtroCategoria || (!g.categoria_id && filtroCategoria === '__sin__');
+
+      // Filtros Checkbox Estado
+      const esConciliado = !!g.movimiento_bancario_id;
+      if (!filtrosEstatus.conciliado && esConciliado) return false;
+      if (!filtrosEstatus.sin_conciliar && !esConciliado) return false;
+      
+      // Con Documentos separados (XML vs Ticket vs Sin Doc)
+      const tieneXml = !!g.xml_url || !!g.uuid_fiscal;
+      const tieneTicket = !!g.ticket_url;
+      const tienePdf = !!g.pdf_url;
+      const sinDocumento = !tieneXml && !tieneTicket && !tienePdf;
+      
+      if (!filtrosEstatus.con_ticket && tieneTicket) return false;
+      if (!filtrosEstatus.sin_documento && sinDocumento) return false;
+
+      // Filtros de Deducibilidad
+      const esDeducibleGasto = g.es_deducible !== false;
+      if (!filtrosEstatus.deducible && esDeducibleGasto) return false;
+      if (!filtrosEstatus.no_deducible && !esDeducibleGasto) return false;
+
       return matchSearch && matchMetodo && matchCat;
     });
-  }, [gastosFacturados, search, filtroMetodo, filtroCategoria]);
+  }, [gastosFacturados, search, filtroMetodo, filtroCategoria, filtrosEstatus]);
 
   // Paginado
   const totalPages = Math.max(1, Math.ceil(filtrados.length / pageSize));
@@ -120,10 +209,16 @@ export default function EgresosTab({
       }
       totalIva += iva;
 
-      // Clasificar por método de pago
-      const metodo = g.metodo_pago || '';
-      if (metodoTotals[metodo] !== undefined) {
-        metodoTotals[metodo] += monto;
+      // Clasificar por método de pago (soporta tanto código de 2 dígitos como descripción)
+      const metodo = (g.metodo_pago || '').toLowerCase();
+      if (metodo === '01' || metodo.includes('efectivo')) {
+        metodoTotals.Efectivo += monto;
+      } else if (metodo === '03' || metodo.includes('transferencia')) {
+        metodoTotals.Transferencia += monto;
+      } else if (metodo === '04' || metodo === '28' || metodo.includes('tarjeta')) {
+        metodoTotals.Tarjeta += monto;
+      } else if (metodo === '02' || metodo.includes('cheque')) {
+        metodoTotals.Cheque += monto;
       } else {
         metodoTotals.Otros += monto;
       }
@@ -151,6 +246,13 @@ export default function EgresosTab({
           </div>
           
           <div className="flex gap-2">
+            <button
+              onClick={handleSincronizarPagos}
+              disabled={sincronizando}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-sm transition-colors"
+            >
+              <UploadCloud size={13} /> {sincronizando ? 'Verificando...' : 'Corregir Pagos XML'}
+            </button>
             <button
               onClick={() => setShowXmlModal(true)}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-xs font-bold shadow-sm transition-colors"
@@ -188,11 +290,35 @@ export default function EgresosTab({
             <Filter size={12} className="text-gray-400" />
             <select
               value={filtroMetodo}
-              onChange={(e) => { setFiltroMetodo(e.target.value); resetPage(); }}
+              onChange={(e) => { 
+                if (e.target.value === 'VER_TODOS') {
+                  setVerTodosFiltro(true);
+                  return;
+                }
+                setFiltroMetodo(e.target.value); 
+                resetPage(); 
+              }}
               className="bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-xl text-xs px-2.5 py-2 outline-none focus:ring-1 focus:ring-blue-500 text-gray-700 dark:text-gray-200"
             >
               <option value="">Todos los pagos</option>
-              {Object.keys(METODO_BADGE).map(m => <option key={m} value={m}>{m}</option>)}
+              {formasPago.map(f => (
+                <option key={f.codigo || f.id} value={f.codigo || ''}>
+                  {f.codigo ? `${f.codigo} - ${f.nombre}` : f.nombre}
+                </option>
+              ))}
+              {!verTodosFiltro && (
+                <option value="VER_TODOS">🔍 Mostrar todos los códigos SAT...</option>
+              )}
+              {verTodosFiltro && (
+                <>
+                  <option disabled className="text-gray-400 font-bold border-t">--- Todos los Códigos SAT ---</option>
+                  {SAT_FORMAS_PAGO.filter(sat => !formasPago.some(f => f.codigo === sat.codigo)).map(sat => (
+                    <option key={sat.codigo} value={sat.codigo}>
+                      {sat.codigo} - {sat.nombre}
+                    </option>
+                  ))}
+                </>
+              )}
             </select>
             <select
               value={filtroCategoria}
@@ -204,6 +330,66 @@ export default function EgresosTab({
               {categorias.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
             </select>
           </div>
+        </div>
+
+        {/* Fila 3: Filtros de checkboxes tipo Excel */}
+        <div className="flex flex-wrap gap-4 items-center text-xs font-semibold text-gray-600 dark:text-gray-400 mt-2">
+          <label className="flex items-center gap-1.5 cursor-pointer hover:text-gray-800 dark:hover:text-gray-200">
+            <input 
+              type="checkbox" 
+              checked={filtrosEstatus.conciliado} 
+              onChange={e => { setFiltrosEstatus(prev => ({...prev, conciliado: e.target.checked})); resetPage(); }} 
+              className="rounded text-blue-500 focus:ring-blue-500 bg-white dark:bg-gray-800 border-gray-300 dark:border-gray-600"
+            />
+            Conciliados
+          </label>
+          <label className="flex items-center gap-1.5 cursor-pointer hover:text-gray-800 dark:hover:text-gray-200">
+            <input 
+              type="checkbox" 
+              checked={filtrosEstatus.sin_conciliar} 
+              onChange={e => { setFiltrosEstatus(prev => ({...prev, sin_conciliar: e.target.checked})); resetPage(); }} 
+              className="rounded text-blue-500 focus:ring-blue-500 bg-white dark:bg-gray-800 border-gray-300 dark:border-gray-600"
+            />
+            Sin Conciliar
+          </label>
+          <div className="w-px h-4 bg-gray-300 dark:bg-gray-700 hidden sm:block"></div>
+          <label className="flex items-center gap-1.5 cursor-pointer hover:text-gray-800 dark:hover:text-gray-200">
+            <input 
+              type="checkbox" 
+              checked={filtrosEstatus.con_ticket} 
+              onChange={e => { setFiltrosEstatus(prev => ({...prev, con_ticket: e.target.checked})); resetPage(); }} 
+              className="rounded text-indigo-500 focus:ring-indigo-500 bg-white dark:bg-gray-800 border-gray-300 dark:border-gray-600"
+            />
+            Con Ticket
+          </label>
+          <label className="flex items-center gap-1.5 cursor-pointer hover:text-gray-800 dark:hover:text-gray-200">
+            <input 
+              type="checkbox" 
+              checked={filtrosEstatus.sin_documento} 
+              onChange={e => { setFiltrosEstatus(prev => ({...prev, sin_documento: e.target.checked})); resetPage(); }} 
+              className="rounded text-indigo-500 focus:ring-indigo-500 bg-white dark:bg-gray-800 border-gray-300 dark:border-gray-600"
+            />
+            Sin Documento
+          </label>
+          <div className="w-px h-4 bg-gray-300 dark:bg-gray-700 hidden sm:block"></div>
+          <label className="flex items-center gap-1.5 cursor-pointer hover:text-gray-800 dark:hover:text-gray-200">
+            <input 
+              type="checkbox" 
+              checked={filtrosEstatus.deducible} 
+              onChange={e => { setFiltrosEstatus(prev => ({...prev, deducible: e.target.checked})); resetPage(); }} 
+              className="rounded text-emerald-500 focus:ring-emerald-500 bg-white dark:bg-gray-800 border-gray-300 dark:border-gray-600"
+            />
+            Deducibles
+          </label>
+          <label className="flex items-center gap-1.5 cursor-pointer hover:text-gray-800 dark:hover:text-gray-200">
+            <input 
+              type="checkbox" 
+              checked={filtrosEstatus.no_deducible} 
+              onChange={e => { setFiltrosEstatus(prev => ({...prev, no_deducible: e.target.checked})); resetPage(); }} 
+              className="rounded text-emerald-500 focus:ring-emerald-500 bg-white dark:bg-gray-800 border-gray-300 dark:border-gray-600"
+            />
+            No Deducibles
+          </label>
         </div>
       </div>
 
@@ -282,14 +468,24 @@ export default function EgresosTab({
 
                 {/* UUID */}
                 <td className="p-3 font-mono">
-                  <div className="text-gray-800 dark:text-gray-200 font-semibold tracking-tight" title={g.uuid_fiscal}>
-                    {g.uuid_fiscal ? g.uuid_fiscal.substring(0, 20) + '…' : <span className="text-gray-400 italic">N/A</span>}
+                  <div className="text-gray-800 dark:text-gray-200 font-semibold tracking-tight">
+                    {g.uuid_fiscal ? g.uuid_fiscal : <span className="text-gray-400 italic">N/A</span>}
                   </div>
                   <div className="text-[10px] text-gray-400 mt-0.5 flex items-center gap-1 flex-wrap">
                     <span className="truncate max-w-[200px]">{g.concepto}</span>
                     {g.gasto_padre_id && (
                       <span className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 uppercase">
                         Comprobante
+                      </span>
+                    )}
+                    {g.es_deducible === false && !g.uuid_fiscal && (
+                      <span className="px-1.5 py-0.5 rounded text-[8px] font-black bg-gray-200 dark:bg-gray-800 text-gray-700 dark:text-gray-300 uppercase">
+                        Solo Ticket (No Deducible)
+                      </span>
+                    )}
+                    {g.es_deducible === false && g.uuid_fiscal && (
+                      <span className="px-1.5 py-0.5 rounded text-[8px] font-black bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 uppercase" title="Inconsistencia detectada entre el pago del banco y la factura.">
+                        ⚠️ Discrepancia Forma Pago
                       </span>
                     )}
                   </div>
@@ -305,9 +501,47 @@ export default function EgresosTab({
                   )}
                 </td>
 
-                {/* Método de pago */}
+                {/* Método de pago — select inline */}
                 <td className="p-3">
-                  <MetodoBadge metodo={g.metodo_pago} />
+                  <div className="relative min-w-[120px]">
+                    <CreditCard size={11} className="absolute left-2 top-2 text-gray-400 pointer-events-none" />
+                    <select
+                      value={g.metodo_pago || ''}
+                      onChange={(e) => {
+                        if (e.target.value === 'VER_TODOS') {
+                          setVerTodos(true);
+                          return;
+                        }
+                        onUpdateMetodoPago && onUpdateMetodoPago(g.id, e.target.value || null);
+                      }}
+                      className={`w-full pl-6 pr-2 py-1.5 rounded-lg border text-[11px] font-medium outline-none transition-all cursor-pointer
+                        ${g.metodo_pago
+                          ? 'border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/20 text-emerald-700 dark:text-emerald-400'
+                          : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-400 italic'
+                        }
+                        focus:ring-1 focus:ring-emerald-500 hover:border-emerald-300 dark:hover:border-emerald-700`}
+                    >
+                      <option value="">Desconocido</option>
+                      {formasPago.map(f => (
+                        <option key={f.codigo || f.id} value={f.codigo || ''}>
+                          {f.codigo ? `${f.codigo} - ${f.nombre}` : f.nombre}
+                        </option>
+                      ))}
+                      {!verTodos && (
+                        <option value="VER_TODOS">🔍 Mostrar todos los códigos SAT...</option>
+                      )}
+                      {verTodos && (
+                        <>
+                          <option disabled className="text-gray-400 font-bold border-t">--- Todos los Códigos SAT ---</option>
+                          {SAT_FORMAS_PAGO.filter(sat => !formasPago.some(f => f.codigo === sat.codigo)).map(sat => (
+                            <option key={sat.codigo} value={sat.codigo}>
+                              {sat.codigo} - {sat.nombre}
+                            </option>
+                          ))}
+                        </>
+                      )}
+                    </select>
+                  </div>
                 </td>
 
                 {/* Clasificación — select inline */}
@@ -503,17 +737,21 @@ export default function EgresosTab({
           onClose={() => setManualModal({isOpen: false})}
           onSuccess={() => {
             setManualModal({isOpen: false});
-            window.location.reload();
+            if (onRefresh) onRefresh();
+            else window.location.reload();
           }}
         />
       )}
       {showXmlModal && (
         <CargaXmlMasivaModal
           tipo="gasto"
-          onClose={() => setShowXmlModal(false)}
-          onSuccess={() => {
+          onClose={() => {
             setShowXmlModal(false);
-            window.location.reload();
+            if (onRefresh) onRefresh();
+            else window.location.reload();
+          }}
+          onSuccess={() => {
+            if (onRefresh) onRefresh();
           }}
         />
       )}

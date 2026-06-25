@@ -103,7 +103,7 @@ CREATE POLICY "Modificacion de estatus_factura restringida a superusuarios" ON p
 
 -- regimenes_fiscales
 DROP POLICY IF EXISTS "Permitir todo a usuarios autenticados en regimenes_fiscales" ON public.regimenes_fiscales;
-CREATE POLICY "Lectura publica de regimenes_fiscales" ON public.regimenes_fiscales FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Lectura publica de regimenes_fiscales" ON public.regimenes_fiscales FOR SELECT USING (true);
 CREATE POLICY "Modificacion de regimenes_fiscales restringida a superusuarios" ON public.regimenes_fiscales
     FOR ALL TO authenticated USING (is_superusuario()) WITH CHECK (is_superusuario());
 

@@ -2,6 +2,7 @@
 import React, { useState, useRef } from 'react';
 import { UploadCloud, X, FileText, CheckCircle, AlertTriangle } from 'lucide-react';
 import { supabase } from '../../../../lib/supabase';
+import { consultarSatYActualizarCfdi } from '../actions';
 
 interface CargaXmlMasivaModalProps {
   onClose: () => void;
@@ -70,7 +71,7 @@ export default function CargaXmlMasivaModal({ onClose, onSuccess, tipo }: CargaX
       }
 
       // Obtener formas_pago y estatus_factura una sola vez para optimizar rendimiento
-      const { data: formasPagoData } = await supabase.from('formas_pago').select('id, nombre');
+      const { data: formasPagoData } = await supabase.from('formas_pago').select('id, nombre, codigo');
       const { data: estatusData } = await supabase
         .from('estatus_factura')
         .select('id')
@@ -212,22 +213,16 @@ export default function CargaXmlMasivaModal({ onClose, onSuccess, tipo }: CargaX
 
           // Mapear la forma de pago para esta factura
           let formaPagoId = null;
-          let metodoPago = 'Transferencia'; // fallback por defecto
+          let metodoPago = '99'; // fallback por defecto
           if (formasPagoData && formasPagoData.length > 0) {
-            const code = formaPagoCode || '03';
-            let term = 'Efectivo';
-            if (code === '03') term = 'Transferencia';
-            else if (code === '04' || code === '28') term = 'Tarjeta';
-            else if (code === '02') term = 'Cheque';
-
-            const match = formasPagoData.find(f => f.nombre.toLowerCase().includes(term.toLowerCase()));
+            const code = formaPagoCode ? formaPagoCode.trim().padStart(2, '0') : '03';
+            const match = formasPagoData.find(f => f.codigo === code);
             if (match) {
               formaPagoId = match.id;
-              metodoPago = match.nombre;
             } else {
-              formaPagoId = formasPagoData[0].id;
-              metodoPago = formasPagoData[0].nombre;
+              formaPagoId = formasPagoData.find(f => f.codigo === '99')?.id || formasPagoData[0].id;
             }
+            metodoPago = mapFormaPagoCodeToMetodo(code);
           }
 
           // 1. Subir XML al storage
@@ -307,7 +302,8 @@ export default function CargaXmlMasivaModal({ onClose, onSuccess, tipo }: CargaX
               estatus_factura_id: defaultEstatusId,
               estatus_facturado: true,
               metodo_pago: metodoPago,
-              fecha_timbrado: fechaTimbrado || null
+              fecha_timbrado: fechaTimbrado || null,
+              es_deducible: true
             };
           } else {
             let empresaId = '';
@@ -375,7 +371,95 @@ export default function CargaXmlMasivaModal({ onClose, onSuccess, tipo }: CargaX
             };
           }
 
-          // Verificar duplicados por UUID fiscal antes de insertar
+          // 1. Validar que la factura pertenece al ciclo del mes de junio de 2026
+          if (!fecha_emision.startsWith('2026-06')) {
+            nuevosResultados.push({
+              nombre: file.name,
+              estatus: 'error',
+              mensaje: `La factura no pertenece al ciclo del mes de junio de 2026 (Fecha del XML: ${fecha_emision}).`
+            });
+            continue;
+          }
+
+          // 2. Consultar si el CFDI está vigente o cancelado en el SAT
+          const { data: { session } } = await supabase.auth.getSession();
+          const token = session?.access_token || '';
+
+          const satRes = await consultarSatYActualizarCfdi(
+            tipo,
+            emisorRfc,
+            rfcReceptor,
+            total,
+            uuid,
+            token
+          );
+
+          if (!satRes.success) {
+            console.error('Error al consultar SAT:', satRes.error);
+          }
+
+          // Si el CFDI está cancelado en el SAT
+          if (satRes.estado === 'Cancelado') {
+            const { data: duplicate } = await supabase
+              .from(tableStr)
+              .select('id')
+              .ilike('uuid_fiscal', uuid)
+              .maybeSingle();
+
+            if (duplicate) {
+              // Ya existía en la BD y fue actualizada a Cancelada por el Server Action (liberando conciliaciones)
+              nuevosResultados.push({
+                nombre: file.name,
+                estatus: 'error',
+                mensaje: `La factura ya existía, pero se detectó que está CANCELADA en el SAT. Se ha actualizado su estatus a 'Cancelado' y se liberó la conciliación bancaria asociada.`
+              });
+              continue;
+            } else {
+              // No existía, la insertamos directamente con montos en 0 y estatus cancelado
+              let canceladoEstatusId = null;
+              const { data: canceladoEstatus } = await supabase
+                .from('estatus_factura')
+                .select('id')
+                .ilike('nombre', 'Cancelado')
+                .maybeSingle();
+
+              if (canceladoEstatus) {
+                canceladoEstatusId = canceladoEstatus.id;
+              } else {
+                const { data: newStatus } = await supabase
+                  .from('estatus_factura')
+                  .insert({ nombre: 'Cancelado' })
+                  .select('id')
+                  .single();
+                if (newStatus) canceladoEstatusId = newStatus.id;
+              }
+
+              if (tipo === 'gasto') {
+                insertPayload.monto = 0;
+                insertPayload.subtotal = 0;
+                insertPayload.iva_acreditable = 0;
+                insertPayload.estatus_facturado = false;
+                insertPayload.estatus_factura_id = canceladoEstatusId;
+              } else {
+                insertPayload.total = 0;
+                insertPayload.subtotal = 0;
+                insertPayload.iva_trasladado = 0;
+                insertPayload.estatus_factura_id = canceladoEstatusId;
+              }
+
+              const { error: dbError } = await supabase.from(tableStr).insert([insertPayload]);
+              if (dbError) throw dbError;
+
+              nuevosResultados.push({
+                nombre: file.name,
+                estatus: 'ok',
+                mensaje: `Factura guardada directamente con estatus 'Cancelado' debido a que se encuentra cancelada en el SAT.`
+              });
+              continue;
+            }
+          }
+
+          // Si el CFDI está vigente, verificar duplicidad normal
           if (insertPayload.uuid_fiscal) {
             const { data: duplicate } = await supabase
               .from(tableStr)
@@ -386,7 +470,7 @@ export default function CargaXmlMasivaModal({ onClose, onSuccess, tipo }: CargaX
               nuevosResultados.push({
                 nombre: file.name,
                 estatus: 'error',
-                mensaje: `Esta factura ya está registrada (UUID: ${insertPayload.uuid_fiscal}).`
+                mensaje: `Esta factura ya está registrada (UUID: ${insertPayload.uuid_fiscal}) y se encuentra VIGENTE en el SAT.`
               });
               continue;
             }
@@ -550,4 +634,8 @@ export default function CargaXmlMasivaModal({ onClose, onSuccess, tipo }: CargaX
       </div>
     </div>
   );
+}
+
+function mapFormaPagoCodeToMetodo(code: string): string {
+  return code ? code.trim().padStart(2, '0') : '99';
 }

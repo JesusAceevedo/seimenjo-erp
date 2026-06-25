@@ -14,6 +14,38 @@ import { toggleMovimientoVisibilidad } from '../gastos/reconciliationActions';
 
 export const dynamic = 'force-dynamic';
 
+const SAT_FORMAS_PAGO = [
+  { codigo: '01', nombre: 'Efectivo' },
+  { codigo: '02', nombre: 'Cheque nominativo' },
+  { codigo: '03', nombre: 'Transferencia electrónica' },
+  { codigo: '04', nombre: 'Tarjeta de crédito' },
+  { codigo: '05', nombre: 'Monedero electrónico' },
+  { codigo: '06', nombre: 'Dinero electrónico' },
+  { codigo: '08', nombre: 'Vales de despensa' },
+  { codigo: '12', nombre: 'Dación en pago' },
+  { codigo: '13', nombre: 'Pago por subrogación' },
+  { codigo: '14', nombre: 'Pago por consignación' },
+  { codigo: '15', nombre: 'Condonación' },
+  { codigo: '17', nombre: 'Compensación' },
+  { codigo: '23', nombre: 'Novación' },
+  { codigo: '24', nombre: 'Confusión' },
+  { codigo: '25', nombre: 'Remisión de deuda' },
+  { codigo: '26', nombre: 'Prescripción o caducidad' },
+  { codigo: '27', nombre: 'A satisfacción del acreedor' },
+  { codigo: '28', nombre: 'Tarjeta de débito' },
+  { codigo: '29', nombre: 'Tarjeta de servicios' },
+  { codigo: '30', nombre: 'Aplicación de anticipos' },
+  { codigo: '31', nombre: 'Intermediario pagos' },
+  { codigo: '99', nombre: 'Por definir' }
+];
+
+function getMetodoPagoLabel(codigo?: string | null): string {
+  if (!codigo) return 'Desconocido';
+  const cleanCode = codigo.trim().padStart(2, '0');
+  const found = SAT_FORMAS_PAGO.find(fp => fp.codigo === cleanCode);
+  return found ? `${found.codigo} - ${found.nombre}` : `${cleanCode} - Otro`;
+}
+
 interface Proveedor {
   id: string;
   nombre_comercial: string;
@@ -28,6 +60,7 @@ interface CategoriaGasto {
 interface FormaPago {
   id: string;
   nombre: string;
+  codigo?: string | null;
 }
 
 interface Gasto {
@@ -68,6 +101,26 @@ export default function AdminGastos() {
     }
   };
 
+  const handleUpdateCategoria = async (gastoId: string, categoriaId: string | null) => {
+    try {
+      const { error } = await supabase.from('gastos').update({ categoria_id: categoriaId }).eq('id', gastoId);
+      if (error) throw error;
+      setGastos(prev => prev.map(g => g.id === gastoId ? { ...g, categorias_gasto: categorias.find(c => c.id === categoriaId) || null } : g));
+    } catch (err: any) {
+      alert(`Error al actualizar categoría: ${err.message}`);
+    }
+  };
+
+  const handleUpdateMetodoPago = async (gastoId: string, metodo: string | null) => {
+    try {
+      const { error } = await supabase.from('gastos').update({ metodo_pago: metodo }).eq('id', gastoId);
+      if (error) throw error;
+      setGastos(prev => prev.map(g => g.id === gastoId ? { ...g, metodo_pago: metodo } : g));
+    } catch (err: any) {
+      alert(`Error al actualizar método de pago: ${err.message}`);
+    }
+  };
+
   // Helper de Formato Contable
   const formatCurrency = (val: string | number) => {
     const num = Number(val) || 0;
@@ -87,6 +140,9 @@ export default function AdminGastos() {
   const [pageSize, setPageSize] = useState(8);
   const [formasPagoList, setFormasPagoList] = useState<FormaPago[]>([]);
   const [busquedaGasto, setBusquedaGasto] = useState('');
+  const [verTodos, setVerTodos] = useState(false);
+  const [verTodosFiltro, setVerTodosFiltro] = useState(false);
+  const [verTodosModal, setVerTodosModal] = useState(false);
 
   // Calcular pageSize dinámicamente según la altura del viewport para evitar scroll principal
   useEffect(() => {
@@ -123,7 +179,7 @@ export default function AdminGastos() {
     categoria_id: '',
     concepto: '',
     monto: '',
-    metodo_pago: 'Efectivo'
+    metodo_pago: '01'
   });
 
   // --- CONSULTAS A BASE DE DATOS ---
@@ -299,8 +355,9 @@ export default function AdminGastos() {
 
       const monto = Number(g.monto || 0);
       total += monto;
-      const metodo = g.metodo_pago || 'Efectivo';
-      breakdown[metodo] = (breakdown[metodo] || 0) + monto;
+      const metodo = g.metodo_pago || '99';
+      const label = getMetodoPagoLabel(metodo);
+      breakdown[label] = (breakdown[label] || 0) + monto;
     });
 
     const balance = totalVentasPeriodo - total;
@@ -392,7 +449,7 @@ export default function AdminGastos() {
         setNuevoGasto({
           id: '',
           fecha_gasto: new Date().toISOString().split('T')[0],
-          proveedor_id: '', categoria_id: '', concepto: '', monto: '', metodo_pago: 'Efectivo'
+          proveedor_id: '', categoria_id: '', concepto: '', monto: '', metodo_pago: '01'
         });
         fetchPeriodData();
         fetchCatalogos();
@@ -418,7 +475,7 @@ export default function AdminGastos() {
         setNuevoGasto({
           id: '',
           fecha_gasto: new Date().toISOString().split('T')[0],
-          proveedor_id: '', categoria_id: '', concepto: '', monto: '', metodo_pago: 'Efectivo'
+          proveedor_id: '', categoria_id: '', concepto: '', monto: '', metodo_pago: '01'
         });
         fetchPeriodData();
         fetchCatalogos();
@@ -450,7 +507,7 @@ export default function AdminGastos() {
                   setNuevoGasto({
                     id: '',
                     fecha_gasto: new Date().toISOString().split('T')[0],
-                    proveedor_id: '', categoria_id: '', concepto: '', monto: '', metodo_pago: 'Efectivo'
+                    proveedor_id: '', categoria_id: '', concepto: '', monto: '', metodo_pago: '01'
                   });
                   setIsModalOpen(true);
                 }} 
@@ -568,13 +625,34 @@ export default function AdminGastos() {
               <Filter size={18} className="text-gray-400" />
               <select 
                 value={filtroMetodoPago}
-                onChange={(e) => setFiltroMetodoPago(e.target.value)}
+                onChange={(e) => {
+                  if (e.target.value === 'VER_TODOS') {
+                    setVerTodosFiltro(true);
+                    return;
+                  }
+                  setFiltroMetodoPago(e.target.value);
+                }}
                 className="border border-gray-200 dark:border-gray-800 p-2 rounded-lg text-sm bg-gray-50 dark:bg-gray-900 outline-none text-gray-900 dark:text-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
               >
                 <option value="">Todos los métodos</option>
                 {formasPagoList.map(f => (
-                  <option key={f.id} value={f.nombre}>{f.nombre}</option>
+                  <option key={f.id} value={f.codigo || ''}>
+                    {f.codigo ? `${f.codigo} - ${f.nombre}` : f.nombre}
+                  </option>
                 ))}
+                {!verTodosFiltro && (
+                  <option value="VER_TODOS">🔍 Mostrar todos los códigos SAT...</option>
+                )}
+                {verTodosFiltro && (
+                  <>
+                    <option disabled className="text-gray-400 font-bold border-t">--- Todos los Códigos SAT ---</option>
+                    {SAT_FORMAS_PAGO.filter(sat => !formasPagoList.some(f => f.codigo === sat.codigo)).map(sat => (
+                      <option key={sat.codigo} value={sat.codigo}>
+                        {sat.codigo} - {sat.nombre}
+                      </option>
+                    ))}
+                  </>
+                )}
               </select>
             </div>
 
@@ -617,10 +695,15 @@ export default function AdminGastos() {
                       </td>
                       <td className="p-4 space-y-1">
                         <div className="font-medium text-sm">{g.concepto || 'Sin descripción'}</div>
-                        <div className="flex gap-1.5 flex-wrap">
-                          <span className="inline-block px-2 py-0.5 rounded text-[10px] font-medium bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 border border-blue-200 dark:border-blue-800/50">
-                            {g.categorias_gasto?.nombre || 'Sin Categoría'}
-                          </span>
+                        <div className="flex gap-1.5 flex-wrap items-center mt-1">
+                          <select
+                            value={g.categorias_gasto?.id || ''}
+                            onChange={(e) => handleUpdateCategoria(g.id, e.target.value || null)}
+                            className="text-[10px] font-medium bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400 border border-blue-200 dark:border-blue-800/50 rounded outline-none py-0.5 px-1 cursor-pointer"
+                          >
+                            <option value="">Sin Categoría</option>
+                            {categorias.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+                          </select>
                           {g.movimiento_bancario_id && (
                             <span className="inline-block px-2 py-0.5 rounded text-[10px] font-medium bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-450 border border-amber-200 dark:border-amber-800/50">
                               Banco
@@ -629,9 +712,37 @@ export default function AdminGastos() {
                         </div>
                       </td>
                       <td className="p-4 text-center">
-                        <span className="px-2 py-1 bg-gray-100 dark:bg-gray-800 rounded-md text-gray-600 dark:text-gray-400">
-                          {g.metodo_pago || 'Efectivo'}
-                        </span>
+                        <select
+                          value={g.metodo_pago || ''}
+                          onChange={(e) => {
+                            if (e.target.value === 'VER_TODOS') {
+                              setVerTodos(true);
+                              return;
+                            }
+                            handleUpdateMetodoPago(g.id, e.target.value || null);
+                          }}
+                          className="px-2 py-1 bg-gray-50 dark:bg-gray-800 rounded-md text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-700 text-xs outline-none cursor-pointer text-center"
+                        >
+                          <option value="">Desconocido</option>
+                          {formasPagoList.map(f => (
+                            <option key={f.id} value={f.codigo || ''}>
+                              {f.codigo ? `${f.codigo} - ${f.nombre}` : f.nombre}
+                            </option>
+                          ))}
+                          {!verTodos && (
+                            <option value="VER_TODOS">🔍 Mostrar todos...</option>
+                          )}
+                          {verTodos && (
+                            <>
+                              <option disabled className="text-gray-400 font-bold border-t">--- Todos los Códigos SAT ---</option>
+                              {SAT_FORMAS_PAGO.filter(sat => !formasPagoList.some(f => f.codigo === sat.codigo)).map(sat => (
+                                <option key={sat.codigo} value={sat.codigo}>
+                                  {sat.codigo} - {sat.nombre}
+                                </option>
+                              ))}
+                            </>
+                          )}
+                        </select>
                       </td>
                       <td className="p-4 text-right font-bold text-sm text-red-600 dark:text-red-400">
                         - {formatCurrency(g.monto)}
@@ -647,7 +758,7 @@ export default function AdminGastos() {
                                 categoria_id: g.categorias_gasto?.id || '',
                                 concepto: g.concepto || '',
                                 monto: g.monto.toString(),
-                                metodo_pago: g.metodo_pago || 'Efectivo'
+                                metodo_pago: g.metodo_pago || '01'
                               });
                               setIsModalOpen(true);
                             }}
@@ -806,14 +917,35 @@ export default function AdminGastos() {
                   <div>
                     <label className="text-xs font-semibold text-gray-500 dark:text-gray-400">Método de Pago</label>
                     <select 
-                      value={nuevoGasto.metodo_pago}
+                      value={nuevoGasto.metodo_pago || ''}
                       className="w-full mt-1 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-lg text-sm text-gray-900 dark:text-white" 
-                      onChange={e => setNuevoGasto({...nuevoGasto, metodo_pago: e.target.value})}
+                      onChange={(e) => {
+                        if (e.target.value === 'VER_TODOS') {
+                          setVerTodosModal(true);
+                          return;
+                        }
+                        setNuevoGasto({...nuevoGasto, metodo_pago: e.target.value});
+                      }}
                     >
                       <option value="">Seleccionar método...</option>
                       {formasPagoList.map(f => (
-                        <option key={f.id} value={f.nombre}>{f.nombre}</option>
+                        <option key={f.id} value={f.codigo || ''}>
+                          {f.codigo ? `${f.codigo} - ${f.nombre}` : f.nombre}
+                        </option>
                       ))}
+                      {!verTodosModal && (
+                        <option value="VER_TODOS">🔍 Mostrar todos los códigos SAT...</option>
+                      )}
+                      {verTodosModal && (
+                        <>
+                          <option disabled className="text-gray-400 font-bold border-t">--- Todos los Códigos SAT ---</option>
+                          {SAT_FORMAS_PAGO.filter(sat => !formasPagoList.some(f => f.codigo === sat.codigo)).map(sat => (
+                            <option key={sat.codigo} value={sat.codigo}>
+                              {sat.codigo} - {sat.nombre}
+                            </option>
+                          ))}
+                        </>
+                      )}
                     </select>
                   </div>
                 </div>

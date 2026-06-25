@@ -89,6 +89,7 @@ export interface Repartidor {
 export interface FormaPago {
   id: string;
   nombre: string;
+  codigo?: string | null;
 }
 
 export interface EstatusFactura {
@@ -160,6 +161,7 @@ export interface GastoFacturado {
   subtotal?: number;
   iva_acreditable?: number;
   metodo_pago?: string;
+  es_deducible?: boolean;
   categoria_id?: string | null;
   proveedores?: { nombre_comercial: string; rfc: string };
   categorias_gasto?: { id: string; nombre: string } | null;
@@ -208,6 +210,14 @@ export interface GastoReconciliable {
   xml_url?: string;
   pdf_url?: string;
   ticket_url?: string;
+  metodo_pago?: string;
+  proveedores?: {
+    nombre_comercial: string;
+    rfc: string;
+  } | {
+    nombre_comercial: string;
+    rfc: string;
+  }[] | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -245,6 +255,7 @@ export interface MovimientoBancario {
   cuentas_bancarias?: CuentaBancaria | null;
   categoria_movimiento_id?: string | null;
   categorias_movimiento_bancario?: CategoriaMovimientoBancario | null;
+  conciliaciones_bancarias?: any[] | null;
 }
 
 export interface CategoriaMovimientoBancario {

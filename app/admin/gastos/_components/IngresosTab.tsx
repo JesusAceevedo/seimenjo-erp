@@ -10,6 +10,38 @@ import CargaXmlMasivaModal from './CargaXmlMasivaModal';
 import CargaManualModal from './CargaManualModal';
 import type { VentaFacturada } from '../../types';
 
+const SAT_FORMAS_PAGO_DESC: Record<string, string> = {
+  '01': 'Efectivo',
+  '02': 'Cheque nominativo',
+  '03': 'Transferencia electrónica',
+  '04': 'Tarjeta de crédito',
+  '05': 'Monedero electrónico',
+  '06': 'Dinero electrónico',
+  '08': 'Vales de despensa',
+  '12': 'Dación en pago',
+  '13': 'Pago por subrogación',
+  '14': 'Pago por consignación',
+  '15': 'Condonación',
+  '17': 'Compensación',
+  '23': 'Novación',
+  '24': 'Confusión',
+  '25': 'Remisión de deuda',
+  '26': 'Prescripción o caducidad',
+  '27': 'A satisfacción del acreedor',
+  '28': 'Tarjeta de débito',
+  '29': 'Tarjeta de servicios',
+  '30': 'Aplicación de anticipos',
+  '31': 'Intermediario pagos',
+  '99': 'Por definir'
+};
+
+function getMetodoPagoDisplay(codigo?: string): string {
+  if (!codigo) return 'Desconocido';
+  const cleanCode = codigo.trim().padStart(2, '0');
+  const desc = SAT_FORMAS_PAGO_DESC[cleanCode];
+  return desc ? `${cleanCode} - ${desc}` : `${cleanCode} - Otro`;
+}
+
 // ── Props ─────────────────────────────────────────────────────────────────────
 
 interface IngresosTabProps {
@@ -20,6 +52,7 @@ interface IngresosTabProps {
   onSendEmail: (pedidoId: string) => void;
   onEditVenta: (venta: VentaFacturada) => void;
   onDeleteVenta: (pedidoId: string) => void;
+  onRefresh?: () => void;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -59,6 +92,7 @@ export default function IngresosTab({
   onSendEmail,
   onEditVenta,
   onDeleteVenta,
+  onRefresh,
 }: IngresosTabProps) {
 
   const [showXmlModal, setShowXmlModal] = useState(false);
@@ -127,9 +161,15 @@ export default function IngresosTab({
       totalMonto += totalAmount;
       totalIva += ivaAmount;
 
-      const metodo = (v as any).metodo_pago || '';
-      if (metodoTotals[metodo] !== undefined) {
-        metodoTotals[metodo] += totalAmount;
+      const metodo = ((v as any).metodo_pago || '').toLowerCase();
+      if (metodo === '01' || metodo.includes('efectivo')) {
+        metodoTotals.Efectivo += totalAmount;
+      } else if (metodo === '03' || metodo.includes('transferencia')) {
+        metodoTotals.Transferencia += totalAmount;
+      } else if (metodo === '04' || metodo === '28' || metodo.includes('tarjeta')) {
+        metodoTotals.Tarjeta += totalAmount;
+      } else if (metodo === '02' || metodo.includes('cheque')) {
+        metodoTotals.Cheque += totalAmount;
       } else {
         metodoTotals.Otros += totalAmount;
       }
@@ -316,7 +356,7 @@ export default function IngresosTab({
                   <td className="p-3">
                     {(v as any).metodo_pago ? (
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400">
-                        <CreditCard size={9} /> {(v as any).metodo_pago}
+                        <CreditCard size={9} /> {getMetodoPagoDisplay((v as any).metodo_pago)}
                       </span>
                     ) : (
                       <span className="text-[10px] text-gray-400 italic">—</span>
@@ -472,17 +512,21 @@ export default function IngresosTab({
           onClose={() => setManualModal({isOpen: false})}
           onSuccess={() => {
             setManualModal({isOpen: false});
-            window.location.reload();
+            if (onRefresh) onRefresh();
+            else window.location.reload();
           }}
         />
       )}
       {showXmlModal && (
         <CargaXmlMasivaModal
           tipo="venta"
-          onClose={() => setShowXmlModal(false)}
-          onSuccess={() => {
+          onClose={() => {
             setShowXmlModal(false);
-            window.location.reload();
+            if (onRefresh) onRefresh();
+            else window.location.reload();
+          }}
+          onSuccess={() => {
+            if (onRefresh) onRefresh();
           }}
         />
       )}

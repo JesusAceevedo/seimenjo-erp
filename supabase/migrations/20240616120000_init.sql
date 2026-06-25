@@ -10,11 +10,11 @@
   Cada tabla tiene una columna `id` UUID generada automáticamente y timestamps.
 */
 
-create extension if not exists "uuid-ossp";
+-- create extension if not exists "uuid-ossp";
 
 -- Tabla productos
 create table if not exists productos (
-  id uuid primary key default uuid_generate_v4(),
+  id uuid primary key default gen_random_uuid(),
   nombre text not null,
   descripcion text,
   precio numeric(12,2) not null,
@@ -24,7 +24,7 @@ create table if not exists productos (
 
 -- Tabla clientes
 create table if not exists clientes (
-  id uuid primary key default uuid_generate_v4(),
+  id uuid primary key default gen_random_uuid(),
   nombre text not null,
   email text unique,
   telefono text,
@@ -35,7 +35,7 @@ create table if not exists clientes (
 
 -- Tabla facturas (relacionada con cliente y productos)
 create table if not exists facturas (
-  id uuid primary key default uuid_generate_v4(),
+  id uuid primary key default gen_random_uuid(),
   cliente_id uuid references clientes(id) on delete cascade,
   fecha timestamp with time zone default now(),
   total numeric(12,2) not null,
@@ -45,7 +45,7 @@ create table if not exists facturas (
 
 -- Tabla detalle_factura (productos asociados a una factura)
 create table if not exists detalle_factura (
-  id uuid primary key default uuid_generate_v4(),
+  id uuid primary key default gen_random_uuid(),
   factura_id uuid references facturas(id) on delete cascade,
   producto_id uuid references productos(id) on delete restrict,
   cantidad integer not null default 1,
@@ -55,7 +55,7 @@ create table if not exists detalle_factura (
 
 -- Tabla gastos
 create table if not exists gastos (
-  id uuid primary key default uuid_generate_v4(),
+  id uuid primary key default gen_random_uuid(),
   descripcion text not null,
   monto numeric(12,2) not null,
   fecha timestamp with time zone default now(),
@@ -64,7 +64,7 @@ create table if not exists gastos (
 
 -- Tabla egresos
 create table if not exists egresos (
-  id uuid primary key default uuid_generate_v4(),
+  id uuid primary key default gen_random_uuid(),
   descripcion text not null,
   monto numeric(12,2) not null,
   fecha timestamp with time zone default now(),
@@ -73,7 +73,7 @@ create table if not exists egresos (
 
 -- Tabla staff (empleados)
 create table if not exists staff (
-  id uuid primary key default uuid_generate_v4(),
+  id uuid primary key default gen_random_uuid(),
   nombre text not null,
   email text unique,
   rol text,

@@ -3,6 +3,31 @@ import React, { useState } from 'react';
 import { X, UploadCloud, Link as LinkIcon, FileText, CheckCircle, AlertTriangle } from 'lucide-react';
 import { supabase } from '../../../../lib/supabase';
 
+const SAT_FORMAS_PAGO = [
+  { codigo: '01', nombre: 'Efectivo' },
+  { codigo: '02', nombre: 'Cheque nominativo' },
+  { codigo: '03', nombre: 'Transferencia electrónica' },
+  { codigo: '04', nombre: 'Tarjeta de crédito' },
+  { codigo: '05', nombre: 'Monedero electrónico' },
+  { codigo: '06', nombre: 'Dinero electrónico' },
+  { codigo: '08', nombre: 'Vales de despensa' },
+  { codigo: '12', nombre: 'Dación en pago' },
+  { codigo: '13', nombre: 'Pago por subrogación' },
+  { codigo: '14', nombre: 'Pago por consignación' },
+  { codigo: '15', nombre: 'Condonación' },
+  { codigo: '17', nombre: 'Compensación' },
+  { codigo: '23', nombre: 'Novación' },
+  { codigo: '24', nombre: 'Confusión' },
+  { codigo: '25', nombre: 'Remisión de deuda' },
+  { codigo: '26', nombre: 'Prescripción o caducidad' },
+  { codigo: '27', nombre: 'A satisfacción del acreedor' },
+  { codigo: '28', nombre: 'Tarjeta de débito' },
+  { codigo: '29', nombre: 'Tarjeta de servicios' },
+  { codigo: '30', nombre: 'Aplicación de anticipos' },
+  { codigo: '31', nombre: 'Intermediario pagos' },
+  { codigo: '99', nombre: 'Por definir' }
+];
+
 interface CargaManualModalProps {
   onClose: () => void;
   onSuccess: () => void;
@@ -13,9 +38,10 @@ interface CargaManualModalProps {
 export default function CargaManualModal({ onClose, onSuccess, tipo, registroId }: CargaManualModalProps) {
   const [procesando, setProcesando] = useState(false);
   const [errorGlobal, setErrorGlobal] = useState('');
+  const [verTodos, setVerTodos] = useState(false);
 
   // Catálogos
-  const [formasPago, setFormasPago] = useState<{ id: string; nombre: string }[]>([]);
+  const [formasPago, setFormasPago] = useState<{ id: string; nombre: string; codigo?: string | null }[]>([]);
   const [categorias, setCategorias] = useState<{ id: string; nombre: string }[]>([]);
 
   // Estados para archivos
@@ -55,6 +81,7 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId 
   const [uuidFiscal, setUuidFiscal] = useState<string | null>(null);
   const [fechaTimbrado, setFechaTimbrado] = useState<string | null>(null);
   const [usoCfdi, setUsoCfdi] = useState<string>('G03');
+  const [esDeducible, setEsDeducible] = useState(true);
 
   const [manualFields, setManualFields] = useState({
     fecha: new Date().toISOString().split('T')[0],
@@ -72,11 +99,11 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId 
   // Cargar catálogos e información inicial
   React.useEffect(() => {
     const fetchCatalogos = async () => {
-      const { data } = await supabase.from('formas_pago').select('id, nombre').order('nombre');
+      const { data } = await supabase.from('formas_pago').select('id, nombre, codigo').order('nombre');
       if (data) {
         setFormasPago(data);
         if (!registroId && data.length > 0) {
-          const tMatch = data.find(f => f.nombre.toLowerCase().includes('transferencia'));
+          const tMatch = data.find(f => (f.codigo === '03') || f.nombre.toLowerCase().includes('transferencia'));
           setManualFields(prev => ({
             ...prev,
             metodoPagoId: tMatch ? tMatch.id : data[0].id
@@ -128,6 +155,7 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId 
           setUuidFiscal(data.uuid_fiscal || null);
           setFechaTimbrado(data.fecha_timbrado || null);
           setUsoCfdi(data.uso_cfdi_clave || 'G03');
+          setEsDeducible(data.es_deducible !== false);
         }
       };
       fetchDocs();
@@ -234,14 +262,9 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId 
 
         let mappedFpId = '';
         if (formasPago.length > 0) {
-          const code = formaPagoCode || '03';
-          let term = 'Efectivo';
-          if (code === '03') term = 'Transferencia';
-          else if (code === '04' || code === '28') term = 'Tarjeta';
-          else if (code === '02') term = 'Cheque';
-
-          const match = formasPago.find(f => f.nombre.toLowerCase().includes(term.toLowerCase()));
-          mappedFpId = match ? match.id : formasPago[0].id;
+          const code = formaPagoCode ? formaPagoCode.trim().padStart(2, '0') : '03';
+          const match = formasPago.find(f => f.codigo === code);
+          mappedFpId = match ? match.id : (formasPago.find(f => f.codigo === '99')?.id || formasPago[0].id);
         }
 
         setUuidFiscal(uuid || null);
@@ -284,6 +307,12 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId 
       }
       if (!registroId && tipo === 'gasto' && !manualFields.concepto) {
         throw new Error('Debes proporcionar el concepto del gasto.');
+      }
+      if (tipo === 'gasto' && !esDeducible) {
+        const hasTicket = (fileMode.ticket === 'upload' && files.ticket) || (fileMode.ticket === 'link' && links.ticket) || existingDocs.ticket;
+        if (!hasTicket) {
+          throw new Error('Para un gasto no deducible (solo ticket), debes cargar el archivo o enlace del Ticket obligatoriamente.');
+        }
       }
 
       // Subir Archivos a Supabase
@@ -379,8 +408,20 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId 
         // CREAR NUEVO REGISTRO
         let insertPayload: any = {};
 
-        // Resolver el nombre del método de pago para el campo de texto libre
-        const metodoPagoName = formasPago.find(f => f.id === manualFields.metodoPagoId)?.nombre || 'Transferencia';
+        // Resolver forma_pago_id y metodo_pago para la base de datos (guardando solo código en metodo_pago)
+        let formaPagoId: string | null = null;
+        let metodoPagoCode = '99';
+
+        const selectedFp = formasPago.find(f => f.id === manualFields.metodoPagoId);
+        if (selectedFp) {
+          formaPagoId = selectedFp.id;
+          metodoPagoCode = selectedFp.codigo || selectedFp.nombre.substring(0, 2) || '99';
+        } else if (manualFields.metodoPagoId) {
+          // Si no es un ID de la BD, se asume que seleccionaron un código SAT del desglose
+          metodoPagoCode = manualFields.metodoPagoId;
+          const fallbackFp = formasPago.find(f => f.codigo === '99' || f.nombre.toLowerCase().includes('definir'));
+          formaPagoId = fallbackFp ? fallbackFp.id : null;
+        }
 
         let empresaId = '';
         try {
@@ -447,12 +488,13 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId 
               : 'Gasto Manual'),
             registrado_por: staffId,
             proveedor_id: proveedorId,
-            forma_pago_id: manualFields.metodoPagoId || null,
+            forma_pago_id: formaPagoId,
             categoria_id: manualFields.categoria_id || null,
             estatus_factura_id: uuidFiscal ? (await supabase.from('estatus_factura').select('id').ilike('nombre', 'Facturado').maybeSingle()).data?.id || null : null,
             estatus_facturado: !!uuidFiscal,
-            metodo_pago: metodoPagoName,
-            fecha_timbrado: fechaTimbrado || null
+            metodo_pago: metodoPagoCode,
+            fecha_timbrado: fechaTimbrado || null,
+            es_deducible: esDeducible
           };
         } else {
           // Buscar o crear cliente por RFC
@@ -496,7 +538,7 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId 
             ticket_url: finalTicketUrl,
             fecha_emision: manualFields.fecha,
             cliente_id: clienteId,
-            forma_pago_id: manualFields.metodoPagoId || null,
+            forma_pago_id: formaPagoId,
             estatus_factura_id: uuidFiscal ? (await supabase.from('estatus_factura').select('id').ilike('nombre', 'Facturado').maybeSingle()).data?.id || null : null,
             uso_cfdi_clave: usoCfdi || 'G03',
             empresa_id: empresaId,
@@ -635,12 +677,37 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId 
             </div>
           )}
 
+          {tipo === 'gasto' && (
+            <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-5 shadow-sm flex items-center justify-between">
+              <div>
+                <label className="text-sm font-bold text-gray-950 dark:text-white">Gasto No Deducible (Solo Ticket)</label>
+                <p className="text-xs text-gray-500 mt-1">Marca esta opción si el gasto no cuenta con factura XML y solo tienes un ticket o nota de venta.</p>
+              </div>
+              <input
+                type="checkbox"
+                checked={!esDeducible}
+                onChange={(e) => {
+                  const val = !e.target.checked;
+                  setEsDeducible(val);
+                  if (!val) {
+                    // Reset XML files since it's not deductible
+                    setFiles(prev => ({ ...prev, xml: null, pdf: null }));
+                    setLinks(prev => ({ ...prev, xml: '', pdf: '' }));
+                    setUuidFiscal(null);
+                    setFechaTimbrado(null);
+                  }
+                }}
+                className="w-5 h-5 accent-blue-600 rounded cursor-pointer"
+              />
+            </div>
+          )}
+
           {/* Sección de Archivos */}
           <div className="space-y-4">
             <h3 className="text-xs font-extrabold text-gray-400 dark:text-gray-500 uppercase tracking-wider">Archivos de Soporte</h3>
-            {renderFileSection("Archivo XML (Opcional)", "xml", ".xml", false)}
-            {renderFileSection("Representación Impresa (PDF)", "pdf", ".pdf", false)}
-            {renderFileSection("Ticket / Nota / Foto", "ticket", "image/*,.pdf", false)}
+            {esDeducible && renderFileSection("Archivo XML (Opcional)", "xml", ".xml", false)}
+            {esDeducible && renderFileSection("Representación Impresa (PDF)", "pdf", ".pdf", false)}
+            {renderFileSection(esDeducible ? "Ticket / Nota / Foto" : "Ticket / Nota / Foto (Obligatorio)", "ticket", "image/*,.pdf", !esDeducible)}
           </div>
 
           {/* Formulario de Campos */}
@@ -746,7 +813,16 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId 
               </div>
 
               <div>
-                <label className="text-xs font-bold text-gray-700 dark:text-gray-300">Forma de Pago <span className="text-red-555">*</span></label>
+                <div className="flex justify-between items-center">
+                  <label className="text-xs font-bold text-gray-700 dark:text-gray-300">Forma de Pago <span className="text-red-500">*</span></label>
+                  <button
+                    type="button"
+                    onClick={() => setVerTodos(!verTodos)}
+                    className="text-[10px] text-blue-600 dark:text-blue-400 hover:underline font-bold"
+                  >
+                    {verTodos ? "Mostrar solo comunes" : "Ver todos los códigos SAT"}
+                  </button>
+                </div>
                 <select
                   required
                   value={manualFields.metodoPagoId}
@@ -754,9 +830,25 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId 
                   className="w-full mt-1 bg-gray-50 dark:bg-gray-950 border border-gray-300 dark:border-gray-700 p-2.5 rounded-lg text-sm text-gray-950 dark:text-white outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all"
                 >
                   <option value="">Seleccionar forma de pago...</option>
+                  
+                  {/* Opciones comunes de la BD */}
                   {formasPago.map(f => (
-                    <option key={f.id} value={f.id}>{f.nombre}</option>
+                    <option key={f.id} value={f.id}>
+                      {f.codigo ? `${f.codigo} - ${f.nombre}` : f.nombre}
+                    </option>
                   ))}
+
+                  {/* Todas las opciones SAT si verTodos es true */}
+                  {verTodos && (
+                    <>
+                      <option disabled className="text-gray-400 font-bold border-t">--- Todos los Códigos SAT ---</option>
+                      {SAT_FORMAS_PAGO.filter(sat => !formasPago.some(f => f.codigo === sat.codigo)).map(sat => (
+                        <option key={sat.codigo} value={sat.codigo}>
+                          {sat.codigo} - {sat.nombre}
+                        </option>
+                      ))}
+                    </>
+                  )}
                 </select>
               </div>
 

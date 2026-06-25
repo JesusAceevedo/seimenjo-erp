@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
-import { Soup, LayoutDashboard, Users, FileDown, Settings, LogOut, Package, Truck } from 'lucide-react';
+import { Soup, LayoutDashboard, Users, FileDown, Settings, LogOut, Package, Truck, Boxes } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import OnboardingWizard from './components/OnboardingWizard';
 
@@ -55,12 +55,54 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   useEffect(() => {
     const checkOnboarding = async () => {
       try {
+        const isLoginPage = pathname === '/admin/login' || pathname === '/login';
+
+        // 1. Verificar si hay sesión en localStorage del ERP
         const sesionGuardada = localStorage.getItem('seimenjo_session');
         if (!sesionGuardada) {
+          if (!isLoginPage) {
+            setLoadingOnboarding(false);
+            router.push('/admin/login');
+            return;
+          }
           setLoadingOnboarding(false);
           return;
         }
 
+        // 2. Esperar a que Supabase Auth restaure la sesión en memoria
+        let { data: { session } } = await supabase.auth.getSession();
+        if (!session) {
+          // Espera corta para evitar condiciones de carrera en la carga del cliente de Supabase
+          await new Promise(resolve => setTimeout(resolve, 200));
+          const res = await supabase.auth.getSession();
+          session = res.data.session;
+        }
+
+        // 3. Si sigue sin haber sesión activa en Supabase, verificar si hay token en localStorage antes de redirigir
+        if (!session) {
+          const urlPart = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+          const projectId = urlPart.includes('//') ? (urlPart.split('//')[1]?.split('.')[0] || 'ioxfhgmeapwyfrgvtyjd') : 'ioxfhgmeapwyfrgvtyjd';
+          const supabaseSessionKey = `sb-${projectId}-auth-token`;
+          const hasSupabaseSessionInStorage = typeof window !== 'undefined' && !!localStorage.getItem(supabaseSessionKey);
+
+          if (hasSupabaseSessionInStorage) {
+            console.log('Sesión en inicialización detectada en localStorage de Supabase. Evitando redirección.');
+            setLoadingOnboarding(false);
+            return;
+          }
+
+          if (!isLoginPage) {
+            console.warn('Sesión de Supabase no detectada o expirada. Redirigiendo a login...');
+            localStorage.removeItem('seimenjo_session');
+            setLoadingOnboarding(false);
+            router.push('/admin/login');
+            return;
+          }
+          setLoadingOnboarding(false);
+          return;
+        }
+
+        // 4. Continuar con la validación utilizando la sesión autenticada garantizada
         const datosSesion = JSON.parse(sesionGuardada);
         if (datosSesion.tipo === 'staff') {
           const isSuper = !!datosSesion.es_superusuario;
@@ -88,11 +130,16 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
               setLogoUrl(null);
             }
 
-            if (!isSuper && !empresaError && (!empresaData?.rfc || !empresaData?.razon_social)) {
+            if (!isSuper && !empresaError && (!empresaData || !empresaData.rfc || !empresaData.razon_social)) {
               setNeedsOnboarding(true);
             }
+          } else if (!isSuper) {
+            // Si no hay empresa_id y no es superusuario, requiere configuración
+            setNeedsOnboarding(true);
+          }
 
-            // Consultar los módulos activos de la empresa
+          // Consultar los módulos activos de la empresa
+          if (datosSesion.empresa_id) {
             const { data: modulosData } = await supabase
               .from('modulos_empresa')
               .select('modulo')
@@ -103,7 +150,6 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
               setActiveModules(modulosData.map(m => m.modulo.toLowerCase()));
             }
           }
-
           // Cargar catálogo de empresas para cambio de contexto
           if (isSuper) {
             const { data: emps } = await supabase.from('empresas').select('id, nombre').order('nombre');
@@ -251,6 +297,14 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
               className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${isSelected('/admin/productos') ? 'bg-amber-600 text-white font-semibold' : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white'}`}
             >
               <Package size={18} /> Productos
+            </button>
+          )}
+          {hasModule('productos') && (
+            <button
+              onClick={() => router.push('/admin/inventario')}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${isSelected('/admin/inventario') ? 'bg-amber-600 text-white font-semibold' : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white'}`}
+            >
+              <Boxes size={18} /> Inventario
             </button>
           )}
           {/* BOTÓN GASTOS */}
