@@ -8,7 +8,10 @@ export async function GET(request: NextRequest) {
   const options = searchParams.get('options');
   const cmd = searchParams.get('cmd');
 
+  console.log(`[ZKTeco ADMS] Recibida petición GET del reloj - SN: ${sn}, options: ${options}, cmd: ${cmd}`);
+
   if (!sn) {
+    console.warn('[ZKTeco ADMS] Petición GET rechazada: Falta número de serie (SN)');
     return new NextResponse('Error: SN missing', { status: 400 });
   }
 
@@ -35,7 +38,28 @@ export async function GET(request: NextRequest) {
 
   // 2. Solicitud de Comandos pendientes del servidor al reloj
   if (cmd === 'getrequest') {
-    // Si no hay comandos pendientes a enviar al dispositivo, responde con OK
+    // Consultar comandos que no hayan sido procesados para esta empresa y este dispositivo (o genéricos)
+    const { data: comandos, error } = await supabaseAdmin
+      .from('zkteco_comandos')
+      .select('comando_id, comando_texto')
+      .eq('procesado', false)
+      .or(`dispositivo_sn.is.null,dispositivo_sn.eq.${sn}`)
+      .order('creado_en', { ascending: true })
+      .limit(10);
+
+    if (error) {
+      console.error('[ZKTeco ADMS] Error al consultar comandos pendientes en Supabase:', error);
+      return new NextResponse('OK', { headers: { 'Content-Type': 'text/plain' } });
+    }
+
+    if (comandos && comandos.length > 0) {
+      const responseBody = comandos.map(c => `C:${c.comando_id}:${c.comando_texto}`).join('\n');
+      console.log(`[ZKTeco ADMS] Enviando ${comandos.length} comando(s) pendiente(s) al reloj:\n${responseBody}`);
+      return new NextResponse(responseBody, {
+        headers: { 'Content-Type': 'text/plain' }
+      });
+    }
+
     return new NextResponse('OK', {
       headers: { 'Content-Type': 'text/plain' }
     });
@@ -48,11 +72,48 @@ export async function GET(request: NextRequest) {
 
 // POST: Recibe las checadas y bitácoras del dispositivo
 export async function POST(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
+  const url = new URL(request.url);
+  const { searchParams } = url;
   const sn = searchParams.get('SN');
   const table = searchParams.get('table');
 
+  // Si es confirmación de ejecución de comando (devicecmd)
+  if (url.pathname.includes('devicecmd')) {
+    const rawBody = await request.text();
+    console.log(`[ZKTeco ADMS] Recibida respuesta de comandos - SN: ${sn || 'N/A'}:\n${rawBody}`);
+
+    // Parsear líneas en formato: ID=101&Return=0
+    const lines = rawBody.split('\n');
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+
+      const params = new URLSearchParams(trimmed);
+      const id = params.get('ID');
+      const ret = params.get('Return');
+
+      if (id) {
+        console.log(`[ZKTeco ADMS] Comando ${id} ejecutado en el reloj con retorno: ${ret}`);
+        await supabaseAdmin
+          .from('zkteco_comandos')
+          .update({
+            procesado: true,
+            resultado: ret || '0',
+            procesado_en: new Date().toISOString()
+          })
+          .eq('comando_id', id);
+      }
+    }
+
+    return new NextResponse('OK', {
+      headers: { 'Content-Type': 'text/plain' }
+    });
+  }
+
+  console.log(`[ZKTeco ADMS] Recibida petición POST del reloj - SN: ${sn}, table: ${table}`);
+
   if (!sn) {
+    console.warn('[ZKTeco ADMS] Petición POST rechazada: Falta número de serie (SN)');
     return new NextResponse('Error: SN missing', { status: 400 });
   }
 
@@ -73,11 +134,36 @@ export async function POST(request: NextRequest) {
       .limit(1)
       .maybeSingle();
       
-    const empresaId = configEmpresa?.id;
+    const defaultEmpresaId = configEmpresa?.id;
 
-    if (!empresaId) {
+    if (!defaultEmpresaId) {
       console.error('No se encontró ninguna empresa en la base de datos.');
       return new NextResponse('ERROR: No company found', { status: 500 });
+    }
+
+    // 1. Obtener todos los IDs de usuario del biométrico en este batch
+    const userIdsInBatch = lines
+      .map(line => {
+        const parts = line.trim().split('\t');
+        return parts.length >= 2 ? parts[0] : null;
+      })
+      .filter(Boolean) as string[];
+
+    // 2. Mapear cada zkteco_user_id a su respectivo empresa_id
+    const empresaMap = new Map<string, string>();
+    if (userIdsInBatch.length > 0) {
+      const { data: empleados } = await supabaseAdmin
+        .from('empleados_detalle')
+        .select('zkteco_user_id, empresa_id')
+        .in('zkteco_user_id', userIdsInBatch);
+
+      if (empleados) {
+        empleados.forEach(emp => {
+          if (emp.zkteco_user_id) {
+            empresaMap.set(emp.zkteco_user_id, emp.empresa_id);
+          }
+        });
+      }
     }
 
     for (const line of lines) {
@@ -101,11 +187,14 @@ export async function POST(request: NextRequest) {
         else if (parts[2] === '4') metodo_verificacion = 'CARD';
         else if (parts[2] === '3') metodo_verificacion = 'PASS';
 
+        // Obtener el empresa_id correcto del empleado o usar el default
+        const recordEmpresaId = empresaMap.get(zkteco_user_id) || defaultEmpresaId;
+
         // Parsear fecha y hora
         try {
           const timestamp = new Date(timestampStr).toISOString();
           records.push({
-            empresa_id: empresaId,
+            empresa_id: recordEmpresaId,
             zkteco_user_id,
             dispositivo_sn: sn,
             timestamp,

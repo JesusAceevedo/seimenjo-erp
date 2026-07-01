@@ -11,6 +11,10 @@ const nextConfig: NextConfig = {
         source: '/iclock/getrequest',
         destination: '/api/zkteco/push',
       },
+      {
+        source: '/iclock/devicecmd',
+        destination: '/api/zkteco/push',
+      },
     ];
   },
 };

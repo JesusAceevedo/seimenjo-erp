@@ -387,6 +387,22 @@ export default function AsistenciaNominasPage() {
         if (error) throw error;
       }
 
+      // Encolar comando para el reloj checador físico
+      if (payload.zkteco_user_id) {
+        const nameText = `${payload.primer_nombre} ${payload.primer_apellido}`.trim();
+        const cmdText = `DATA UPDATE USERINFO PIN=${payload.zkteco_user_id}\tName=${nameText}\tPri=0\tPass=\tCard=\tGrp=1`;
+        const cmdId = Math.floor(100000 + Math.random() * 900000).toString();
+
+        await supabase
+          .from('zkteco_comandos')
+          .insert({
+            empresa_id: empresaId,
+            comando_id: cmdId,
+            comando_texto: cmdText,
+            procesado: false
+          });
+      }
+
       setSelectedEmpleado(null);
       setEmpleadoForm({
         usuario_staff_id: '',
