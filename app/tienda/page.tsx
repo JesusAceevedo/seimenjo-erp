@@ -219,6 +219,7 @@ export default function Tienda() {
     if (carrito.length === 0) return;
     setEnviando(true);
 
+    let pedidoId = null;
     try {
       const sesionInfo = sesion as unknown as { tipo?: string; id?: string; empresa_id?: string; [key: string]: unknown };
       // 1. Insertar el Pedido
@@ -234,10 +235,9 @@ export default function Tienda() {
         .single();
 
       if (pedidoError) throw pedidoError;
+      pedidoId = pedidoData.id;
 
       // 2. Insertar Detalles con validación de UUID
-      const pedidoId = pedidoData.id;
-
       const detallesAInsertar = carrito.map(item => ({
         pedido_id: pedidoId, 
         variante_id: item.variante_id, 
@@ -262,6 +262,11 @@ export default function Tienda() {
       const message = err instanceof Error ? err.message : 'Error desconocido';
       console.error("Error al procesar el pedido:", err);
       alert(`Error al enviar: ${message}`);
+
+      // Limpiar pedido huérfano si fallaron los detalles para evitar registros duplicados/incompletos
+      if (pedidoId) {
+        await supabase.from('pedidos').delete().eq('id', pedidoId);
+      }
     } finally {
       setEnviando(false);
     }

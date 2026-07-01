@@ -115,7 +115,16 @@ export async function ensureBasicStatuses(): Promise<void> {
 function esMovimientoEfectivo(concepto: string): boolean {
   if (!concepto) return false;
   const c = concepto.toUpperCase();
-  return c.includes('EFECTIVO') || c.includes('CAJERO') || c.includes('RETIRO CAJERO') || c.includes('DEPOSITO CAJERO');
+  return (
+    c.includes('EFECTIVO') ||
+    c.includes('CAJERO') ||
+    c.includes('RETIRO CAJERO') ||
+    c.includes('DEPOSITO CAJERO') ||
+    c.includes('PRACTICAJA') ||
+    c.includes('DISP.') ||
+    c.includes('DISPOSICIÓN') ||
+    c.includes('DISPOSICION')
+  );
 }
 
 function obtenerMetodoPagoBanco(concepto: string): '01' | '03' | '04_28' | 'unknown' {
@@ -181,12 +190,37 @@ export async function importarMovimientosBancarios(
 
     const estatusId = statusPendiente?.id;
 
+    // Obtener cuentas bancarias para el auto-enrutamiento
+    const { data: cuentas } = await supabaseAdmin
+      .from('cuentas_bancarias')
+      .select('id, nombre');
+
+    const bbvaAcc = cuentas?.find(c => c.nombre.toUpperCase() === 'BBVA');
+    const cajaAcc = cuentas?.find(c => c.nombre.toUpperCase().includes('CAJA CHICA'));
+    const parrotAcc = cuentas?.find(c => c.nombre.toUpperCase() === 'PARROT');
+
+    const bbvaId = bbvaAcc?.id;
+    const cajaId = cajaAcc?.id;
+    const parrotId = parrotAcc?.id;
+
     const formattedMovements = movements.map((m) => {
       const r = Math.abs(parseNumberClean(m.retiro));
       const d = Math.abs(parseNumberClean(m.deposito));
       const montoVal = d - r;
       const tipo = d > 0 ? 'Deposito' : 'Retiro';
       const rfc = extraerRfcDeConcepto(m.concepto);
+
+      // Enrutamiento automático
+      const conceptoUpper = (m.concepto || '').toUpperCase();
+      let targetCuentaId = cuentaBancariaId || null;
+
+      if (conceptoUpper.includes('OELTRANSFER')) {
+        targetCuentaId = parrotId || targetCuentaId;
+      } else if (esMovimientoEfectivo(m.concepto || '')) {
+        targetCuentaId = cajaId || targetCuentaId;
+      } else {
+        targetCuentaId = bbvaId || targetCuentaId;
+      }
 
       // Parse date format DD-MM-YYYY, YYYY-MM-DD, or Excel serial number
       let fechaFormatted = m.fecha;
@@ -244,25 +278,17 @@ export async function importarMovimientosBancarios(
         estatus_conciliacion_id: estatusId,
         rfc_proveedor: rfc,
         empresa_id: empresaId,
-        cuenta_bancaria_id: cuentaBancariaId || null,
+        cuenta_bancaria_id: targetCuentaId,
         visible_egresos: false,
         visible_ingresos: false
       };
     });
 
-    // Check for duplicates in the DB for this company and account
-    let query = supabaseAdmin
+    // Check for duplicates in the DB globally for this company (across all accounts)
+    const { data: existingMovements, error: fetchErr } = await supabaseAdmin
       .from('movimientos_bancarios')
       .select('fecha, concepto, monto, referencia, cuenta_bancaria_id')
       .eq('empresa_id', empresaId);
-
-    if (cuentaBancariaId) {
-      query = query.eq('cuenta_bancaria_id', cuentaBancariaId);
-    } else {
-      query = query.is('cuenta_bancaria_id', null);
-    }
-
-    const { data: existingMovements, error: fetchErr } = await query;
     if (fetchErr) throw fetchErr;
 
     const makeKey = (item: {
@@ -699,6 +725,7 @@ export async function guardarConciliacionManual(
     xmlUrl?: string | null;
     pdfFacturaUrl?: string | null;
     pdfTicketUrl?: string | null;
+    soporteReembolsoUrl?: string | null;
     storageProvider?: 'Supabase' | 'GoogleDrive';
     estatusClave?: string;
   },
@@ -825,9 +852,12 @@ export async function guardarConciliacionManual(
     if (!payload.estatusClave) {
       const hasXml = !!payload.xmlUrl || !!mov.xml_url || !!associatedXml;
       const hasTicket = !!payload.pdfTicketUrl || !!mov.pdf_ticket_url || !!associatedTicket;
+      const hasSoporte = !!payload.soporteReembolsoUrl || !!mov.soporte_reembolso_url;
       const isCash = esMovimientoEfectivo(mov.concepto);
 
-      if (isCash) {
+      if (hasSoporte) {
+        targetStatusClave = 'comprobado';
+      } else if (isCash) {
         targetStatusClave = hasTicket ? 'comprobado' : 'incompleto_comprobado';
       } else {
         const hasInvoice = (mov.tipo_movimiento === 'Deposito') || (payload.gastosIds.length > 0);
@@ -852,6 +882,7 @@ export async function guardarConciliacionManual(
     updatePayload.xml_url = payload.xmlUrl || associatedXml || mov.xml_url || null;
     updatePayload.pdf_factura_url = payload.pdfFacturaUrl || associatedPdf || mov.pdf_factura_url || null;
     updatePayload.pdf_ticket_url = payload.pdfTicketUrl || associatedTicket || mov.pdf_ticket_url || null;
+    updatePayload.soporte_reembolso_url = payload.soporteReembolsoUrl || mov.soporte_reembolso_url || null;
     if (payload.storageProvider !== undefined) updatePayload.storage_provider = payload.storageProvider;
 
     const { error: updateMovErr } = await supabaseAdmin
@@ -1119,3 +1150,108 @@ export async function desconciliarMovimientoBancario(
     return { success: false, error: err.message || 'Error al desconciliar el movimiento bancario' };
   }
 }
+
+export async function conciliarGastoEfectivoAutomatico(
+  gastoId: string,
+  token: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { empresaId } = await getUserEmpresaId(token);
+
+    // 1. Obtener detalles del gasto
+    const { data: gasto, error: gErr } = await supabaseAdmin
+      .from('gastos')
+      .select('*, proveedores(rfc)')
+      .eq('id', gastoId)
+      .eq('empresa_id', empresaId)
+      .single();
+
+    if (gErr || !gasto) throw new Error('Gasto no encontrado.');
+
+    // Validar que sea efectivo
+    const metodo = String(gasto.metodo_pago || '').toLowerCase();
+    if (!metodo.includes('efectivo') && !metodo.includes('01')) {
+      return { success: true }; // No hacer nada si no es efectivo
+    }
+
+    // 2. Buscar cuenta de Caja Chica
+    const { data: accounts } = await supabaseAdmin
+      .from('cuentas_bancarias')
+      .select('id, nombre')
+      .eq('empresa_id', empresaId);
+
+    let cajaChica = accounts?.find(a => a.nombre.toUpperCase().includes('CAJA CHICA'));
+    if (!cajaChica) {
+      // Si no existe, crear una cuenta de Caja Chica por defecto
+      const { data: newCaja, error: createAccErr } = await supabaseAdmin
+        .from('cuentas_bancarias')
+        .insert({
+          nombre: 'Caja Chica',
+          moneda: 'MXN',
+          empresa_id: empresaId
+        })
+        .select('id, nombre')
+        .single();
+      if (createAccErr) throw createAccErr;
+      cajaChica = newCaja;
+    }
+
+    // 3. Obtener el estatus 'comprobado' (Conciliado)
+    const { data: statusConciliado } = await supabaseAdmin
+      .from('estatus_conciliacion_bancaria')
+      .select('id')
+      .eq('clave', 'comprobado')
+      .single();
+
+    if (!statusConciliado) throw new Error('Estatus de conciliación "comprobado" no encontrado.');
+
+    // 4. Crear el movimiento bancario correspondiente en Caja Chica
+    const { data: movement, error: movError } = await supabaseAdmin
+      .from('movimientos_bancarios')
+      .insert({
+        fecha: gasto.fecha_gasto,
+        concepto: gasto.concepto || 'Gasto en Efectivo',
+        retiro: gasto.monto,
+        deposito: 0,
+        monto: -gasto.monto,
+        tipo_movimiento: 'Retiro',
+        cuenta_bancaria_id: cajaChica.id,
+        estatus_conciliacion_id: statusConciliado.id,
+        empresa_id: empresaId,
+        visible_egresos: true,
+        visible_ingresos: false,
+        rfc_proveedor: gasto.proveedores?.rfc || null
+      })
+      .select('id')
+      .single();
+
+    if (movError || !movement) throw movError || new Error('No se pudo crear el movimiento bancario.');
+
+    // 5. Vincular el gasto con el movimiento bancario
+    const { error: updateGastoErr } = await supabaseAdmin
+      .from('gastos')
+      .update({ movimiento_bancario_id: movement.id })
+      .eq('id', gasto.id)
+      .eq('empresa_id', empresaId);
+
+    if (updateGastoErr) throw updateGastoErr;
+
+    // 6. Registrar en conciliaciones_bancarias
+    const { error: jErr } = await supabaseAdmin
+      .from('conciliaciones_bancarias')
+      .insert({
+        movimiento_id: movement.id,
+        gasto_id: gasto.id,
+        monto_asociado: gasto.monto,
+        empresa_id: empresaId
+      });
+
+    if (jErr) throw jErr;
+
+    return { success: true };
+  } catch (err: any) {
+    console.error('Error in conciliarGastoEfectivoAutomatico:', err);
+    return { success: false, error: err.message || 'Error al auto-conciliar gasto en efectivo.' };
+  }
+}
+

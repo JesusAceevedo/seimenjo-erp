@@ -11,7 +11,7 @@ import React from 'react';
 import {
   FileCode, FileText, CreditCard, List, Scale, Settings,
   ArrowRightLeft, Play, RefreshCw, FileSpreadsheet, Plus, Trash2, Edit3,
-  Layers, Check, X
+  Layers, Check, X, UploadCloud
 } from 'lucide-react';
 import { formatCurrency } from '../../../../lib/formatters';
 import type { MovimientoBancario, EstatusConciliacion, GastoReconciliable, FormaPago } from '../../types';
@@ -25,6 +25,7 @@ interface ReconcileModalState {
   xmlUrl: string;
   pdfFacturaUrl: string;
   pdfTicketUrl: string;
+  soporteReembolsoUrl: string;
   storageProvider: 'Supabase' | 'GoogleDrive';
   gastosSeleccionados: string[];
   pedidosSeleccionados: string[];
@@ -104,7 +105,9 @@ export interface BancoTabProps {
   manualMatchSearch: string;
   setManualMatchSearch: (v: string) => void;
   handleOpenReconcileModal?: (m: MovimientoBancario) => void;
-  handleSaveReconciliation?: (customGastosIds?: string[], customEstatusClave?: string) => void;
+  handleSaveReconciliation?: (customGastosIds?: string[], customEstatusClave?: string, customPedidosIds?: string[]) => void;
+  handleUploadReconciliationFile?: (e: React.ChangeEvent<HTMLInputElement>, field: 'xml' | 'pdf' | 'ticket' | 'soporte_reembolso') => Promise<void>;
+  handleRemoveReconciliationFile?: (field: 'xml' | 'pdf' | 'ticket' | 'soporte_reembolso', indexToRemove: number) => void;
   handleToggleVisibility: (id: string, modulo: 'egresos'|'ingresos', visible: boolean) => void;
   handleUpdateCategoria?: (movimientoId: string, categoriaId: string) => void;
 
@@ -135,6 +138,7 @@ export interface BancoTabProps {
   selectedCuentaId: string;
   setSelectedCuentaId: (id: string) => void;
   handleUnlinkReconciliation?: (movimientoId: string) => void;
+  handleBulkMoveMovimientos?: (movimientoIds: string[], cuentaBancariaId: string | null) => Promise<void>;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -265,6 +269,7 @@ export default function BancoTab({
   reconcileModal, setReconcileModal,
   manualMatchSearch, setManualMatchSearch,
   handleOpenReconcileModal, handleSaveReconciliation,
+  handleUploadReconciliationFile, handleRemoveReconciliationFile,
   handleToggleVisibility, handleUpdateCategoria,
   selectedGlobalDepositId, setSelectedGlobalDepositId,
   selectedGlobalPedidosIds, setSelectedGlobalPedidosIds,
@@ -282,6 +287,7 @@ export default function BancoTab({
   setSelectedCuentaId,
   onViewCfdi,
   handleUnlinkReconciliation,
+  handleBulkMoveMovimientos,
 }: BancoTabProps) {
 
   const [tiposSelected, setTiposSelected] = React.useState<string[]>([]);
@@ -290,22 +296,196 @@ export default function BancoTab({
   const [categoriasSelected, setCategoriasSelected] = React.useState<string[]>([]);
   const [selectedMovimientos, setSelectedMovimientos] = React.useState<string[]>([]);
 
+  const [uploadedXmlAmounts, setUploadedXmlAmounts] = React.useState<{[key: string]: number}>({});
+
+  const parseXmlTotal = (file: File): Promise<number> => {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const text = e.target?.result as string;
+          const parser = new DOMParser();
+          const xmlDoc = parser.parseFromString(text, 'application/xml');
+          const comprobante = xmlDoc.getElementsByTagName('cfdi:Comprobante')[0] || xmlDoc.getElementsByTagName('Comprobante')[0];
+          if (!comprobante) {
+            resolve(0);
+            return;
+          }
+          const tipoDeComprobante = comprobante.getAttribute('TipoDeComprobante') || comprobante.getAttribute('tipoDeComprobante') || 'I';
+          let total = parseFloat(comprobante.getAttribute('Total') || comprobante.getAttribute('total') || '0');
+          
+          const pagoNodes = xmlDoc.getElementsByTagName('pago20:Pago').length > 0
+            ? xmlDoc.getElementsByTagName('pago20:Pago')
+            : xmlDoc.getElementsByTagName('pago10:Pago').length > 0
+              ? xmlDoc.getElementsByTagName('pago10:Pago')
+              : xmlDoc.getElementsByTagName('Pago');
+          if (tipoDeComprobante === 'P' || pagoNodes.length > 0) {
+            let totalPago = 0;
+            for (let i = 0; i < pagoNodes.length; i++) {
+              totalPago += parseFloat(pagoNodes[i].getAttribute('Monto') || pagoNodes[i].getAttribute('monto') || '0');
+            }
+            total = totalPago;
+          }
+          resolve(total);
+        } catch (err) {
+          console.error('Error parsing XML total:', err);
+          resolve(0);
+        }
+      };
+      reader.onerror = () => resolve(0);
+      reader.readAsText(file);
+    });
+  };
+
+  const fetchAndParseXmlAmount = async (path: string): Promise<number> => {
+    try {
+      const { data } = supabase.storage.from('facturas').getPublicUrl(path);
+      if (!data?.publicUrl) return 0;
+      const res = await fetch(data.publicUrl);
+      if (!res.ok) return 0;
+      const text = await res.text();
+      const parser = new DOMParser();
+      const xmlDoc = parser.parseFromString(text, 'application/xml');
+      const comprobante = xmlDoc.getElementsByTagName('cfdi:Comprobante')[0] || xmlDoc.getElementsByTagName('Comprobante')[0];
+      if (!comprobante) return 0;
+      const tipoDeComprobante = comprobante.getAttribute('TipoDeComprobante') || comprobante.getAttribute('tipoDeComprobante') || 'I';
+      let total = parseFloat(comprobante.getAttribute('Total') || comprobante.getAttribute('total') || '0');
+      
+      const pagoNodes = xmlDoc.getElementsByTagName('pago20:Pago').length > 0
+        ? xmlDoc.getElementsByTagName('pago20:Pago')
+        : xmlDoc.getElementsByTagName('pago10:Pago').length > 0
+          ? xmlDoc.getElementsByTagName('pago10:Pago')
+          : xmlDoc.getElementsByTagName('Pago');
+      if (tipoDeComprobante === 'P' || pagoNodes.length > 0) {
+        let totalPago = 0;
+        for (let i = 0; i < pagoNodes.length; i++) {
+          totalPago += parseFloat(pagoNodes[i].getAttribute('Monto') || pagoNodes[i].getAttribute('monto') || '0');
+        }
+        total = totalPago;
+      }
+      return total;
+    } catch (err) {
+      console.error('Error fetching/parsing XML total:', err);
+      return 0;
+    }
+  };
+
+  React.useEffect(() => {
+    if (reconcileModal.open) {
+      const paths = reconcileModal.xmlUrl ? reconcileModal.xmlUrl.split(',').filter(Boolean) : [];
+      
+      // Clean up deleted paths
+      setUploadedXmlAmounts(prev => {
+        const next = { ...prev };
+        let changed = false;
+        Object.keys(next).forEach(key => {
+          const stillExists = paths.some(p => p === key || p.endsWith(key));
+          if (!stillExists) {
+            delete next[key];
+            changed = true;
+          }
+        });
+        return changed ? next : prev;
+      });
+
+      // Fetch newly added paths
+      paths.forEach((path) => {
+        setUploadedXmlAmounts(prev => {
+          if (prev[path]) return prev;
+          (async () => {
+            const amt = await fetchAndParseXmlAmount(path);
+            if (amt > 0) {
+              setUploadedXmlAmounts(p => ({ ...p, [path]: amt }));
+            }
+          })();
+          return prev;
+        });
+      });
+    } else {
+      setUploadedXmlAmounts({});
+    }
+  }, [reconcileModal.open, reconcileModal.xmlUrl]);
+
+  const handleXmlUploadChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const amount = await parseXmlTotal(file);
+      if (amount > 0) {
+        setUploadedXmlAmounts(prev => ({
+          ...prev,
+          [file.name]: amount
+        }));
+      }
+    }
+    if (handleUploadReconciliationFile) {
+      await handleUploadReconciliationFile(e, 'xml');
+    }
+  };
+
+  const renderFileListLocal = (field: 'xml' | 'pdf' | 'ticket' | 'soporte_reembolso') => {
+    const urlField = field === 'xml' ? 'xmlUrl' : field === 'pdf' ? 'pdfFacturaUrl' : field === 'ticket' ? 'pdfTicketUrl' : 'soporteReembolsoUrl';
+    const pathsStr = reconcileModal[urlField];
+    if (!pathsStr) return null;
+    const paths = pathsStr.split(',').filter(Boolean);
+
+    return (
+      <div className="space-y-1 w-full mt-1.5 font-sans">
+        {paths.map((path, idx) => {
+          const fileName = path.split('/').pop() || '';
+          const xmlAmount = field === 'xml' ? (uploadedXmlAmounts[path] || uploadedXmlAmounts[fileName]) : null;
+          return (
+            <div key={idx} className="flex flex-col gap-1 bg-white dark:bg-gray-900 p-1.5 rounded border border-gray-200 dark:border-gray-800 text-[10px]">
+              <div className="flex justify-between items-center w-full">
+                <span className="truncate max-w-[150px] font-semibold text-gray-700 dark:text-gray-300" title={fileName}>
+                  {fileName.length > 22 ? fileName.substring(0, 19) + '...' : fileName}
+                </span>
+                <div className="flex gap-1 items-center font-bold shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => onDownloadFile && onDownloadFile(path)}
+                    className="text-blue-500 hover:text-blue-600 text-[9px] uppercase hover:underline"
+                  >
+                    Ver
+                  </button>
+                  <span className="text-gray-300 dark:text-gray-700">|</span>
+                  <button
+                    type="button"
+                    onClick={() => handleRemoveReconciliationFile && handleRemoveReconciliationFile(field, idx)}
+                    className="text-red-500 hover:text-red-600 text-[9px] uppercase hover:underline"
+                  >
+                    Borrar
+                  </button>
+                </div>
+              </div>
+              {field === 'xml' && xmlAmount !== undefined && xmlAmount !== null && (
+                <div className="text-[9px] text-blue-600 dark:text-blue-400 font-extrabold flex justify-between items-center mt-0.5 border-t border-gray-100 dark:border-gray-850 pt-1">
+                  <span>Monto CFDI:</span>
+                  <span>{formatCurrency(xmlAmount)}</span>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
   const esMovimientoEfectivo = (concepto: string): boolean => {
     if (!concepto) return false;
     const c = concepto.toUpperCase();
     return c.includes('EFECTIVO') || c.includes('CAJERO') || c.includes('RETIRO CAJERO') || c.includes('DEPOSITO CAJERO');
   };
 
-  const autoEstatus = (gastosIds: string[]) => {
+  const autoEstatus = (gastosIds: string[], pedidosIds: string[] = []) => {
     const selectedGastos = gastosReconciliables.filter(g => gastosIds.includes(g.id));
-    const hasXml = selectedGastos.some(g => !!g.xml_url) || !!reconcileModal.movimiento?.xml_url;
-    const hasTicket = selectedGastos.some(g => !!g.ticket_url) || !!reconcileModal.movimiento?.pdf_ticket_url;
+    const hasXml = selectedGastos.some(g => !!g.xml_url) || !!reconcileModal.movimiento?.xml_url || !!reconcileModal.xmlUrl;
+    const hasTicket = selectedGastos.some(g => !!g.ticket_url) || !!reconcileModal.movimiento?.pdf_ticket_url || !!reconcileModal.pdfTicketUrl;
     
     const isCash = reconcileModal.movimiento ? esMovimientoEfectivo(reconcileModal.movimiento.concepto) : false;
     if (isCash) {
       return hasTicket ? 'comprobado' : 'incompleto_comprobado';
     } else {
-      const hasInvoice = (reconcileModal.movimiento?.tipo_movimiento === 'Deposito') || (gastosIds.length > 0);
+      const hasInvoice = (reconcileModal.movimiento?.tipo_movimiento === 'Deposito') || (gastosIds.length > 0) || (pedidosIds.length > 0);
       if (!hasInvoice) {
         return 'no_deducible';
       } else if (hasXml) {
@@ -806,23 +986,46 @@ export default function BancoTab({
                       Desmarcar todos
                     </button>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-[11px] text-gray-600 dark:text-gray-400 font-bold">Asignar Categoría en Lote:</span>
-                    <select
-                      onChange={(e) => {
-                        if (e.target.value !== '') {
-                          handleBulkUpdateCategory(e.target.value);
-                          e.target.value = '';
-                        }
-                      }}
-                      className="bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 px-2 py-1 rounded text-xs outline-none focus:ring-1 focus:ring-amber-500 text-gray-800 dark:text-gray-200 font-medium"
-                    >
-                      <option value="">-- Seleccionar categoría --</option>
-                      <option value="SIN_CATEGORIA">- Sin Categoría -</option>
-                      {categoriasMovimiento?.map(c => (
-                        <option key={c.id} value={c.id}>{c.nombre}</option>
-                      ))}
-                    </select>
+                  <div className="flex items-center gap-4 flex-wrap">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[11px] text-gray-600 dark:text-gray-400 font-bold">Asignar Categoría en Lote:</span>
+                      <select
+                        onChange={(e) => {
+                          if (e.target.value !== '') {
+                            handleBulkUpdateCategory(e.target.value);
+                            e.target.value = '';
+                          }
+                        }}
+                        className="bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 px-2 py-1 rounded text-xs outline-none focus:ring-1 focus:ring-amber-500 text-gray-800 dark:text-gray-200 font-medium"
+                      >
+                        <option value="">-- Seleccionar categoría --</option>
+                        <option value="SIN_CATEGORIA">- Sin Categoría -</option>
+                        {categoriasMovimiento?.map(c => (
+                          <option key={c.id} value={c.id}>{c.nombre}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <span className="text-[11px] text-gray-600 dark:text-gray-400 font-bold">Mover a Cuenta en Lote:</span>
+                      <select
+                        onChange={(e) => {
+                          if (e.target.value !== '') {
+                            const targetCuentaId = e.target.value === 'SIN_CUENTA' ? null : e.target.value;
+                            handleBulkMoveMovimientos?.(selectedMovimientos, targetCuentaId);
+                            setSelectedMovimientos([]);
+                            e.target.value = '';
+                          }
+                        }}
+                        className="bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 px-2 py-1 rounded text-xs outline-none focus:ring-1 focus:ring-amber-500 text-gray-800 dark:text-gray-200 font-medium"
+                      >
+                        <option value="">-- Seleccionar cuenta --</option>
+                        <option value="SIN_CUENTA">- Sin Cuenta -</option>
+                        {cuentasBancarias?.map(c => (
+                          <option key={c.id} value={c.id}>{c.nombre} ({c.moneda})</option>
+                        ))}
+                      </select>
+                    </div>
                   </div>
                 </div>
               )}
@@ -860,7 +1063,11 @@ export default function BancoTab({
                   </thead>
                   <tbody className="divide-y divide-gray-100 dark:divide-gray-800/60 font-sans">
                     {paginated.length === 0 ? (
-                      <tr><td colSpan={9} className="p-8 text-center text-gray-400 italic">No se encontraron movimientos bancarios</td></tr>
+                      <tr>
+                        <td colSpan={9} className="p-8 text-center text-gray-400 italic">
+                          No se encontraron movimientos bancarios (Total cargados: {movimientos?.length || 0}, Filtrados: {filtered?.length || 0})
+                        </td>
+                      </tr>
                     ) : paginated.map((m) => {
                       const color = m.estatus_conciliacion_bancaria?.color || '#9CA3AF';
                       const dateStr = new Date(m.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' });
@@ -1243,163 +1450,400 @@ export default function BancoTab({
       </div>
 
       {/* ── MODAL DE CONCILIACIÓN MANUAL (overlay global) ──────────────────── */}
-      {reconcileModal.open && reconcileModal.movimiento && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4"
-          onClick={(e) => { if (e.target === e.currentTarget) setReconcileModal((p) => ({ ...p, open: false })); }}>
-          <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-2xl w-full max-w-2xl shadow-2xl max-h-[90vh] overflow-y-auto p-6 space-y-4">
-            <div className="flex items-start justify-between">
+      {reconcileModal.open && reconcileModal.movimiento && (() => {
+        const isOutflow = reconcileModal.movimiento.tipo_movimiento === 'Retiro';
+        return (
+          <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+            onClick={(e) => { if (e.target === e.currentTarget) setReconcileModal((p) => ({ ...p, open: false })); }}>
+            <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-2xl w-full max-w-4xl shadow-2xl max-h-[95vh] overflow-y-auto p-6 space-y-4 font-sans">
+              <div className="flex items-start justify-between">
+                <div>
+                  <h3 className="text-lg font-extrabold text-gray-900 dark:text-white">
+                    Conciliación de Movimiento - {reconcileModal.movimiento.fecha ? new Date(reconcileModal.movimiento.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : 'Sin Fecha'}
+                  </h3>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    Movimiento: <strong>{reconcileModal.movimiento.concepto}</strong> — {formatCurrency(reconcileModal.movimiento.monto)} {reconcileModal.movimiento.fecha && `— ${new Date(reconcileModal.movimiento.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })}`}
+                  </p>
+                </div>
+                <button onClick={() => setReconcileModal((p) => ({ ...p, open: false }))}
+                  className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400 hover:text-gray-600 transition-colors">
+                  <X size={18} />
+                </button>
+              </div>
+
+              {/* Búsqueda */}
               <div>
-                <h3 className="text-lg font-bold">Conciliación Manual</h3>
-                <p className="text-xs text-gray-500 mt-0.5">
-                  Movimiento: <strong>{reconcileModal.movimiento.concepto}</strong> — {formatCurrency(reconcileModal.movimiento.monto)}
-                </p>
+                <label className="text-xs font-bold text-gray-500 block mb-1">
+                  {isOutflow ? 'Buscar egreso' : 'Buscar pedido'}
+                </label>
+                <input type="text" value={manualMatchSearch} placeholder="Concepto, monto, RFC, número..."
+                  onChange={(e) => setManualMatchSearch(e.target.value)}
+                  className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs text-gray-900 dark:text-white focus:ring-1 focus:ring-amber-500 outline-none transition-all" />
               </div>
-              <button onClick={() => setReconcileModal((p) => ({ ...p, open: false }))}
-                className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400 hover:text-gray-600 transition-colors">
-                <X size={18} />
-              </button>
-            </div>
 
-            {/* Búsqueda */}
-            <div>
-              <label className="text-xs font-bold text-gray-500 block mb-1">Buscar egreso o pedido</label>
-              <input type="text" value={manualMatchSearch} placeholder="Concepto, monto, RFC..."
-                onChange={(e) => setManualMatchSearch(e.target.value)}
-                className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs text-gray-900 dark:text-white focus:ring-1 focus:ring-amber-500 outline-none transition-all" />
-            </div>
+              {/* Lista de egresos o pedidos reconciliables */}
+              <div>
+                <label className="text-xs font-bold text-gray-500 block mb-2">
+                  {isOutflow ? 'Egresos del Sistema' : 'Pedidos/Ventas del Sistema'}
+                </label>
+                <div className="space-y-1 max-h-80 overflow-y-auto border border-gray-200 dark:border-gray-800 rounded-xl">
+                  {isOutflow ? (
+                    gastosReconciliables
+                      .filter((g) => {
+                        // Excluir egresos en efectivo
+                        const metodo = String(g.metodo_pago || '').toLowerCase();
+                        if (metodo.includes('efectivo') || metodo.includes('01')) {
+                          return false;
+                        }
 
-            {/* Lista de gastos reconciliables */}
-            <div>
-              <label className="text-xs font-bold text-gray-500 block mb-2">Egresos del Sistema</label>
-              <div className="space-y-1 max-h-48 overflow-y-auto border border-gray-200 dark:border-gray-800 rounded-xl">
-                {gastosReconciliables
-                  .filter((g) => {
-                    if (!manualMatchSearch.trim()) return true;
-                    const s = manualMatchSearch.toLowerCase();
-                    const provArr = g.proveedores;
-                    const proveedor = Array.isArray(provArr) ? provArr[0] : provArr;
-                    return (
-                      g.concepto?.toLowerCase().includes(s) || 
-                      String(g.monto).includes(s) ||
-                      proveedor?.nombre_comercial?.toLowerCase().includes(s) ||
-                      proveedor?.rfc?.toLowerCase().includes(s)
-                    );
-                  })
-                  .map((g) => {
-                    const provArr = g.proveedores;
-                    const proveedor = Array.isArray(provArr) ? provArr[0] : provArr;
-                    return (
-                      <div key={g.id} className="flex items-center justify-between gap-3 p-2.5 hover:bg-gray-50 dark:hover:bg-gray-900/30 border-b border-gray-100 dark:border-gray-900 last:border-0 font-sans">
-                        <label className="flex items-center gap-3 flex-1 min-w-0 cursor-pointer">
-                          <input type="checkbox" checked={reconcileModal.gastosSeleccionados.includes(g.id)}
-                            onChange={() => {
-                              setReconcileModal((p) => {
-                                const sel = [...p.gastosSeleccionados];
-                                const idx = sel.indexOf(g.id);
-                                idx > -1 ? sel.splice(idx, 1) : sel.push(g.id);
-                                
-                                const nextStatus = autoEstatus(sel);
-                                
-                                return { 
-                                  ...p, 
-                                  gastosSeleccionados: sel,
-                                  estatusClave: nextStatus
-                                };
-                              });
-                            }}
-                            className="w-4 h-4 rounded text-amber-500 focus:ring-amber-500 bg-white dark:bg-gray-950 border-gray-300 dark:border-gray-700" />
-                          <div className="flex-1 min-w-0">
-                            <div className="text-xs font-semibold text-gray-800 dark:text-gray-200 truncate">{g.concepto}</div>
-                            <div className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5 flex flex-wrap gap-x-2 gap-y-0.5 items-center font-medium">
-                              <span className="font-bold text-gray-700 dark:text-gray-300">{formatCurrency(g.monto)}</span>
-                              <span>•</span>
-                              <span>{g.fecha_gasto ? new Date(g.fecha_gasto).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : 'Sin fecha'}</span>
-                              {proveedor?.nombre_comercial && (
-                                <>
+                        if (!manualMatchSearch.trim()) return true;
+                        const s = manualMatchSearch.toLowerCase();
+                        const provArr = g.proveedores;
+                        const proveedor = Array.isArray(provArr) ? provArr[0] : provArr;
+                        return (
+                          g.concepto?.toLowerCase().includes(s) || 
+                          String(g.monto).includes(s) ||
+                          proveedor?.nombre_comercial?.toLowerCase().includes(s) ||
+                          proveedor?.rfc?.toLowerCase().includes(s)
+                        );
+                      })
+                      .map((g) => {
+                        const provArr = g.proveedores;
+                        const proveedor = Array.isArray(provArr) ? provArr[0] : provArr;
+                        return (
+                          <div key={g.id} className="flex items-center justify-between gap-3 p-2.5 hover:bg-gray-50 dark:hover:bg-gray-900/30 border-b border-gray-100 dark:border-gray-900 last:border-0 font-sans">
+                            <label className="flex items-center gap-3 flex-1 min-w-0 cursor-pointer">
+                              <input type="checkbox" checked={reconcileModal.gastosSeleccionados.includes(g.id)}
+                                onChange={() => {
+                                  setReconcileModal((p) => {
+                                    const sel = [...p.gastosSeleccionados];
+                                    const idx = sel.indexOf(g.id);
+                                    idx > -1 ? sel.splice(idx, 1) : sel.push(g.id);
+                                    
+                                    const nextStatus = autoEstatus(sel, p.pedidosSeleccionados);
+                                    
+                                    return { 
+                                      ...p, 
+                                      gastosSeleccionados: sel,
+                                      estatusClave: nextStatus
+                                    };
+                                  });
+                                }}
+                                className="w-4 h-4 rounded text-amber-500 focus:ring-amber-500 bg-white dark:bg-gray-950 border-gray-300 dark:border-gray-700" />
+                              <div className="flex-1 min-w-0">
+                                <div className="text-xs font-semibold text-gray-800 dark:text-gray-200 truncate">{g.concepto}</div>
+                                <div className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5 flex flex-wrap gap-x-2 gap-y-0.5 items-center font-medium">
+                                  <span className="font-bold text-gray-700 dark:text-gray-300">{formatCurrency(g.monto)}</span>
                                   <span>•</span>
-                                  <span className="text-blue-600 dark:text-blue-400 font-semibold">{proveedor.nombre_comercial}</span>
-                                </>
-                              )}
-                              {g.metodo_pago && (
-                                <>
-                                  <span>•</span>
-                                  <span className="bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-400 px-1.5 py-0.5 rounded text-[9px] font-bold">
-                                    {getMetodoPagoLabel(g.metodo_pago)}
-                                  </span>
-                                </>
-                              )}
-                            </div>
+                                  <span>{g.fecha_gasto ? new Date(g.fecha_gasto).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : 'Sin fecha'}</span>
+                                  {proveedor?.nombre_comercial && (
+                                    <>
+                                      <span>•</span>
+                                      <span className="text-blue-600 dark:text-blue-400 font-semibold">{proveedor.nombre_comercial}</span>
+                                    </>
+                                  )}
+                                  {g.metodo_pago && (
+                                    <>
+                                      <span>•</span>
+                                      <span className="bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-400 px-1.5 py-0.5 rounded text-[9px] font-bold">
+                                        {getMetodoPagoLabel(g.metodo_pago)}
+                                      </span>
+                                    </>
+                                  )}
+                                </div>
+                              </div>
+                            </label>
+                            
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (handleSaveReconciliation) {
+                                  const nextStatus = autoEstatus([g.id], []);
+                                  handleSaveReconciliation([g.id], nextStatus, []);
+                                }
+                              }}
+                              className="px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-[10px] font-bold shadow transition-all shrink-0"
+                            >
+                              Conciliar
+                            </button>
                           </div>
-                        </label>
-                        
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (handleSaveReconciliation) {
-                              const nextStatus = autoEstatus([g.id]);
-                              handleSaveReconciliation([g.id], nextStatus);
-                            }
-                          }}
-                          className="px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-[10px] font-bold shadow transition-all shrink-0"
-                        >
-                          Conciliar
-                        </button>
+                        );
+                      })
+                  ) : (
+                    pedidosPendientes
+                      .filter((p) => {
+                        if (!manualMatchSearch.trim()) return true;
+                        const s = manualMatchSearch.toLowerCase();
+                        return (
+                          p.numero_pedido?.toLowerCase().includes(s) || 
+                          String(p.precio_total).includes(s) ||
+                          p.cliente_nombre?.toLowerCase().includes(s)
+                        );
+                      })
+                      .map((p) => {
+                        return (
+                          <div key={p.id} className="flex items-center justify-between gap-3 p-2.5 hover:bg-gray-50 dark:hover:bg-gray-900/30 border-b border-gray-100 dark:border-gray-900 last:border-0 font-sans">
+                            <label className="flex items-center gap-3 flex-1 min-w-0 cursor-pointer">
+                              <input type="checkbox" checked={reconcileModal.pedidosSeleccionados.includes(p.id)}
+                                onChange={() => {
+                                  setReconcileModal((prev) => {
+                                    const sel = [...prev.pedidosSeleccionados];
+                                    const idx = sel.indexOf(p.id);
+                                    idx > -1 ? sel.splice(idx, 1) : sel.push(p.id);
+                                    
+                                    const nextStatus = autoEstatus(prev.gastosSeleccionados, sel);
+                                    
+                                    return { 
+                                      ...prev, 
+                                      pedidosSeleccionados: sel,
+                                      estatusClave: nextStatus
+                                    };
+                                  });
+                                }}
+                                className="w-4 h-4 rounded text-amber-500 focus:ring-amber-500 bg-white dark:bg-gray-950 border-gray-300 dark:border-gray-700" />
+                              <div className="flex-1 min-w-0">
+                                <div className="text-xs font-semibold text-gray-800 dark:text-gray-200 truncate">Pedido #{p.numero_pedido}</div>
+                                <div className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5 flex flex-wrap gap-x-2 gap-y-0.5 items-center font-medium">
+                                  <span className="font-bold text-gray-700 dark:text-gray-300">{formatCurrency(p.precio_total)}</span>
+                                  <span>•</span>
+                                  <span>{p.fecha_pedido ? new Date(p.fecha_pedido).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : 'Sin fecha'}</span>
+                                  {p.cliente_nombre && (
+                                    <>
+                                      <span>•</span>
+                                      <span className="text-blue-600 dark:text-blue-400 font-semibold">{p.cliente_nombre}</span>
+                                    </>
+                                  )}
+                                </div>
+                              </div>
+                            </label>
+                            
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (handleSaveReconciliation) {
+                                  const nextStatus = autoEstatus([], [p.id]);
+                                  handleSaveReconciliation([], nextStatus, [p.id]);
+                                }
+                              }}
+                              className="px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-[10px] font-bold shadow transition-all shrink-0"
+                            >
+                              Conciliar
+                            </button>
+                          </div>
+                        );
+                      })
+                  )}
+                  {isOutflow && gastosReconciliables.length === 0 && (
+                    <div className="p-4 text-center text-xs text-gray-400 italic">No hay egresos sin conciliar</div>
+                  )}
+                  {!isOutflow && pedidosPendientes.length === 0 && (
+                    <div className="p-4 text-center text-xs text-gray-400 italic">No hay pedidos/ventas sin conciliar</div>
+                  )}
+                </div>
+              </div>
+
+              {/* Adjuntar Archivos (XML, PDF, Ticket, Soporte) */}
+              <div className="space-y-3 p-3.5 bg-gray-50 dark:bg-gray-900/30 border border-gray-200 dark:border-gray-800 rounded-xl font-sans shadow-sm">
+                <span className="text-xs font-bold text-gray-600 dark:text-gray-400 block">Adjuntar Facturas, Tickets o Soportes a este Movimiento</span>
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                  
+                  {/* Columna XML */}
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-gray-500 block">Archivo XML (CFDI)</label>
+                    <div className="relative overflow-hidden shrink-0">
+                      <input
+                        type="file"
+                        accept=".xml"
+                        onChange={handleXmlUploadChange}
+                        disabled={reconcileModal.loading}
+                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
+                      />
+                      <button
+                        type="button"
+                        disabled={reconcileModal.loading}
+                        className="w-full py-1.5 bg-blue-500 hover:bg-blue-600 disabled:opacity-50 text-white rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1 shadow"
+                      >
+                        <UploadCloud size={14} /> Subir XML
+                      </button>
+                    </div>
+                    {renderFileListLocal('xml')}
+                  </div>
+
+                  {/* Columna PDF */}
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-gray-500 block">Representación PDF</label>
+                    <div className="relative overflow-hidden shrink-0">
+                      <input
+                        type="file"
+                        accept=".pdf"
+                        onChange={(e) => handleUploadReconciliationFile && handleUploadReconciliationFile(e, 'pdf')}
+                        disabled={reconcileModal.loading}
+                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
+                      />
+                      <button
+                        type="button"
+                        disabled={reconcileModal.loading}
+                        className="w-full py-1.5 bg-red-500 hover:bg-red-600 disabled:opacity-50 text-white rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1 shadow"
+                      >
+                        <UploadCloud size={14} /> Subir PDF
+                      </button>
+                    </div>
+                    {renderFileListLocal('pdf')}
+                  </div>
+
+                  {/* Columna Ticket */}
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-gray-500 block">Ticket / Comprobante</label>
+                    <div className="relative overflow-hidden shrink-0">
+                      <input
+                        type="file"
+                        accept="image/*,.pdf"
+                        onChange={(e) => handleUploadReconciliationFile && handleUploadReconciliationFile(e, 'ticket')}
+                        disabled={reconcileModal.loading}
+                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
+                      />
+                      <button
+                        type="button"
+                        disabled={reconcileModal.loading}
+                        className="w-full py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1 shadow"
+                      >
+                        <UploadCloud size={14} /> Subir Ticket
+                      </button>
+                    </div>
+                    {renderFileListLocal('ticket')}
+                  </div>
+
+                  {/* Columna Soporte Reembolso */}
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-gray-500 block">Soporte Reembolso</label>
+                    <div className="relative overflow-hidden shrink-0">
+                      <input
+                        type="file"
+                        accept="image/*,.pdf"
+                        onChange={(e) => handleUploadReconciliationFile && handleUploadReconciliationFile(e, 'soporte_reembolso')}
+                        disabled={reconcileModal.loading}
+                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
+                      />
+                      <button
+                        type="button"
+                        disabled={reconcileModal.loading}
+                        className="w-full py-1.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1 shadow"
+                      >
+                        <UploadCloud size={14} /> Subir Soporte
+                      </button>
+                    </div>
+                    {renderFileListLocal('soporte_reembolso')}
+                  </div>
+
+                </div>
+              </div>
+
+              {isOutflow && selectedGastosWithDiscrepancy.length > 0 && (
+                <div className="p-3.5 bg-amber-50 dark:bg-amber-955/20 border border-amber-250 dark:border-amber-900 rounded-xl text-amber-800 dark:text-amber-400 text-xs flex flex-col gap-1.5 font-sans shadow-sm">
+                  <span className="font-extrabold flex items-center gap-1">
+                    ⚠️ Advertencia Fiscal de Conciliación
+                  </span>
+                  <ul className="list-disc pl-4 space-y-1 font-medium">
+                    {selectedGastosWithDiscrepancy.map((item) => (
+                      <li key={item.gasto.id}>
+                        El egreso <strong>"{item.gasto.concepto}"</strong> indica forma de pago {item.gasto.metodo_pago ? getMetodoPagoLabel(item.gasto.metodo_pago) : 'Desconocida'}, pero el retiro bancario es electrónico/tarjeta/efectivo.
+                        <p className="italic text-[10px] opacity-90 mt-0.5">{item.disc.detalle}</p>
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="mt-1 text-[10px] font-semibold text-amber-700 dark:text-amber-300">
+                    Tip: Para mantener la congruencia fiscal, te recomendamos cambiar el estatus resultante a "Movimiento no Deducible" en el selector inferior.
+                  </p>
+                </div>
+              )}
+
+              {/* Resumen de montos y conciliación */}
+              {(() => {
+                const movMonto = Math.abs(Number(reconcileModal.movimiento.monto));
+                
+                const totalEgresosSistema = isOutflow 
+                  ? gastosReconciliables
+                      .filter((g) => reconcileModal.gastosSeleccionados.includes(g.id))
+                      .reduce((s, g) => s + Number(g.monto), 0)
+                  : pedidosPendientes
+                      .filter((p) => reconcileModal.pedidosSeleccionados.includes(p.id))
+                      .reduce((s, p) => s + Number(p.precio_total), 0);
+                
+                const totalXmlsCargados = Object.values(uploadedXmlAmounts).reduce((s, val) => s + val, 0);
+                const totalComprobado = totalEgresosSistema + totalXmlsCargados;
+                const dif = movMonto - totalComprobado;
+                const match = Math.abs(dif) < 0.05;
+                
+                return (
+                  <div className="p-4 bg-amber-500/10 border border-amber-500/20 rounded-xl flex justify-between items-center flex-wrap gap-4 font-sans">
+                    <div className="flex gap-6 flex-wrap text-xs">
+                      <div>
+                        <span className="text-gray-500 dark:text-gray-400 block font-semibold">Movimiento:</span>
+                        <span className="text-base font-extrabold text-amber-600 dark:text-amber-400">{formatCurrency(movMonto)}</span>
                       </div>
-                    );
-                  })}
-                {gastosReconciliables.length === 0 && (
-                  <div className="p-4 text-center text-xs text-gray-400 italic">No hay egresos sin conciliar</div>
-                )}
+                      <div>
+                        <span className="text-gray-500 dark:text-gray-400 block font-semibold">{isOutflow ? 'Egresos/Facturas:' : 'Ventas/Pedidos:'}</span>
+                        <span className="text-base font-extrabold text-emerald-600 dark:text-emerald-400">{formatCurrency(totalEgresosSistema)}</span>
+                      </div>
+                      {totalXmlsCargados > 0 && (
+                        <div>
+                          <span className="text-gray-500 dark:text-gray-400 block font-semibold">XMLs Asignados:</span>
+                          <span className="text-base font-extrabold text-blue-600 dark:text-blue-400">{formatCurrency(totalXmlsCargados)}</span>
+                        </div>
+                      )}
+                      <div>
+                        <span className="text-gray-500 dark:text-gray-400 block font-semibold">Total Comprobado:</span>
+                        <span className="text-base font-extrabold text-indigo-600 dark:text-indigo-400">{formatCurrency(totalComprobado)}</span>
+                      </div>
+                      <div>
+                        <span className="text-gray-500 dark:text-gray-400 block font-semibold">Diferencia:</span>
+                        <span className={`text-base font-mono font-extrabold ${match ? 'text-emerald-500' : 'text-amber-500'}`}>{formatCurrency(dif)}</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      {match ? (
+                        <span className="bg-emerald-100 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-400 px-2.5 py-1 rounded-lg text-xs font-bold flex items-center gap-1">
+                          <Check size={14} /> Coincide
+                        </span>
+                      ) : (
+                        <span className="bg-amber-100 dark:bg-amber-955/20 text-amber-700 dark:text-amber-400 px-2.5 py-1 rounded-lg text-xs font-bold flex items-center gap-1 animate-pulse">
+                          ⚠️ Diferencia
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Estatus a asignar */}
+              <div>
+                <label className="text-xs font-bold text-gray-500 block mb-1">Estatus resultante</label>
+                <select value={reconcileModal.estatusClave}
+                  onChange={(e) => setReconcileModal((p) => ({ ...p, estatusClave: e.target.value }))}
+                  className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs text-gray-900 dark:text-white focus:ring-1 focus:ring-amber-500 outline-none transition-all">
+                  <option value="">— Selecciona un estatus —</option>
+                  {estatusCatalog.map((e) => <option key={e.id} value={e.clave}>{e.nombre}</option>)}
+                </select>
               </div>
-            </div>
 
-            {selectedGastosWithDiscrepancy.length > 0 && (
-              <div className="p-3.5 bg-amber-50 dark:bg-amber-955/20 border border-amber-250 dark:border-amber-900 rounded-xl text-amber-800 dark:text-amber-400 text-xs flex flex-col gap-1.5 font-sans shadow-sm">
-                <span className="font-extrabold flex items-center gap-1">
-                  ⚠️ Advertencia Fiscal de Conciliación
-                </span>
-                <ul className="list-disc pl-4 space-y-1 font-medium">
-                  {selectedGastosWithDiscrepancy.map((item) => (
-                    <li key={item.gasto.id}>
-                      El egreso <strong>"{item.gasto.concepto}"</strong> indica forma de pago {item.gasto.metodo_pago ? getMetodoPagoLabel(item.gasto.metodo_pago) : 'Desconocida'}, pero el retiro bancario es electrónico/tarjeta/efectivo.
-                      <p className="italic text-[10px] opacity-90 mt-0.5">{item.disc.detalle}</p>
-                    </li>
-                  ))}
-                </ul>
-                <p className="mt-1 text-[10px] font-semibold text-amber-700 dark:text-amber-300">
-                  Tip: Para mantener la congruencia fiscal, te recomendamos cambiar el estatus resultante a "Movimiento no Deducible" en el selector inferior.
-                </p>
+              {reconcileModal.error && (
+                <div className="text-xs text-red-500 bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800 p-3 rounded-lg">{reconcileModal.error}</div>
+              )}
+
+              <div className="flex gap-3 pt-2">
+                <button onClick={() => setReconcileModal((p) => ({ ...p, open: false }))} disabled={reconcileModal.loading}
+                  className="flex-1 py-2.5 border border-gray-300 dark:border-gray-700 rounded-xl text-xs font-semibold hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-50">
+                  Cancelar
+                </button>
+                <button onClick={() => handleSaveReconciliation && handleSaveReconciliation()} disabled={reconcileModal.loading || !reconcileModal.estatusClave}
+                  className="flex-1 py-2.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-md flex items-center justify-center gap-2">
+                  {reconcileModal.loading ? <><RefreshCw size={14} className="animate-spin" /> Guardando...</> : <><Check size={14} /> Guardar Conciliación</>}
+                </button>
               </div>
-            )}
-
-            {/* Estatus a asignar */}
-            <div>
-              <label className="text-xs font-bold text-gray-500 block mb-1">Estatus resultante</label>
-              <select value={reconcileModal.estatusClave}
-                onChange={(e) => setReconcileModal((p) => ({ ...p, estatusClave: e.target.value }))}
-                className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs text-gray-900 dark:text-white focus:ring-1 focus:ring-amber-500 outline-none transition-all">
-                <option value="">— Selecciona un estatus —</option>
-                {estatusCatalog.map((e) => <option key={e.id} value={e.clave}>{e.nombre}</option>)}
-              </select>
-            </div>
-
-            {reconcileModal.error && (
-              <div className="text-xs text-red-500 bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800 p-3 rounded-lg">{reconcileModal.error}</div>
-            )}
-
-            <div className="flex gap-3 pt-2">
-              <button onClick={() => setReconcileModal((p) => ({ ...p, open: false }))} disabled={reconcileModal.loading}
-                className="flex-1 py-2.5 border border-gray-300 dark:border-gray-700 rounded-xl text-xs font-semibold hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-50">
-                Cancelar
-              </button>
-              <button onClick={() => handleSaveReconciliation && handleSaveReconciliation()} disabled={reconcileModal.loading || !reconcileModal.estatusClave}
-                className="flex-1 py-2.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-md flex items-center justify-center gap-2">
-                {reconcileModal.loading ? <><RefreshCw size={14} className="animate-spin" /> Guardando...</> : <><Check size={14} /> Guardar Conciliación</>}
-              </button>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 }

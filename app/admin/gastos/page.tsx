@@ -135,7 +135,23 @@ export default function AdvancedBillingModule() {
 
   const getSessionToken = async (): Promise<string> => {
     const { data: { session } } = await supabase.auth.getSession();
-    return session?.access_token || '';
+    if (session?.access_token) return session.access_token;
+
+    try {
+      const urlPart = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+      const projectId = urlPart.includes('//') ? (urlPart.split('//')[1]?.split('.')[0] || 'ioxfhgmeapwyfrgvtyjd') : 'ioxfhgmeapwyfrgvtyjd';
+      const supabaseSessionKey = `sb-${projectId}-auth-token`;
+      const localData = localStorage.getItem(supabaseSessionKey);
+      if (localData) {
+        const parsed = JSON.parse(localData);
+        if (parsed?.access_token) {
+          return parsed.access_token;
+        }
+      }
+    } catch (e) {
+      console.error('Error getting session token from localStorage:', e);
+    }
+    return '';
   };
 
   const getEmpresaId = async () => {
@@ -232,6 +248,7 @@ export default function AdvancedBillingModule() {
     xmlUrl: string;
     pdfFacturaUrl: string;
     pdfTicketUrl: string;
+    soporteReembolsoUrl: string;
     storageProvider: 'Supabase' | 'GoogleDrive';
     gastosSeleccionados: string[];
     pedidosSeleccionados: string[];
@@ -244,6 +261,7 @@ export default function AdvancedBillingModule() {
     xmlUrl: '',
     pdfFacturaUrl: '',
     pdfTicketUrl: '',
+    soporteReembolsoUrl: '',
     storageProvider: 'Supabase',
     gastosSeleccionados: [],
     pedidosSeleccionados: [],
@@ -483,22 +501,43 @@ export default function AdvancedBillingModule() {
       setCategoriasMovimiento(catMovs || []);
 
       // 13. Cuentas bancarias
-      const { data: cbData } = await supabase
+      let cbData = null;
+      const { data: cbDataTry, error: cbError } = await supabase
         .from('cuentas_bancarias')
         .select('*')
         .eq('empresa_id', empresaId)
         .order('nombre', { ascending: true });
+
+      if (cbError && cbError.code === '42703') {
+        const { data: cbGlobal, error: cbGlobalError } = await supabase
+          .from('cuentas_bancarias')
+          .select('*')
+          .order('nombre', { ascending: true });
+        if (!cbGlobalError) {
+          cbData = cbGlobal;
+        }
+      } else if (!cbError) {
+        cbData = cbDataTry;
+      }
       setCuentasBancarias(cbData || []);
 
-    } catch (err: unknown) {
+    } catch (err: any) {
       console.error('Error fetching data:', err);
+      setMessage({ text: 'Error al cargar datos: ' + (err.message || String(err)), type: 'error' });
     }
   };
 
   useEffect(() => {
     const init = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) return router.push('/admin/login');
+      const token = await getSessionToken();
+      if (!token) {
+        // Esperar brevemente por la carga del cliente de Supabase
+        await new Promise(resolve => setTimeout(resolve, 500));
+        const retryToken = await getSessionToken();
+        if (!retryToken) {
+          return router.push('/admin/login');
+        }
+      }
       await fetchData();
     };
     init();
@@ -696,6 +735,49 @@ export default function AdvancedBillingModule() {
     }
   };
 
+  const handleBulkMoveMovimientos = async (movimientoIds: string[], cuentaBancariaId: string | null) => {
+    try {
+      const empresaId = await getEmpresaId();
+      if (!empresaId) {
+        setMessage({ text: 'Error: No se pudo obtener el identificador de la empresa.', type: 'error' });
+        return;
+      }
+
+      if (!movimientoIds || movimientoIds.length === 0) {
+        setMessage({ text: 'No hay movimientos seleccionados.', type: 'info' });
+        return;
+      }
+
+      // Validar si alguno ya está conciliado
+      const { data: conciliados, error: checkError } = await supabase
+        .from('conciliaciones_bancarias')
+        .select('movimiento_id')
+        .in('movimiento_id', movimientoIds)
+        .eq('empresa_id', empresaId);
+
+      if (checkError) throw checkError;
+
+      if (conciliados && conciliados.length > 0) {
+        setMessage({ text: 'No se pueden mover movimientos bancarios que ya están conciliados.', type: 'error' });
+        return;
+      }
+
+      const { error } = await supabase
+        .from('movimientos_bancarios')
+        .update({ cuenta_bancaria_id: cuentaBancariaId })
+        .in('id', movimientoIds)
+        .eq('empresa_id', empresaId);
+
+      if (error) throw error;
+
+      setMessage({ text: 'Movimientos transferidos de cuenta con éxito.', type: 'success' });
+      await fetchData();
+    } catch (err: any) {
+      console.error(err);
+      setMessage({ text: 'Error al mover movimientos: ' + err.message, type: 'error' });
+    }
+  };
+
   const cargarDetallesProveedor = async (proveedor: any) => {
     setSelectedProveedor(proveedor);
     setProveedorFacturas([]);
@@ -774,6 +856,7 @@ export default function AdvancedBillingModule() {
       xmlUrl: mov.xml_url || '',
       pdfFacturaUrl: mov.pdf_factura_url || '',
       pdfTicketUrl: mov.pdf_ticket_url || '',
+      soporteReembolsoUrl: mov.soporte_reembolso_url || '',
       storageProvider: mov.storage_provider || 'Supabase',
       gastosSeleccionados: linkedGastos,
       pedidosSeleccionados: linkedPedidos,
@@ -811,7 +894,7 @@ export default function AdvancedBillingModule() {
     }
   };
 
-  const handleUploadReconciliationFile = async (e: React.ChangeEvent<HTMLInputElement>, field: 'xml' | 'pdf' | 'ticket') => {
+  const handleUploadReconciliationFile = async (e: React.ChangeEvent<HTMLInputElement>, field: 'xml' | 'pdf' | 'ticket' | 'soporte_reembolso') => {
     const file = e.target.files?.[0];
     if (!file || !reconcileModal.movimiento) return;
 
@@ -828,7 +911,7 @@ export default function AdvancedBillingModule() {
         throw error;
       }
 
-      const urlField = field === 'xml' ? 'xmlUrl' : field === 'pdf' ? 'pdfFacturaUrl' : 'pdfTicketUrl';
+      const urlField = field === 'xml' ? 'xmlUrl' : field === 'pdf' ? 'pdfFacturaUrl' : field === 'ticket' ? 'pdfTicketUrl' : 'soporteReembolsoUrl';
       setReconcileModal(prev => ({
         ...prev,
         [urlField]: prev[urlField] ? `${prev[urlField]},${filePath}` : filePath
@@ -840,8 +923,8 @@ export default function AdvancedBillingModule() {
     }
   };
 
-  const handleRemoveReconciliationFile = (field: 'xml' | 'pdf' | 'ticket', indexToRemove: number) => {
-    const urlField = field === 'xml' ? 'xmlUrl' : field === 'pdf' ? 'pdfFacturaUrl' : 'pdfTicketUrl';
+  const handleRemoveReconciliationFile = (field: 'xml' | 'pdf' | 'ticket' | 'soporte_reembolso', indexToRemove: number) => {
+    const urlField = field === 'xml' ? 'xmlUrl' : field === 'pdf' ? 'pdfFacturaUrl' : field === 'ticket' ? 'pdfTicketUrl' : 'soporteReembolsoUrl';
     setReconcileModal(prev => {
       const paths = prev[urlField] ? prev[urlField].split(',') : [];
       const newPaths = paths.filter((_, idx) => idx !== indexToRemove).join(',');
@@ -852,8 +935,8 @@ export default function AdvancedBillingModule() {
     });
   };
 
-  const renderFileList = (field: 'xml' | 'pdf' | 'ticket') => {
-    const urlField = field === 'xml' ? 'xmlUrl' : field === 'pdf' ? 'pdfFacturaUrl' : 'pdfTicketUrl';
+  const renderFileList = (field: 'xml' | 'pdf' | 'ticket' | 'soporte_reembolso') => {
+    const urlField = field === 'xml' ? 'xmlUrl' : field === 'pdf' ? 'pdfFacturaUrl' : field === 'ticket' ? 'pdfTicketUrl' : 'soporteReembolsoUrl';
     const pathsStr = reconcileModal[urlField];
     if (!pathsStr) return null;
     const paths = pathsStr.split(',').filter(Boolean);
@@ -891,10 +974,11 @@ export default function AdvancedBillingModule() {
     );
   };
 
-  const handleSaveManualReconcile = async (customGastosIds?: string[], customEstatusClave?: string) => {
+  const handleSaveManualReconcile = async (customGastosIds?: string[], customEstatusClave?: string, customPedidosIds?: string[]) => {
     if (!reconcileModal.movimiento) return;
     
     const gastosIds = customGastosIds || reconcileModal.gastosSeleccionados;
+    const pedidosIds = customPedidosIds || reconcileModal.pedidosSeleccionados;
     const estatusClave = customEstatusClave || reconcileModal.estatusClave;
     
     setReconcileModal(prev => ({ 
@@ -902,6 +986,7 @@ export default function AdvancedBillingModule() {
       loading: true, 
       error: '',
       ...(customGastosIds ? { gastosSeleccionados: customGastosIds } : {}),
+      ...(customPedidosIds ? { pedidosSeleccionados: customPedidosIds } : {}),
       ...(customEstatusClave ? { estatusClave: customEstatusClave } : {})
     }));
     
@@ -909,10 +994,11 @@ export default function AdvancedBillingModule() {
       const token = await getSessionToken();
       const res = await guardarConciliacionManual(reconcileModal.movimiento.id, {
         gastosIds,
-        pedidosIds: reconcileModal.pedidosSeleccionados,
+        pedidosIds,
         xmlUrl: reconcileModal.xmlUrl,
         pdfFacturaUrl: reconcileModal.pdfFacturaUrl,
         pdfTicketUrl: reconcileModal.pdfTicketUrl,
+        soporteReembolsoUrl: reconcileModal.soporteReembolsoUrl,
         storageProvider: reconcileModal.storageProvider,
         estatusClave
       }, token);
@@ -1813,6 +1899,8 @@ export default function AdvancedBillingModule() {
                 setManualMatchSearch={setManualMatchSearch}
                 handleOpenReconcileModal={handleOpenReconcileModal}
                 handleSaveReconciliation={handleSaveManualReconcile}
+                handleUploadReconciliationFile={handleUploadReconciliationFile}
+                handleRemoveReconciliationFile={handleRemoveReconciliationFile}
                 handleToggleVisibility={handleToggleVisibility}
                 handleUpdateCategoria={handleUpdateCategoria}
                 selectedGlobalDepositId={selectedGlobalDepositId}
@@ -1835,7 +1923,9 @@ export default function AdvancedBillingModule() {
                 setSelectedCuentaId={setSelectedCuentaId}
                 onViewCfdi={setCfdiViewerUrl}
                 handleUnlinkReconciliation={handleUnlinkReconciliation}
+                handleBulkMoveMovimientos={handleBulkMoveMovimientos}
               />
+
             )}
 
             

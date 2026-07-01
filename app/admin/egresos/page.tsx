@@ -6,11 +6,12 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../../lib/supabase';
 import { useThemeMode } from '../../../lib/useThemeMode';
+import { useSessionToken } from '../../../lib/hooks/useSessionToken';
 import { 
   Plus, Users, Sun, Moon, Eye, ChevronLeft, ChevronRight, FileText, Save, X, Receipt, Search,
-  TrendingUp, TrendingDown, Scale, CreditCard, Calendar, Filter, Trash2, Pencil
+  TrendingUp, TrendingDown, Scale, CreditCard, Calendar, Filter, Trash2, Pencil, Link as LinkIcon
 } from 'lucide-react';
-import { toggleMovimientoVisibilidad } from '../gastos/reconciliationActions';
+import { toggleMovimientoVisibilidad, conciliarGastoEfectivoAutomatico } from '../gastos/reconciliationActions';
 
 export const dynamic = 'force-dynamic';
 
@@ -72,17 +73,19 @@ interface Gasto {
   metodo_pago?: string | null;
   monto: number;
   movimiento_bancario_id?: string | null;
+  gasto_padre_id?: string | null;
+  padre?: { concepto: string } | null;
 }
 
 export default function AdminGastos() {
   const router = useRouter();
+  const getSessionToken = useSessionToken();
 
   const handleEliminarGastoDefinitivo = async (gasto: Gasto) => {
     if (!confirm('¿Estás seguro de que deseas eliminar este gasto permanentemente?')) return;
     
     if (gasto.movimiento_bancario_id) {
-      const { data: { session } } = await supabase.auth.getSession();
-      const token = session?.access_token || '';
+      const token = await getSessionToken();
       const res = await toggleMovimientoVisibilidad(gasto.movimiento_bancario_id, 'egresos', false, token);
       if (res.success) {
         setGastos(prev => prev.filter(g => g.id !== gasto.id));
@@ -182,6 +185,121 @@ export default function AdminGastos() {
     metodo_pago: '01'
   });
 
+  // Modal para asociar a gasto principal
+  const [associationModal, setAssociationModal] = useState<{
+    isOpen: boolean;
+    childGasto: Gasto | null;
+    searchParent: string;
+    parentGastoId: string | null;
+    loading: boolean;
+  }>({
+    isOpen: false,
+    childGasto: null,
+    searchParent: '',
+    parentGastoId: null,
+    loading: false
+  });
+
+  // Expansión de parcialidades (hijos)
+  const [expandedParents, setExpandedParents] = useState<Record<string, boolean>>({});
+
+  const toggleParentExpand = (id: string) => {
+    setExpandedParents(prev => ({
+      ...prev,
+      [id]: !prev[id]
+    }));
+  };
+
+  const handleSaveAssociation = async () => {
+    if (!associationModal.childGasto || !associationModal.parentGastoId) return;
+    setAssociationModal(prev => ({ ...prev, loading: true }));
+    try {
+      const { error } = await supabase
+        .from('gastos')
+        .update({ gasto_padre_id: associationModal.parentGastoId })
+        .eq('id', associationModal.childGasto.id);
+
+      if (error) throw error;
+
+      alert('Asociación realizada con éxito.');
+      setAssociationModal({
+        isOpen: false,
+        childGasto: null,
+        searchParent: '',
+        parentGastoId: null,
+        loading: false
+      });
+      fetchPeriodData();
+    } catch (err: any) {
+      alert(`Error al asociar gasto: ${err.message}`);
+    } finally {
+      setAssociationModal(prev => ({ ...prev, loading: false }));
+    }
+  };
+
+  const handleRemoveAssociation = async () => {
+    if (!associationModal.childGasto) return;
+    if (!confirm('¿Estás seguro de desvincular esta parcialidad/complemento de su gasto principal?')) return;
+    setAssociationModal(prev => ({ ...prev, loading: true }));
+    try {
+      const { error } = await supabase
+        .from('gastos')
+        .update({ gasto_padre_id: null })
+        .eq('id', associationModal.childGasto.id);
+
+      if (error) throw error;
+
+      alert('Desvinculación realizada con éxito.');
+      setAssociationModal({
+        isOpen: false,
+        childGasto: null,
+        searchParent: '',
+        parentGastoId: null,
+        loading: false
+      });
+      fetchPeriodData();
+    } catch (err: any) {
+      alert(`Error al desasociar gasto: ${err.message}`);
+    } finally {
+      setAssociationModal(prev => ({ ...prev, loading: false }));
+    }
+  };
+
+  const parentCandidates = useMemo(() => {
+    if (!associationModal.childGasto) return [];
+    const child = associationModal.childGasto;
+    return gastos.filter(g => {
+      // Excluir el mismo gasto
+      if (g.id === child.id) return false;
+      // Excluir si ya es hijo de otro
+      if (g.gasto_padre_id) return false;
+      
+      // Aplicar filtro de búsqueda
+      if (associationModal.searchParent) {
+        const s = associationModal.searchParent.toLowerCase();
+        const conceptoMatch = g.concepto?.toLowerCase().includes(s);
+        const proveedoresMatch = g.proveedores?.nombre_comercial?.toLowerCase().includes(s);
+        const rfcMatch = g.proveedores?.rfc?.toLowerCase().includes(s);
+        const montoMatch = g.monto?.toString().includes(s);
+        return conceptoMatch || proveedoresMatch || rfcMatch || montoMatch;
+      }
+      return true;
+    }).slice(0, 15);
+  }, [gastos, associationModal.childGasto, associationModal.searchParent]);
+
+  // Mapa de hijos por id de padre
+  const hijosMap = useMemo(() => {
+    const map = new Map<string, Gasto[]>();
+    gastos.forEach(g => {
+      if (g.gasto_padre_id) {
+        const list = map.get(g.gasto_padre_id) || [];
+        list.push(g);
+        map.set(g.gasto_padre_id, list);
+      }
+    });
+    return map;
+  }, [gastos]);
+
   // --- CONSULTAS A BASE DE DATOS ---
   const getEmpresaId = async () => {
     let empresaId = null;
@@ -258,9 +376,8 @@ export default function AdminGastos() {
       // 2. Consultar egresos del período
       let gastosQuery = supabase
         .from('gastos')
-        .select(`*, proveedores(id, nombre_comercial, rfc), categorias_gasto(id, nombre)`)
+        .select(`*, proveedores(id, nombre_comercial, rfc), categorias_gasto(id, nombre), padre:gastos!gasto_padre_id(concepto)`)
         .eq('empresa_id', empresaId)
-        .is('gasto_padre_id', null)
         .order('fecha_gasto', { ascending: false });
 
       if (startDateStr) {
@@ -303,8 +420,12 @@ export default function AdminGastos() {
   // Carga inicial y autenticación
   useEffect(() => {
     const init = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) return router.push('/admin/login');
+      const token = await getSessionToken();
+      if (!token) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+        const retryToken = await getSessionToken();
+        if (!retryToken) return router.push('/admin/login');
+      }
       fetchCatalogos();
     };
     init();
@@ -346,6 +467,8 @@ export default function AdminGastos() {
     }
 
     gastos.forEach(g => {
+      if (g.gasto_padre_id) return;
+
       if (g.fecha_gasto) {
         const fechaG = new Date(g.fecha_gasto + 'T00:00:00');
         // Validar si entra en el rango del KPI
@@ -367,7 +490,7 @@ export default function AdminGastos() {
 
   // Gastos filtrados por método de pago y búsqueda
   const gastosFiltrados = useMemo(() => {
-    let filtrados = [...gastos];
+    let filtrados = gastos.filter(g => !g.gasto_padre_id);
 
     if (filtroMetodoPago) {
       filtrados = filtrados.filter(g => g.metodo_pago === filtroMetodoPago);
@@ -458,7 +581,7 @@ export default function AdminGastos() {
         console.error("Detalle completo del error Supabase:", error);
       }
     } else {
-      const { error } = await supabase.from('gastos').insert([{
+      const { data: newGasto, error } = await supabase.from('gastos').insert([{
         fecha_gasto: nuevoGasto.fecha_gasto,
         proveedor_id: proveedorFinalId && proveedorFinalId !== 'nuevo' ? proveedorFinalId : null,
         categoria_id: nuevoGasto.categoria_id || null,
@@ -466,9 +589,13 @@ export default function AdminGastos() {
         monto: Number(nuevoGasto.monto),
         metodo_pago: nuevoGasto.metodo_pago,
         empresa_id: empresaId
-      }]);
+      }]).select('id').single();
 
       if (!error) {
+        if (newGasto) {
+          const token = await getSessionToken();
+          await conciliarGastoEfectivoAutomatico(newGasto.id, token);
+        }
         setIsModalOpen(false);
         setNuevoProveedorNombre('');
         setNuevoProveedorRfc('');
@@ -684,100 +811,224 @@ export default function AdminGastos() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100 dark:divide-gray-800/50 text-xs">
-                  {paginatedGastos.map((g) => (
-                    <tr key={g.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/20 transition-colors">
-                      <td className="p-4 font-mono text-gray-600 dark:text-gray-300">
-                        {new Date(g.fecha_gasto).toLocaleDateString('es-MX', { timeZone: 'UTC' })}
-                      </td>
-                      <td className="p-4">
-                        <div className="font-bold text-sm text-gray-800 dark:text-gray-200">{g.proveedores?.nombre_comercial || 'Gasto Sin Proveedor'}</div>
-                        <div className="font-mono text-[10px] text-gray-500">{g.proveedores?.rfc || 'Sin RFC'}</div>
-                      </td>
-                      <td className="p-4 space-y-1">
-                        <div className="font-medium text-sm">{g.concepto || 'Sin descripción'}</div>
-                        <div className="flex gap-1.5 flex-wrap items-center mt-1">
-                          <select
-                            value={g.categorias_gasto?.id || ''}
-                            onChange={(e) => handleUpdateCategoria(g.id, e.target.value || null)}
-                            className="text-[10px] font-medium bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400 border border-blue-200 dark:border-blue-800/50 rounded outline-none py-0.5 px-1 cursor-pointer"
-                          >
-                            <option value="">Sin Categoría</option>
-                            {categorias.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
-                          </select>
-                          {g.movimiento_bancario_id && (
-                            <span className="inline-block px-2 py-0.5 rounded text-[10px] font-medium bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-450 border border-amber-200 dark:border-amber-800/50">
-                              Banco
-                            </span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="p-4 text-center">
-                        <select
-                          value={g.metodo_pago || ''}
-                          onChange={(e) => {
-                            if (e.target.value === 'VER_TODOS') {
-                              setVerTodos(true);
-                              return;
-                            }
-                            handleUpdateMetodoPago(g.id, e.target.value || null);
-                          }}
-                          className="px-2 py-1 bg-gray-50 dark:bg-gray-800 rounded-md text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-700 text-xs outline-none cursor-pointer text-center"
-                        >
-                          <option value="">Desconocido</option>
-                          {formasPagoList.map(f => (
-                            <option key={f.id} value={f.codigo || ''}>
-                              {f.codigo ? `${f.codigo} - ${f.nombre}` : f.nombre}
-                            </option>
-                          ))}
-                          {!verTodos && (
-                            <option value="VER_TODOS">🔍 Mostrar todos...</option>
-                          )}
-                          {verTodos && (
-                            <>
-                              <option disabled className="text-gray-400 font-bold border-t">--- Todos los Códigos SAT ---</option>
-                              {SAT_FORMAS_PAGO.filter(sat => !formasPagoList.some(f => f.codigo === sat.codigo)).map(sat => (
-                                <option key={sat.codigo} value={sat.codigo}>
-                                  {sat.codigo} - {sat.nombre}
+                  {paginatedGastos.map((g) => {
+                    const hijos = hijosMap.get(g.id) || [];
+                    const hasHijos = hijos.length > 0;
+                    const isExpanded = !!expandedParents[g.id];
+
+                    return (
+                      <React.Fragment key={g.id}>
+                        <tr className="hover:bg-gray-50 dark:hover:bg-gray-800/20 transition-colors">
+                          <td className="p-4 font-mono text-gray-600 dark:text-gray-300">
+                            <div className="flex items-center gap-1.5">
+                              {hasHijos && (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    toggleParentExpand(g.id);
+                                  }}
+                                  className="p-1 hover:bg-gray-200 dark:hover:bg-gray-800 rounded transition-all text-gray-500 hover:text-indigo-600"
+                                  title={isExpanded ? "Contraer parcialidades" : "Mostrar parcialidades"}
+                                >
+                                  <ChevronRight size={14} className={`transform transition-transform ${isExpanded ? 'rotate-90 text-indigo-500 font-bold' : 'text-gray-400'}`} />
+                                </button>
+                              )}
+                              <span>
+                                {new Date(g.fecha_gasto).toLocaleDateString('es-MX', { timeZone: 'UTC' })}
+                              </span>
+                            </div>
+                          </td>
+                          <td className="p-4">
+                            <div className="font-bold text-sm text-gray-800 dark:text-gray-200">{g.proveedores?.nombre_comercial || 'Gasto Sin Proveedor'}</div>
+                            <div className="font-mono text-[10px] text-gray-500">{g.proveedores?.rfc || 'Sin RFC'}</div>
+                          </td>
+                          <td className="p-4 space-y-1">
+                            <div className="font-medium text-sm">{g.concepto || 'Sin descripción'}</div>
+                            <div className="flex gap-1.5 flex-wrap items-center mt-1">
+                              <select
+                                value={g.categorias_gasto?.id || ''}
+                                onChange={(e) => handleUpdateCategoria(g.id, e.target.value || null)}
+                                className="text-[10px] font-medium bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400 border border-blue-200 dark:border-blue-800/50 rounded outline-none py-0.5 px-1 cursor-pointer"
+                              >
+                                <option value="">Sin Categoría</option>
+                                {categorias.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+                              </select>
+                              {g.movimiento_bancario_id && (
+                                <span className="inline-block px-2 py-0.5 rounded text-[10px] font-medium bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-450 border border-amber-200 dark:border-amber-800/50">
+                                  Banco
+                                </span>
+                              )}
+                              {hasHijos && (
+                                <span className="inline-block px-2 py-0.5 rounded text-[10px] font-semibold bg-indigo-100 dark:bg-indigo-900/30 text-indigo-750 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800/50">
+                                  {hijos.length} {hijos.length === 1 ? 'Parcialidad' : 'Parcialidades'}
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="p-4 text-center">
+                            <select
+                              value={g.metodo_pago || ''}
+                              onChange={(e) => {
+                                if (e.target.value === 'VER_TODOS') {
+                                  setVerTodos(true);
+                                  return;
+                                }
+                                handleUpdateMetodoPago(g.id, e.target.value || null);
+                              }}
+                              className="px-2 py-1 bg-gray-50 dark:bg-gray-800 rounded-md text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-700 text-xs outline-none cursor-pointer text-center"
+                            >
+                              <option value="">Desconocido</option>
+                              {formasPagoList.map(f => (
+                                <option key={f.id} value={f.codigo || ''}>
+                                  {f.codigo ? `${f.codigo} - ${f.nombre}` : f.nombre}
                                 </option>
                               ))}
-                            </>
-                          )}
-                        </select>
-                      </td>
-                      <td className="p-4 text-right font-bold text-sm text-red-600 dark:text-red-400">
-                        - {formatCurrency(g.monto)}
-                      </td>
-                      <td className="p-4 text-center">
-                        <div className="flex justify-center items-center gap-2">
-                          <button
-                            onClick={() => {
-                              setNuevoGasto({
-                                id: g.id,
-                                fecha_gasto: g.fecha_gasto || new Date().toISOString().split('T')[0],
-                                proveedor_id: g.proveedores?.id || '',
-                                categoria_id: g.categorias_gasto?.id || '',
-                                concepto: g.concepto || '',
-                                monto: g.monto.toString(),
-                                metodo_pago: g.metodo_pago || '01'
-                              });
-                              setIsModalOpen(true);
-                            }}
-                            className="p-1.5 text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-500/10 rounded transition-colors"
-                            title="Editar gasto"
-                          >
-                            <Pencil size={14} />
-                          </button>
-                          <button
-                            onClick={() => handleEliminarGastoDefinitivo(g)}
-                            className="p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 rounded transition-colors"
-                            title={g.movimiento_bancario_id ? "Eliminar gasto y desmarcar del banco" : "Eliminar gasto"}
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                              {!verTodos && (
+                                <option value="VER_TODOS">🔍 Mostrar todos...</option>
+                              )}
+                              {verTodos && (
+                                <>
+                                  <option disabled className="text-gray-400 font-bold border-t">--- Todos los Códigos SAT ---</option>
+                                  {SAT_FORMAS_PAGO.filter(sat => !formasPagoList.some(f => f.codigo === sat.codigo)).map(sat => (
+                                    <option key={sat.codigo} value={sat.codigo}>
+                                      {sat.codigo} - {sat.nombre}
+                                    </option>
+                                  ))}
+                                </>
+                              )}
+                            </select>
+                          </td>
+                          <td className="p-4 text-right font-bold text-sm text-red-600 dark:text-red-400">
+                            - {formatCurrency(g.monto)}
+                          </td>
+                          <td className="p-4 text-center">
+                            <div className="flex justify-center items-center gap-2">
+                              <button
+                                onClick={() => setAssociationModal({
+                                  isOpen: true,
+                                  childGasto: g,
+                                  searchParent: '',
+                                  parentGastoId: g.gasto_padre_id || null,
+                                  loading: false
+                                })}
+                                title="Asociar a Gasto Principal / Parcialidad"
+                                className="p-1.5 text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-500/10 rounded transition-colors"
+                              >
+                                <LinkIcon size={14} />
+                              </button>
+                              <button
+                                onClick={() => {
+                                  setNuevoGasto({
+                                    id: g.id,
+                                    fecha_gasto: g.fecha_gasto || new Date().toISOString().split('T')[0],
+                                    proveedor_id: g.proveedores?.id || '',
+                                    categoria_id: g.categorias_gasto?.id || '',
+                                    concepto: g.concepto || '',
+                                    monto: g.monto.toString(),
+                                    metodo_pago: g.metodo_pago || '01'
+                                  });
+                                  setIsModalOpen(true);
+                                }}
+                                className="p-1.5 text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-500/10 rounded transition-colors"
+                                title="Editar gasto"
+                              >
+                                <Pencil size={14} />
+                              </button>
+                              <button
+                                onClick={() => handleEliminarGastoDefinitivo(g)}
+                                className="p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 rounded transition-colors"
+                                title={g.movimiento_bancario_id ? "Eliminar gasto y desmarcar del banco" : "Eliminar gasto"}
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+
+                        {/* Parcialidades/hijos anidados */}
+                        {hasHijos && isExpanded && hijos.map(h => (
+                          <tr key={h.id} className="bg-indigo-50/10 dark:bg-indigo-950/5 border-l-4 border-indigo-400 dark:border-indigo-600 transition-colors">
+                            {/* Fecha */}
+                            <td className="p-4 pl-8 font-mono text-gray-500 dark:text-gray-400 whitespace-nowrap">
+                              {new Date(h.fecha_gasto).toLocaleDateString('es-MX', { timeZone: 'UTC' })}
+                            </td>
+
+                            {/* Proveedor */}
+                            <td className="p-4 text-gray-550 dark:text-gray-450 font-bold">
+                              {h.proveedores?.nombre_comercial || 'Gasto Sin Proveedor'}
+                            </td>
+
+                            {/* Concepto / Categoría */}
+                            <td className="p-4 space-y-1">
+                              <div className="font-medium text-gray-800 dark:text-gray-200">{h.concepto || 'Sin descripción'}</div>
+                              <div className="flex gap-1.5 items-center mt-1">
+                                <span className="inline-block px-1.5 py-0.5 rounded text-[9px] font-semibold bg-indigo-100/60 dark:bg-indigo-900/30 text-indigo-750 dark:text-indigo-400">
+                                  Parcialidad / REP
+                                </span>
+                                <span className="text-[10px] text-gray-400 italic">
+                                  Categoría: {categorias.find(c => c.id === h.categorias_gasto?.id)?.nombre || 'Sin clasificar'}
+                                </span>
+                              </div>
+                            </td>
+
+                            {/* Método de pago */}
+                            <td className="p-4 text-center text-gray-600 dark:text-gray-400">
+                              {getMetodoPagoLabel(h.metodo_pago)}
+                            </td>
+
+                            {/* Monto */}
+                            <td className="p-4 text-right font-semibold text-gray-600 dark:text-gray-400 text-xs">
+                              - {formatCurrency(h.monto)}
+                            </td>
+
+                            {/* Acciones del hijo */}
+                            <td className="p-4 text-center">
+                              <div className="flex justify-center items-center gap-2">
+                                <button
+                                  onClick={() => setAssociationModal({
+                                    isOpen: true,
+                                    childGasto: h,
+                                    searchParent: '',
+                                    parentGastoId: h.gasto_padre_id || null,
+                                    loading: false
+                                  })}
+                                  title="Cambiar/Quitar Asociación"
+                                  className="p-1.5 text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-500/10 rounded transition-colors"
+                                >
+                                  <LinkIcon size={14} />
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    setNuevoGasto({
+                                      id: h.id,
+                                      fecha_gasto: h.fecha_gasto || new Date().toISOString().split('T')[0],
+                                      proveedor_id: h.proveedores?.id || '',
+                                      categoria_id: h.categorias_gasto?.id || '',
+                                      concepto: h.concepto || '',
+                                      monto: h.monto.toString(),
+                                      metodo_pago: h.metodo_pago || '01'
+                                    });
+                                    setIsModalOpen(true);
+                                  }}
+                                  className="p-1.5 text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-500/10 rounded transition-colors"
+                                  title="Editar gasto parcial"
+                                >
+                                  <Pencil size={14} />
+                                </button>
+                                <button
+                                  onClick={() => handleEliminarGastoDefinitivo(h)}
+                                  className="p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 rounded transition-colors"
+                                  title="Eliminar gasto parcial"
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </React.Fragment>
+                    );
+                  })}
                   {gastosFiltrados.length === 0 && (
                     <tr>
                       <td colSpan={6} className="p-8 text-center text-gray-500 dark:text-gray-400">
@@ -958,6 +1209,135 @@ export default function AdminGastos() {
                 <button onClick={handleGuardarGasto} className="flex-1 py-3 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-xl shadow-lg transition-colors flex items-center justify-center gap-2">
                   <Save size={18}/> {nuevoGasto.id ? 'Guardar Cambios' : 'Guardar Gasto'}
                 </button>
+              </div>
+
+            </div>
+          </div>
+        )}
+
+        {associationModal.isOpen && associationModal.childGasto && (
+          <div className="fixed inset-0 bg-black/60 dark:bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4 font-sans animate-in fade-in duration-200">
+            <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 w-full max-w-xl rounded-2xl shadow-2xl flex flex-col max-h-[85vh] overflow-hidden">
+              
+              {/* Header */}
+              <div className="flex items-center justify-between p-5 border-b border-gray-100 dark:border-gray-900 bg-white dark:bg-gray-955 sticky top-0 z-10">
+                <div>
+                  <h3 className="text-base font-extrabold text-gray-900 dark:text-white flex items-center gap-2">
+                    <LinkIcon className="text-indigo-500" size={18} />
+                    Asociar a Gasto Principal
+                  </h3>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    Establece este comprobante/REP como parcialidad de otra factura.
+                  </p>
+                </div>
+                <button 
+                  onClick={() => setAssociationModal({ isOpen: false, childGasto: null, searchParent: '', parentGastoId: null, loading: false })}
+                  className="p-1.5 text-gray-400 hover:text-gray-605 dark:hover:text-gray-300 hover:bg-gray-105 dark:hover:bg-gray-800 rounded-lg transition-colors"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              {/* Content */}
+              <div className="p-5 overflow-y-auto flex-1 space-y-4 text-xs">
+                
+                {/* Información del Gasto Seleccionado */}
+                <div className="p-3.5 bg-gray-50 dark:bg-gray-900/40 border border-gray-200 dark:border-gray-800 rounded-xl space-y-2">
+                  <span className="text-[10px] font-extrabold uppercase text-gray-400 dark:text-gray-550 tracking-wider block">Gasto Seleccionado (Hijo)</span>
+                  <div className="flex justify-between items-start gap-4">
+                    <div>
+                      <h4 className="text-xs font-bold text-gray-800 dark:text-gray-200">{associationModal.childGasto.concepto}</h4>
+                      <p className="text-[10px] text-gray-500 mt-1 font-semibold">{associationModal.childGasto.proveedores?.nombre_comercial} ({associationModal.childGasto.proveedores?.rfc || 'Sin RFC'})</p>
+                    </div>
+                    <div className="text-right">
+                      <span className="text-xs font-black text-red-500 dark:text-red-400 block">-{formatCurrency(associationModal.childGasto.monto)}</span>
+                      <span className="text-[10px] text-gray-400 font-mono block mt-0.5">{new Date(associationModal.childGasto.fecha_gasto).toLocaleDateString('es-MX', { timeZone: 'UTC' })}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Input de Búsqueda de Padre */}
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-extrabold text-gray-550 dark:text-gray-400 uppercase tracking-wider block">Buscar Factura Principal (Padre)</label>
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" size={14} />
+                    <input
+                      type="text"
+                      placeholder="Filtrar por concepto, monto o proveedor..."
+                      value={associationModal.searchParent}
+                      onChange={(e) => setAssociationModal(prev => ({ ...prev, searchParent: e.target.value }))}
+                      className="w-full bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 pl-9 pr-3 py-2 rounded-lg text-xs outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 transition-all font-semibold text-gray-900 dark:text-white"
+                    />
+                  </div>
+                </div>
+
+                {/* Lista de Candidatos */}
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-extrabold text-gray-550 dark:text-gray-400 uppercase tracking-wider block">Seleccionar del Listado</label>
+                  <div className="border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden max-h-[220px] overflow-y-auto divide-y divide-gray-100 dark:divide-gray-800">
+                    {parentCandidates.map(p => {
+                      const isSelected = associationModal.parentGastoId === p.id;
+                      return (
+                        <div
+                          key={p.id}
+                          onClick={() => setAssociationModal(prev => ({ ...prev, parentGastoId: p.id }))}
+                          className={`p-3 text-xs flex justify-between items-center cursor-pointer transition-colors ${
+                            isSelected 
+                              ? 'bg-indigo-50/50 dark:bg-indigo-950/20 border-l-2 border-indigo-500 font-bold' 
+                              : 'hover:bg-gray-50 dark:hover:bg-gray-900/40'
+                          }`}
+                        >
+                          <div className="space-y-0.5 max-w-[70%]">
+                            <p className="text-gray-800 dark:text-gray-200 truncate">{p.concepto}</p>
+                            <p className="text-[10px] text-gray-500 font-semibold">{p.proveedores?.nombre_comercial}</p>
+                          </div>
+                          <div className="text-right">
+                            <p className="font-black text-gray-900 dark:text-white">-{formatCurrency(p.monto)}</p>
+                            <p className="text-[10px] text-gray-400 font-mono">{new Date(p.fecha_gasto).toLocaleDateString('es-MX', { timeZone: 'UTC' })}</p>
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {parentCandidates.length === 0 && (
+                      <p className="p-4 text-center text-xs text-gray-400 italic bg-gray-50/50 dark:bg-gray-900/20">No se encontraron facturas candidatas</p>
+                    )}
+                  </div>
+                </div>
+
+              </div>
+
+              {/* Footer */}
+              <div className="p-5 border-t border-gray-100 dark:border-gray-900 flex justify-between gap-3 bg-gray-50 dark:bg-gray-900/10">
+                <div>
+                  {associationModal.childGasto.gasto_padre_id && (
+                    <button
+                      type="button"
+                      onClick={handleRemoveAssociation}
+                      disabled={associationModal.loading}
+                      className="px-4 py-2 rounded-xl text-xs font-bold text-red-655 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors disabled:opacity-50"
+                    >
+                      Desvincular
+                    </button>
+                  )}
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setAssociationModal({ isOpen: false, childGasto: null, searchParent: '', parentGastoId: null, loading: false })}
+                    disabled={associationModal.loading}
+                    className="px-4 py-2 rounded-xl text-xs font-bold text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors disabled:opacity-50"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSaveAssociation}
+                    disabled={associationModal.loading || !associationModal.parentGastoId}
+                    className="bg-indigo-650 hover:bg-indigo-500 disabled:opacity-50 text-white px-5 py-2 rounded-xl text-xs font-bold shadow-md transition-colors flex items-center justify-center bg-indigo-600"
+                  >
+                    {associationModal.loading ? 'Guardando...' : 'Confirmar Asociación'}
+                  </button>
+                </div>
               </div>
 
             </div>

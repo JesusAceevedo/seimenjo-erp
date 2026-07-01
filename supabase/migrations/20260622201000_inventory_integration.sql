@@ -14,8 +14,14 @@ DECLARE
     v_almacen_id UUID;
     v_creado_por UUID;
 BEGIN
-    SELECT empresa_id, creado_por INTO v_empresa_id, v_creado_por
+    SELECT empresa_id INTO v_empresa_id
     FROM public.pedidos WHERE id = NEW.pedido_id;
+
+    -- Obtener el ID del usuario de staff que realiza la operación, si está autenticado
+    SELECT id INTO v_creado_por
+    FROM public.usuarios_staff
+    WHERE id = auth.uid()
+    LIMIT 1;
 
     SELECT id INTO v_almacen_id
     FROM public.almacenes WHERE empresa_id = v_empresa_id AND es_principal = true LIMIT 1;

@@ -18,6 +18,7 @@ interface ExpedienteItem {
   xml_url?: string;
   pdf_url?: string;
   ticket_url?: string;
+  soporte_reembolso_url?: string;
   statusColor: 'green' | 'yellow' | 'red';
   statusLabel: string;
 }
@@ -29,7 +30,7 @@ export default function ExpedienteDigital() {
   const [filterTipo, setFilterTipo] = useState('todos');
   const [filterEstatus, setFilterEstatus] = useState('todos');
   
-  const [manualModal, setManualModal] = useState<{isOpen: boolean, id?: string, tipo?: 'gasto'|'venta'}>({isOpen: false});
+  const [manualModal, setManualModal] = useState<{isOpen: boolean, id?: string, tipo?: 'gasto'|'venta'|'movimiento'}>({isOpen: false});
   const [viewer, setViewer] = useState<{ open: boolean; title: string; docs: any[] }>({
     open: false, title: '', docs: []
   });
@@ -39,10 +40,10 @@ export default function ExpedienteDigital() {
     try {
       // 1. Fetch Gastos
       const { data: gastos } = await supabase
-        .from('gastos_facturados')
-        .select('id, fecha_gasto, concepto, monto, xml_url, pdf_url, ticket_url')
+        .from('gastos')
+        .select('id, fecha_gasto, concepto, monto, xml_url, pdf_url, ticket_url, gasto_padre_id, soporte_reembolso_url')
         .order('fecha_gasto', { ascending: false })
-        .limit(300);
+        .limit(500);
 
       // 2. Fetch Ingresos (Facturas)
       const { data: ingresos } = await supabase
@@ -54,23 +55,63 @@ export default function ExpedienteDigital() {
       // 3. Fetch Movimientos Bancarios
       const { data: movimientos } = await supabase
         .from('movimientos_bancarios')
-        .select('id, fecha, concepto, monto, xml_url, pdf_factura_url, pdf_ticket_url, categorias_movimiento_bancario(requiere_comprobante)')
+        .select('id, fecha, concepto, monto, xml_url, pdf_factura_url, pdf_ticket_url, soporte_reembolso_url, categorias_movimiento_bancario(requiere_comprobante)')
         .order('fecha', { ascending: false })
         .limit(300);
 
       const allItems: ExpedienteItem[] = [];
 
-      // Procesar Gastos
+      // Procesar Gastos con Agrupación de Parcialidades
+      const gastosMap = new Map<string, any>();
       (gastos || []).forEach((g: any) => {
+        gastosMap.set(g.id, {
+          ...g,
+          xmlUrls: g.xml_url ? [g.xml_url] : [],
+          pdfUrls: g.pdf_url ? [g.pdf_url] : [],
+          ticketUrls: g.ticket_url ? [g.ticket_url] : [],
+          soporteReembolsoUrls: g.soporte_reembolso_url ? [g.soporte_reembolso_url] : [],
+        });
+      });
+
+      // Asociar archivos de parcialidades al gasto padre
+      (gastos || []).forEach((g: any) => {
+        if (g.gasto_padre_id) {
+          const parent = gastosMap.get(g.gasto_padre_id);
+          if (parent) {
+            if (g.xml_url) parent.xmlUrls.push(g.xml_url);
+            if (g.pdf_url) parent.pdfUrls.push(g.pdf_url);
+            if (g.ticket_url) parent.ticketUrls.push(g.ticket_url);
+            if (g.soporte_reembolso_url) parent.soporteReembolsoUrls.push(g.soporte_reembolso_url);
+          }
+        }
+      });
+
+      // Filtrar y procesar solo gastos padres (evitando duplicar contadores y filas)
+      const parentGastos = Array.from(gastosMap.values()).filter(g => !g.gasto_padre_id);
+
+      parentGastos.forEach((g: any) => {
+        // Unificar y limpiar URLs
+        const xml_url = Array.from(new Set(g.xmlUrls.filter(Boolean))).join(',');
+        const pdf_url = Array.from(new Set(g.pdfUrls.filter(Boolean))).join(',');
+        const ticket_url = Array.from(new Set(g.ticketUrls.filter(Boolean))).join(',');
+        const soporte_reembolso_url = Array.from(new Set(g.soporteReembolsoUrls.filter(Boolean))).join(',');
+
         const missing = [];
-        if (!g.xml_url) missing.push('XML');
-        if (!g.pdf_url && !g.xml_url) missing.push('PDF');
-        if (!g.ticket_url) missing.push('Ticket');
+        const hasSoporte = !!soporte_reembolso_url;
+
+        if (!hasSoporte) {
+          if (!xml_url) missing.push('XML');
+          if (!pdf_url && !xml_url) missing.push('PDF');
+          if (!ticket_url) missing.push('Ticket');
+        }
         
         let color: 'green' | 'yellow' | 'red' = 'green';
         let label = 'Completo';
         
-        if (missing.length === 3) {
+        if (hasSoporte) {
+          color = 'green';
+          label = 'Completo (Reembolso)';
+        } else if (missing.length === 3) {
           color = 'red';
           label = 'Sin Documentos';
         } else if (missing.length > 0) {
@@ -84,9 +125,10 @@ export default function ExpedienteDigital() {
           fecha: g.fecha_gasto || '',
           concepto: g.concepto || 'Sin concepto',
           monto: Number(g.monto) || 0,
-          xml_url: g.xml_url,
-          pdf_url: g.pdf_url,
-          ticket_url: g.ticket_url,
+          xml_url,
+          pdf_url,
+          ticket_url,
+          soporte_reembolso_url,
           statusColor: color,
           statusLabel: label
         });
@@ -129,10 +171,15 @@ export default function ExpedienteDigital() {
         let color: 'green' | 'yellow' | 'red' = 'green';
         let label = 'Completo';
 
+        const hasSoporte = !!m.soporte_reembolso_url;
+
         // Si la categoría indica que no requiere comprobante, lo pasamos directamente como completo.
         if (m.categorias_movimiento_bancario && m.categorias_movimiento_bancario.requiere_comprobante === false) {
           color = 'green';
           label = 'Exento (No Requiere)';
+        } else if (hasSoporte) {
+          color = 'green';
+          label = 'Completo (Reembolso)';
         } else {
           const missing = [];
           if (!m.xml_url) missing.push('XML');
@@ -157,6 +204,7 @@ export default function ExpedienteDigital() {
           xml_url: m.xml_url,
           pdf_url: m.pdf_factura_url,
           ticket_url: m.pdf_ticket_url,
+          soporte_reembolso_url: m.soporte_reembolso_url,
           statusColor: color,
           statusLabel: label
         });
@@ -205,6 +253,11 @@ export default function ExpedienteDigital() {
     if (item.ticket_url) {
       item.ticket_url.split(',').forEach((url, i) => {
         if (url) docs.push({ url, type: 'pdf', label: `Ticket PDF ${i + 1}` });
+      });
+    }
+    if (item.soporte_reembolso_url) {
+      item.soporte_reembolso_url.split(',').forEach((url, i) => {
+        if (url) docs.push({ url, type: 'pdf', label: `Soporte Reembolso ${i + 1}` });
       });
     }
     setViewer({ open: true, title: item.concepto, docs });
@@ -343,7 +396,11 @@ export default function ExpedienteDigital() {
                           <Search size={12} /> Revisar Archivos
                         </button>
                         <button
-                          onClick={() => setManualModal({isOpen: true, id: item.id, tipo: item.tipo === 'Egreso' ? 'gasto' : 'venta'})}
+                          onClick={() => setManualModal({
+                            isOpen: true,
+                            id: item.id,
+                            tipo: item.tipo === 'Egreso' ? 'gasto' : (item.tipo === 'Ingreso' ? 'venta' : 'movimiento')
+                          })}
                           className="px-2 py-1.5 bg-blue-50 dark:bg-blue-900/30 hover:bg-blue-100 dark:hover:bg-blue-900/50 text-blue-500 hover:text-blue-700 rounded-lg transition-colors"
                           title="Añadir Documentos Faltantes"
                         >

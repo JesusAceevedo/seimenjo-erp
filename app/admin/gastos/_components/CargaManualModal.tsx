@@ -2,6 +2,8 @@
 import React, { useState } from 'react';
 import { X, UploadCloud, Link as LinkIcon, FileText, CheckCircle, AlertTriangle } from 'lucide-react';
 import { supabase } from '../../../../lib/supabase';
+import { conciliarGastoEfectivoAutomatico } from '../reconciliationActions';
+
 
 const SAT_FORMAS_PAGO = [
   { codigo: '01', nombre: 'Efectivo' },
@@ -31,7 +33,7 @@ const SAT_FORMAS_PAGO = [
 interface CargaManualModalProps {
   onClose: () => void;
   onSuccess: () => void;
-  tipo: 'gasto' | 'venta';
+  tipo: 'gasto' | 'venta' | 'movimiento';
   registroId?: string | null;
 }
 
@@ -49,33 +51,41 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId 
     xml: 'upload' | 'link';
     pdf: 'upload' | 'link';
     ticket: 'upload' | 'link';
+    soporte_reembolso: 'upload' | 'link';
   }>({
     xml: 'upload',
     pdf: 'upload',
-    ticket: 'upload'
+    ticket: 'upload',
+    soporte_reembolso: 'upload'
   });
 
   const [files, setFiles] = useState<{
     xml: File | null;
     pdf: File | null;
     ticket: File | null;
+    soporte_reembolso: File | null;
   }>({
     xml: null,
     pdf: null,
-    ticket: null
+    ticket: null,
+    soporte_reembolso: null
   });
 
   const [links, setLinks] = useState({
     xml: '',
     pdf: '',
-    ticket: ''
+    ticket: '',
+    soporte_reembolso: ''
   });
 
-  const [existingDocs, setExistingDocs] = useState<{ xml: boolean; pdf: boolean; ticket: boolean }>({
+  const [existingDocs, setExistingDocs] = useState<{ xml: boolean; pdf: boolean; ticket: boolean; soporte_reembolso: boolean }>({
     xml: false,
     pdf: false,
-    ticket: false
+    ticket: false,
+    soporte_reembolso: false
   });
+
+  const [esReembolso, setEsReembolso] = useState(false);
 
   // Campos de captura manual / pre-llenados
   const [uuidFiscal, setUuidFiscal] = useState<string | null>(null);
@@ -111,7 +121,8 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId 
         }
       }
       
-      const { data: catData } = await supabase.from('categorias_gasto').select('id, nombre').order('nombre');
+      const catTable = tipo === 'movimiento' ? 'categorias_movimiento_bancario' : 'categorias_gasto';
+      const { data: catData } = await supabase.from(catTable).select('id, nombre').order('nombre');
       if (catData) {
         setCategorias(catData);
       }
@@ -120,54 +131,72 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId 
 
     if (registroId) {
       const fetchDocs = async () => {
-        const tableStr = tipo === 'gasto' ? 'gastos' : 'facturas_clientes';
-        const { data, error } = await supabase
-          .from(tableStr)
-          .select('*, proveedores(*), clientes(*)')
-          .eq('id', registroId)
-          .maybeSingle();
+        let tableStr = 'gastos';
+        if (tipo === 'venta') tableStr = 'facturas_clientes';
+        if (tipo === 'movimiento') tableStr = 'movimientos_bancarios';
+
+        let data: any = null;
+        if (tipo === 'movimiento') {
+          const { data: movData } = await supabase
+            .from('movimientos_bancarios')
+            .select('*')
+            .eq('id', registroId)
+            .maybeSingle();
+          data = movData;
+        } else {
+          const { data: docData } = await supabase
+            .from(tableStr)
+            .select('*, proveedores(*), clientes(*)')
+            .eq('id', registroId)
+            .maybeSingle();
+          data = docData;
+        }
         
         if (data) {
+          const isMov = tipo === 'movimiento';
           setExistingDocs({
             xml: !!data.xml_url,
-            pdf: !!data.pdf_url,
-            ticket: !!data.ticket_url
+            pdf: !!(isMov ? data.pdf_factura_url : data.pdf_url),
+            ticket: !!(isMov ? data.pdf_ticket_url : data.ticket_url),
+            soporte_reembolso: !!data.soporte_reembolso_url
           });
           setLinks({
             xml: data.xml_url ? data.xml_url.split(',')[0] : '',
-            pdf: data.pdf_url ? data.pdf_url.split(',')[0] : '',
-            ticket: data.ticket_url ? data.ticket_url.split(',')[0] : ''
+            pdf: (isMov ? data.pdf_factura_url : data.pdf_url) ? (isMov ? data.pdf_factura_url : data.pdf_url).split(',')[0] : '',
+            ticket: (isMov ? data.pdf_ticket_url : data.ticket_url) ? (isMov ? data.pdf_ticket_url : data.ticket_url).split(',')[0] : '',
+            soporte_reembolso: data.soporte_reembolso_url ? data.soporte_reembolso_url.split(',')[0] : ''
           });
 
           // Pre-llenar campos
           setManualFields({
-            fecha: (tipo === 'gasto' ? data.fecha_gasto : data.fecha_emision) || new Date().toISOString().split('T')[0],
-            rfc: (tipo === 'gasto' ? data.proveedores?.rfc : data.clientes?.rfc) || '',
-            nombre: (tipo === 'gasto' ? data.proveedores?.nombre_comercial : data.clientes?.nombre_local) || '',
-            folio: (tipo === 'gasto' ? data.folio_factura : data.serie_folio) || '',
-            subtotal: (data.subtotal ?? '').toString(),
-            iva: (tipo === 'gasto' ? data.iva_acreditable : data.iva_trasladado ?? '').toString(),
-            total: (tipo === 'gasto' ? data.monto : data.total ?? '').toString(),
-            metodoPagoId: data.forma_pago_id || '',
-            categoria_id: data.categoria_id || '',
+            fecha: (isMov ? data.fecha : (tipo === 'gasto' ? data.fecha_gasto : data.fecha_emision)) || new Date().toISOString().split('T')[0],
+            rfc: (isMov ? data.rfc_proveedor : (tipo === 'gasto' ? data.proveedores?.rfc : data.clientes?.rfc)) || '',
+            nombre: (isMov ? '' : (tipo === 'gasto' ? data.proveedores?.nombre_comercial : data.clientes?.nombre_local)) || '',
+            folio: (isMov ? data.referencia : (tipo === 'gasto' ? data.folio_factura : data.serie_folio)) || '',
+            subtotal: isMov ? '' : (data.subtotal ?? '').toString(),
+            iva: isMov ? '' : (tipo === 'gasto' ? data.iva_acreditable : data.iva_trasladado ?? '').toString(),
+            total: (isMov ? data.monto : (tipo === 'gasto' ? data.monto : data.total ?? '')).toString(),
+            metodoPagoId: isMov ? '' : (data.forma_pago_id || ''),
+            categoria_id: (isMov ? data.categoria_movimiento_id : data.categoria_id) || '',
             concepto: data.concepto || ''
           });
-          setUuidFiscal(data.uuid_fiscal || null);
-          setFechaTimbrado(data.fecha_timbrado || null);
-          setUsoCfdi(data.uso_cfdi_clave || 'G03');
-          setEsDeducible(data.es_deducible !== false);
+          setUuidFiscal(!isMov ? data.uuid_fiscal || null : null);
+          setFechaTimbrado(!isMov ? data.fecha_timbrado || null : null);
+          setUsoCfdi(!isMov ? data.uso_cfdi_clave || 'G03' : 'G03');
+          setEsDeducible(!isMov ? data.es_deducible !== false : false);
+          setEsReembolso(!!data.soporte_reembolso_url);
         }
       };
       fetchDocs();
     }
   }, [registroId, tipo]);
 
-  const handleModeToggle = (docType: 'xml' | 'pdf' | 'ticket', mode: 'upload' | 'link') => {
+  const handleModeToggle = (docType: 'xml' | 'pdf' | 'ticket' | 'soporte_reembolso', mode: 'upload' | 'link') => {
     setFileMode(prev => ({ ...prev, [docType]: mode }));
   };
 
   // Procesar archivo XML seleccionado para auto-completar los campos manuales
-  const handleFileChange = async (docType: 'xml' | 'pdf' | 'ticket', file: File | null) => {
+  const handleFileChange = async (docType: 'xml' | 'pdf' | 'ticket' | 'soporte_reembolso', file: File | null) => {
     setFiles(prev => ({ ...prev, [docType]: file }));
     if (docType === 'xml' && file) {
       try {
@@ -308,19 +337,26 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId 
       if (!registroId && tipo === 'gasto' && !manualFields.concepto) {
         throw new Error('Debes proporcionar el concepto del gasto.');
       }
-      if (tipo === 'gasto' && !esDeducible) {
+      if (tipo === 'gasto' && !esDeducible && !esReembolso) {
         const hasTicket = (fileMode.ticket === 'upload' && files.ticket) || (fileMode.ticket === 'link' && links.ticket) || existingDocs.ticket;
         if (!hasTicket) {
           throw new Error('Para un gasto no deducible (solo ticket), debes cargar el archivo o enlace del Ticket obligatoriamente.');
         }
       }
+      if (esReembolso) {
+        const hasSoporte = (fileMode.soporte_reembolso === 'upload' && files.soporte_reembolso) || (fileMode.soporte_reembolso === 'link' && links.soporte_reembolso) || existingDocs.soporte_reembolso;
+        if (!hasSoporte) {
+          throw new Error('Para un Reembolso, debes cargar la Hoja Soporte obligatoriamente.');
+        }
+      }
 
       // Subir Archivos a Supabase
       const timestamp = Date.now();
-      const basePath = tipo === 'gasto' ? 'gastos/' : 'ventas/';
+      const basePath = tipo === 'gasto' ? 'gastos/' : (tipo === 'movimiento' ? 'reconciliation/' : 'ventas/');
       let finalXmlUrl = fileMode.xml === 'link' ? links.xml : null;
       let finalPdfUrl = fileMode.pdf === 'link' ? links.pdf : null;
       let finalTicketUrl = fileMode.ticket === 'link' ? links.ticket : null;
+      let finalSoporteUrl = fileMode.soporte_reembolso === 'link' ? links.soporte_reembolso : null;
 
       const oldFilesToDelete: { bucket: string; path: string }[] = [];
 
@@ -371,8 +407,11 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId 
       if (fileMode.xml === 'upload' && files.xml) finalXmlUrl = await uploadFile(files.xml, 'xml', links.xml);
       if (fileMode.pdf === 'upload' && files.pdf) finalPdfUrl = await uploadFile(files.pdf, 'pdf', links.pdf);
       if (fileMode.ticket === 'upload' && files.ticket) finalTicketUrl = await uploadFile(files.ticket, 'ticket', links.ticket);
+      if (fileMode.soporte_reembolso === 'upload' && files.soporte_reembolso) {
+        finalSoporteUrl = await uploadFile(files.soporte_reembolso, 'soporte_reembolso', links.soporte_reembolso);
+      }
 
-      const tableStr = tipo === 'gasto' ? 'gastos' : 'facturas_clientes';
+      const tableStr = tipo === 'gasto' ? 'gastos' : (tipo === 'movimiento' ? 'movimientos_bancarios' : 'facturas_clientes');
 
       // Guardar en Base de Datos
       const { data: { user } } = await supabase.auth.getUser();
@@ -396,9 +435,22 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId 
       if (registroId) {
         // ACTUALIZAR (Adjuntar documentos faltantes o reemplazar existentes)
         const updateData: any = {};
-        if (finalXmlUrl !== null) updateData.xml_url = finalXmlUrl;
-        if (finalPdfUrl !== null) updateData.pdf_url = finalPdfUrl;
-        if (finalTicketUrl !== null) updateData.ticket_url = finalTicketUrl;
+        if (tipo === 'movimiento') {
+          if (finalXmlUrl !== null) updateData.xml_url = finalXmlUrl;
+          if (finalPdfUrl !== null) updateData.pdf_factura_url = finalPdfUrl;
+          if (finalTicketUrl !== null) updateData.pdf_ticket_url = finalTicketUrl;
+          if (finalSoporteUrl !== null) updateData.soporte_reembolso_url = finalSoporteUrl;
+
+          updateData.concepto = manualFields.concepto;
+          if (manualFields.categoria_id) {
+            updateData.categoria_movimiento_id = manualFields.categoria_id;
+          }
+        } else {
+          if (finalXmlUrl !== null) updateData.xml_url = finalXmlUrl;
+          if (finalPdfUrl !== null) updateData.pdf_url = finalPdfUrl;
+          if (finalTicketUrl !== null) updateData.ticket_url = finalTicketUrl;
+          if (finalSoporteUrl !== null) updateData.soporte_reembolso_url = finalSoporteUrl;
+        }
 
         if (Object.keys(updateData).length > 0) {
           const { error } = await supabase.from(tableStr).update(updateData).eq('id', registroId);
@@ -481,6 +533,7 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId 
             xml_url: finalXmlUrl,
             pdf_url: finalPdfUrl,
             ticket_url: finalTicketUrl,
+            soporte_reembolso_url: finalSoporteUrl,
             fecha_gasto: manualFields.fecha,
             empresa_id: empresaId,
             concepto: manualFields.concepto || (uuidFiscal 
@@ -558,9 +611,27 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId 
           }
         }
 
-        const { error } = await supabase.from(tableStr).insert([insertPayload]);
+        const { data: newRecord, error } = await supabase
+          .from(tableStr)
+          .insert([insertPayload])
+          .select('id')
+          .single();
         if (error) throw error;
+
+        if (tipo === 'gasto' && newRecord) {
+          const sessionData = localStorage.getItem('seimenjo_session');
+          let token = '';
+          if (sessionData) {
+            try {
+              token = JSON.parse(sessionData).token || '';
+            } catch (e) {}
+          }
+          if (token) {
+            await conciliarGastoEfectivoAutomatico(newRecord.id, token);
+          }
+        }
       }
+
 
       // Eliminar del Storage los archivos anteriores
       if (oldFilesToDelete.length > 0) {
@@ -580,7 +651,7 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId 
 
   const renderFileSection = (
     title: string,
-    type: 'xml' | 'pdf' | 'ticket',
+    type: 'xml' | 'pdf' | 'ticket' | 'soporte_reembolso',
     accept: string,
     mandatory: boolean
   ) => {
@@ -669,15 +740,14 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId 
 
         {/* Content */}
         <form onSubmit={procesarManual} className="p-6 overflow-y-auto flex-1 space-y-6">
-          
-          {errorGlobal && (
+            {errorGlobal && (
             <div className="p-3 bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 rounded-xl text-red-600 dark:text-red-400 text-sm flex items-start gap-2">
               <AlertTriangle size={18} className="shrink-0 mt-0.5" />
               <p>{errorGlobal}</p>
             </div>
           )}
 
-          {tipo === 'gasto' && (
+          {tipo === 'gasto' && !esReembolso && (
             <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-5 shadow-sm flex items-center justify-between">
               <div>
                 <label className="text-sm font-bold text-gray-950 dark:text-white">Gasto No Deducible (Solo Ticket)</label>
@@ -702,12 +772,47 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId 
             </div>
           )}
 
+          {(tipo === 'gasto' || tipo === 'movimiento') && (
+            <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-5 shadow-sm flex items-center justify-between">
+              <div>
+                <label className="text-sm font-bold text-gray-950 dark:text-white">Es un Reembolso</label>
+                <p className="text-xs text-gray-500 mt-1">Marca esta opción si esta operación es un reembolso y cuenta con una hoja de soporte.</p>
+              </div>
+              <input
+                type="checkbox"
+                checked={esReembolso}
+                onChange={(e) => {
+                  const val = e.target.checked;
+                  setEsReembolso(val);
+                  if (val) {
+                    setEsDeducible(false);
+                    setFiles(prev => ({ ...prev, xml: null, pdf: null, ticket: null }));
+                    setLinks(prev => ({ ...prev, xml: '', pdf: '', ticket: '' }));
+                    setUuidFiscal(null);
+                    setFechaTimbrado(null);
+                  } else {
+                    setEsDeducible(true);
+                    setFiles(prev => ({ ...prev, soporte_reembolso: null }));
+                    setLinks(prev => ({ ...prev, soporte_reembolso: '' }));
+                  }
+                }}
+                className="w-5 h-5 accent-blue-600 rounded cursor-pointer"
+              />
+            </div>
+          )}
+
           {/* Sección de Archivos */}
           <div className="space-y-4">
             <h3 className="text-xs font-extrabold text-gray-400 dark:text-gray-500 uppercase tracking-wider">Archivos de Soporte</h3>
-            {esDeducible && renderFileSection("Archivo XML (Opcional)", "xml", ".xml", false)}
-            {esDeducible && renderFileSection("Representación Impresa (PDF)", "pdf", ".pdf", false)}
-            {renderFileSection(esDeducible ? "Ticket / Nota / Foto" : "Ticket / Nota / Foto (Obligatorio)", "ticket", "image/*,.pdf", !esDeducible)}
+            {esReembolso ? (
+              renderFileSection("Hoja Soporte de Reembolso (Obligatorio)", "soporte_reembolso", "image/*,.pdf", true)
+            ) : (
+              <>
+                {esDeducible && renderFileSection("Archivo XML (Opcional)", "xml", ".xml", false)}
+                {esDeducible && renderFileSection("Representación Impresa (PDF)", "pdf", ".pdf", false)}
+                {renderFileSection(esDeducible ? "Ticket / Nota / Foto" : "Ticket / Nota / Foto (Obligatorio)", "ticket", "image/*,.pdf", !esDeducible)}
+              </>
+            )}
           </div>
 
           {/* Formulario de Campos */}
@@ -740,7 +845,7 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId 
               </div>
 
               <div>
-                <label className="text-xs font-bold text-gray-700 dark:text-gray-300">RFC {tipo === 'gasto' ? 'Proveedor' : 'Cliente'}</label>
+                <label className="text-xs font-bold text-gray-700 dark:text-gray-300">RFC {tipo === 'venta' ? 'Cliente' : 'Proveedor'}</label>
                 <input
                   type="text"
                   placeholder="RFC"
@@ -761,13 +866,15 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId 
                 />
               </div>
 
-              {tipo === 'gasto' && (
+              {(tipo === 'gasto' || tipo === 'movimiento') && (
                 <div className="sm:col-span-2">
-                  <label className="text-xs font-bold text-gray-700 dark:text-gray-300">Descripción del Gasto u Observaciones <span className="text-red-500">*</span></label>
+                  <label className="text-xs font-bold text-gray-700 dark:text-gray-300">
+                    {tipo === 'gasto' ? 'Descripción del Gasto u Observaciones' : 'Concepto del Movimiento'} <span className="text-red-550">*</span>
+                  </label>
                   <input
                     type="text"
                     required
-                    placeholder="Ej. Compra de papelería, comida de negocios..."
+                    placeholder={tipo === 'gasto' ? "Ej. Compra de papelería, comida de negocios..." : "Concepto del movimiento"}
                     value={manualFields.concepto}
                     onChange={e => setManualFields(prev => ({ ...prev, concepto: e.target.value }))}
                     className="w-full mt-1 bg-gray-50 dark:bg-gray-950 border border-gray-300 dark:border-gray-700 p-2.5 rounded-lg text-sm text-gray-950 dark:text-white outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all"
@@ -852,9 +959,11 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId 
                 </select>
               </div>
 
-              {tipo === 'gasto' && (
+              {(tipo === 'gasto' || tipo === 'movimiento') && (
                 <div>
-                  <label className="text-xs font-bold text-gray-700 dark:text-gray-300">Categoría de Gasto</label>
+                  <label className="text-xs font-bold text-gray-700 dark:text-gray-300">
+                    {tipo === 'gasto' ? 'Categoría de Gasto' : 'Categoría de Movimiento'}
+                  </label>
                   <select
                     value={manualFields.categoria_id}
                     onChange={e => setManualFields(prev => ({ ...prev, categoria_id: e.target.value }))}

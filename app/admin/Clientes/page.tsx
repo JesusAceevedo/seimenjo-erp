@@ -89,6 +89,7 @@ export default function AdminMonitor() {
   const [errorClienteModal, setErrorClienteModal] = useState('');
   const [isLoadingEditarCliente, setIsLoadingEditarCliente] = useState(false);
   const [errorEditarClienteModal, setErrorEditarClienteModal] = useState('');
+  const [isSavingPedido, setIsSavingPedido] = useState(false);
 
   // --- CONSULTAS A BASE DE DATOS ---
   const fetchPedidos = useCallback(async () => {
@@ -115,8 +116,12 @@ export default function AdminMonitor() {
 
   useEffect(() => {
     const init = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) return router.push('/admin/login');
+      const token = await getToken();
+      if (!token) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+        const retryToken = await getToken();
+        if (!retryToken) return router.push('/admin/login');
+      }
 
       const [prodsRes] = await Promise.all([
         supabase.from('producto_variantes').select('id, gramaje, precio_base, productos(nombre)')
@@ -151,6 +156,8 @@ export default function AdminMonitor() {
 
   // --- ACCIONES DE PEDIDOS ---
   const capturarPedidoDetallado = async () => {
+    if (isSavingPedido) return;
+    setIsSavingPedido(true);
     let totalCalculado = Number(nuevoPedido.costo_envio) || 0;
 
     const itemsProcesados = nuevoPedido.items.filter(i => i.variante_id).map(item => {
@@ -161,27 +168,46 @@ export default function AdminMonitor() {
       return { variante_id: item.variante_id, cantidad: item.cantidad, comentarios: item.comentarios, precio_aplicado: precioUnitario, subtotal: subtotalItem };
     });
 
-    const { data: pedido, error } = await supabase.from('pedidos').insert([{
-      cliente_id: nuevoPedido.cliente_id || null,
-      cliente_nombre: nuevoPedido.cliente_nombre,
-      cliente_telefono: nuevoPedido.cliente_telefono,
-      estatus_pedido: 'Pendiente',
-      estatus_pago: 'Pendiente',
-      precio_total: totalCalculado,
-      fecha_pedido: new Date().toISOString().split('T')[0],
-      fecha_produccion: nuevoPedido.fecha_produccion || null,
-      fecha_entrega: nuevoPedido.fecha_entrega || null,
-      entregado_por: nuevoPedido.entregado_por,
-      costo_envio: nuevoPedido.costo_envio,
-      comentarios: nuevoPedido.comentarios_generales
-    }]).select().single();
+    let pedidoId = null;
+    try {
+      const { data: pedido, error } = await supabase.from('pedidos').insert([{
+        cliente_id: nuevoPedido.cliente_id || null,
+        cliente_nombre: nuevoPedido.cliente_nombre,
+        cliente_telefono: nuevoPedido.cliente_telefono,
+        estatus_pedido: 'Pendiente',
+        estatus_pago: 'Pendiente',
+        precio_total: totalCalculado,
+        fecha_pedido: new Date().toISOString().split('T')[0],
+        fecha_produccion: nuevoPedido.fecha_produccion || null,
+        fecha_entrega: nuevoPedido.fecha_entrega || null,
+        entregado_por: nuevoPedido.entregado_por,
+        costo_envio: nuevoPedido.costo_envio,
+        comentarios: nuevoPedido.comentarios_generales
+      }]).select().single();
 
-    if (pedido && !error && itemsProcesados.length > 0) {
-      const detalles = itemsProcesados.map(item => ({ pedido_id: pedido.id, ...item }));
-      await supabase.from('pedido_detalles').insert(detalles);
+      if (error) throw error;
+      if (!pedido) throw new Error("No se pudo crear el pedido principal");
+      pedidoId = pedido.id;
+
+      if (itemsProcesados.length > 0) {
+        const detalles = itemsProcesados.map(item => ({ pedido_id: pedidoId, ...item }));
+        const { error: detallesError } = await supabase.from('pedido_detalles').insert(detalles);
+        if (detallesError) throw detallesError;
+      }
+
       setIsModalOpen(false);
       setNuevoPedido(PEDIDO_INICIAL);
       fetchPedidos();
+    } catch (err: any) {
+      console.error("Error al capturar pedido:", err);
+      alert("Error al procesar el pedido: " + (err.message || err));
+      
+      // Limpiar pedido huérfano si fallaron los detalles para evitar registros duplicados/incompletos
+      if (pedidoId) {
+        await supabase.from('pedidos').delete().eq('id', pedidoId);
+      }
+    } finally {
+      setIsSavingPedido(false);
     }
   };
 
@@ -502,8 +528,10 @@ export default function AdminMonitor() {
               </div>
 
               <div className="flex gap-3 pt-6 border-t border-gray-200 dark:border-gray-800">
-                <button onClick={() => setIsModalOpen(false)} className="flex-1 py-3 font-semibold border border-gray-300 dark:border-gray-700 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300 transition-colors">Cancelar</button>
-                <button onClick={capturarPedidoDetallado} className="flex-1 py-3 bg-amber-600 hover:bg-amber-500 text-white font-semibold rounded-xl shadow-lg transition-colors">Procesar Orden Completa</button>
+                <button onClick={() => setIsModalOpen(false)} disabled={isSavingPedido} className="flex-1 py-3 font-semibold border border-gray-300 dark:border-gray-700 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300 transition-colors disabled:opacity-50">Cancelar</button>
+                <button onClick={capturarPedidoDetallado} disabled={isSavingPedido} className="flex-1 py-3 bg-amber-600 hover:bg-amber-500 disabled:bg-amber-800 text-white font-semibold rounded-xl shadow-lg transition-colors disabled:opacity-50">
+                  {isSavingPedido ? 'Procesando...' : 'Procesar Orden Completa'}
+                </button>
               </div>
             </div>
           </div>

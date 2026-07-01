@@ -6,10 +6,12 @@ import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../../lib/supabase';
 import { useThemeMode } from '../../../lib/useThemeMode';
+import { useSessionToken } from '../../../lib/hooks/useSessionToken';
 import { Repartidor, FormaPago, EstatusFactura, RegimenFiscal, UsoCfdi, CategoriaGasto, Proveedor, ProductoVariante } from '../types';
 import {
   Settings, Truck, CreditCard, FileCheck, Hash, Globe, FileText,
-  FolderOpen, Users, Plus, Trash2, Save, Sun, Moon, AlertTriangle, Package, Soup, Edit
+  FolderOpen, Users, Plus, Trash2, Save, Sun, Moon, AlertTriangle, Package, Soup, Edit,
+  Briefcase, Layers
 } from 'lucide-react';
 import ProductosTab from './ProductosTab';
 import TicketConfigTab from './TicketConfigTab';
@@ -18,8 +20,9 @@ import { crearBucketsAlmacenamiento, provisionarAdminEmpresa } from '../actions/
 
 export default function ConfigPage() {
   const router = useRouter();
+  const getSessionToken = useSessionToken();
   const { isDarkMode, toggleDarkMode } = useThemeMode();
-  const [activeTab, setActiveTab] = useState<'ventas' | 'clientes' | 'facturacion' | 'productos' | 'tickets' | 'empresa' | 'superusuario'>('ventas');
+  const [activeTab, setActiveTab] = useState<'ventas' | 'clientes' | 'facturacion' | 'productos' | 'tickets' | 'empresa' | 'superusuario' | 'rrhh'>('ventas');
 
   // --- ESTADO PERFIL DE EMPRESA ACTIVA ---
   const [empresaId, setEmpresaId] = useState<string | null>(null);
@@ -55,6 +58,12 @@ export default function ConfigPage() {
   const [nuevaCuenta, setNuevaCuenta] = useState({ nombre: '', numero_cuenta: '', moneda: 'MXN' });
   const [nuevoEstatusConciliacion, setNuevoEstatusConciliacion] = useState({ nombre: '', color: '#94a3b8' });
   const [nuevaCategoriaMovimiento, setNuevaCategoriaMovimiento] = useState({ nombre: '', requiere_comprobante: true });
+
+  // --- ESTADOS DE RR.HH. ---
+  const [departamentos, setDepartamentos] = useState<any[]>([]);
+  const [puestos, setPuestos] = useState<any[]>([]);
+  const [nuevoDept, setNuevoDept] = useState({ nombre: '', descripcion: '' });
+  const [nuevoPuesto, setNuevoPuesto] = useState({ nombre: '', salario_diario_base: 250, puntos_propina: 1.00, departamento_id: '' });
 
 
   // --- ESTADOS DE SUPERUSUARIO ---
@@ -157,6 +166,12 @@ export default function ConfigPage() {
     const catMov = await fetchCatalog('categorias_movimiento_bancario', 'nombre');
     setCategoriasMovimiento(catMov);
 
+    // CATÁLOGOS RR.HH.
+    const depts = await fetchCatalog('departamentos', 'nombre');
+    setDepartamentos(depts);
+    const psts = await fetchCatalog('puestos_trabajo', 'nombre');
+    setPuestos(psts);
+
     // 7. Proveedores
     const provs = await fetchCatalog('proveedores', 'nombre_comercial');
     setProveedores(provs);
@@ -215,20 +230,27 @@ export default function ConfigPage() {
 
   useEffect(() => {
     const checkAuth = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) return router.push('/admin/login');
+      const token = await getSessionToken();
+      if (!token) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+        const retryToken = await getSessionToken();
+        if (!retryToken) return router.push('/admin/login');
+      }
 
       // Consultar si el usuario actual es Superusuario (usando supabase_auth_id)
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      
       const { data: staffData } = await supabase
         .from('usuarios_staff')
         .select('es_superusuario')
-        .eq('supabase_auth_id', session.user.id)
+        .eq('supabase_auth_id', user.id)
         .maybeSingle();
 
       if (staffData?.es_superusuario) {
         setEsSuperusuario(true);
-        if (session) {
-          await crearBucketsAlmacenamiento(session.access_token);
+        if (token) {
+          await crearBucketsAlmacenamiento(token);
         }
         await loadSuperData();
       }
@@ -495,8 +517,7 @@ export default function ConfigPage() {
 
     setCreandoAdmin(true);
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const token = session?.access_token || '';
+      const token = await getSessionToken();
       const res = await provisionarAdminEmpresa({
         empresaId: adminEmpresaId,
         nombre: nombreTrimmed,
@@ -648,6 +669,15 @@ export default function ConfigPage() {
               }`}
           >
             <Settings size={16} /> Perfil de Empresa
+          </button>
+          <button
+            onClick={() => setActiveTab('rrhh')}
+            className={`px-5 py-2.5 rounded-xl text-sm font-semibold transition-all duration-300 flex items-center gap-2 ${activeTab === 'rrhh'
+                ? 'bg-amber-600 text-white shadow-md'
+                : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-200/50 dark:hover:bg-gray-800/50'
+              }`}
+          >
+            <Briefcase size={16} /> Catálogos RR.HH.
           </button>
           {esSuperusuario && (
             <button
@@ -1350,6 +1380,155 @@ export default function ConfigPage() {
           {activeTab === 'tickets' && (
             <div className="animate-in fade-in duration-300">
               <TicketConfigTab />
+            </div>
+          )}
+
+          {activeTab === 'rrhh' && (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 animate-in fade-in duration-300">
+              {/* SECCIÓN DEPARTAMENTOS */}
+              <div className="bg-white dark:bg-gray-950 p-6 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-sm space-y-4">
+                <h3 className="text-lg font-bold flex items-center gap-2">
+                  <Layers className="text-amber-500" size={20} /> Departamentos
+                </h3>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    placeholder="Nombre del Departamento"
+                    value={nuevoDept.nombre}
+                    className="flex-1 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-xl text-sm focus:ring-1 focus:ring-amber-500 outline-none text-gray-900 dark:text-white font-sans"
+                    onChange={e => setNuevoDept({ ...nuevoDept, nombre: e.target.value })}
+                  />
+                  <input
+                    type="text"
+                    placeholder="Descripción"
+                    value={nuevoDept.descripcion}
+                    className="flex-1 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-xl text-sm focus:ring-1 focus:ring-amber-500 outline-none text-gray-900 dark:text-white font-sans"
+                    onChange={e => setNuevoDept({ ...nuevoDept, descripcion: e.target.value })}
+                  />
+                  <button
+                    onClick={() => handleSaveItem('departamentos', { nombre: nuevoDept.nombre, descripcion: nuevoDept.descripcion }, setDepartamentos, 'nombre', () => setNuevoDept({ nombre: '', descripcion: '' }))}
+                    className="bg-amber-600 hover:bg-amber-500 text-white px-4 py-2.5 rounded-xl font-bold text-sm transition-colors flex items-center gap-1 shadow-sm font-sans"
+                  >
+                    <Plus size={16} /> Agregar
+                  </button>
+                </div>
+
+                <div className="overflow-hidden rounded-xl border border-gray-100 dark:border-gray-800 font-sans">
+                  <table className="w-full text-left text-xs">
+                    <thead>
+                      <tr className="bg-gray-100/60 dark:bg-gray-900/40 p-3 border-b border-gray-200 dark:border-gray-800 font-semibold text-gray-500">
+                        <th className="p-3">Departamento</th>
+                        <th className="p-3">Descripción</th>
+                        <th className="p-3 text-right">Acción</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100 dark:divide-gray-800/40">
+                      {departamentos.map((d: any) => (
+                        <tr key={d.id} className="hover:bg-gray-50 dark:hover:bg-gray-900/10">
+                          <td className="p-3 font-semibold text-gray-800 dark:text-gray-200">{d.nombre}</td>
+                          <td className="p-3 text-gray-500">{d.descripcion || 'Sin descripción'}</td>
+                          <td className="p-3 text-right">
+                            <button
+                              onClick={() => handleDeleteItem('departamentos', d.id, setDepartamentos, 'nombre')}
+                              className="text-gray-400 hover:text-red-500 p-1 rounded-md transition-colors"
+                            >
+                              <Trash2 size={15} />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                      {departamentos.length === 0 && (
+                        <tr>
+                          <td colSpan={3} className="p-4 text-center text-gray-400 italic">No hay departamentos registrados</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* SECCIÓN PUESTOS DE TRABAJO */}
+              <div className="bg-white dark:bg-gray-950 p-6 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-sm space-y-4">
+                <h3 className="text-lg font-bold flex items-center gap-2">
+                  <Briefcase className="text-amber-500" size={20} /> Puestos de Trabajo / Roles
+                </h3>
+                
+                <div className="grid grid-cols-2 gap-3 font-sans">
+                  <input
+                    type="text"
+                    placeholder="Nombre del Puesto (ej. Mesero)"
+                    value={nuevoPuesto.nombre}
+                    className="bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-xl text-sm focus:ring-1 focus:ring-amber-500 outline-none text-gray-900 dark:text-white"
+                    onChange={e => setNuevoPuesto({ ...nuevoPuesto, nombre: e.target.value })}
+                  />
+                  <select
+                    value={nuevoPuesto.departamento_id}
+                    className="bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-xl text-sm text-gray-900 dark:text-white focus:ring-1 focus:ring-amber-500 outline-none"
+                    onChange={e => setNuevoPuesto({ ...nuevoPuesto, departamento_id: e.target.value })}
+                  >
+                    <option value="">Seleccionar Departamento...</option>
+                    {departamentos.map((d: any) => (
+                      <option key={d.id} value={d.id}>{d.nombre}</option>
+                    ))}
+                  </select>
+                  <input
+                    type="number"
+                    placeholder="Sueldo Diario Base ($)"
+                    value={nuevoPuesto.salario_diario_base}
+                    className="bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-xl text-sm focus:ring-1 focus:ring-amber-500 outline-none text-gray-900 dark:text-white"
+                    onChange={e => setNuevoPuesto({ ...nuevoPuesto, salario_diario_base: Number(e.target.value) })}
+                  />
+                  <input
+                    type="number"
+                    step="0.1"
+                    placeholder="Puntos Propina (ej. 1.5)"
+                    value={nuevoPuesto.puntos_propina}
+                    className="bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-xl text-sm focus:ring-1 focus:ring-amber-500 outline-none text-gray-900 dark:text-white"
+                    onChange={e => setNuevoPuesto({ ...nuevoPuesto, puntos_propina: Number(e.target.value) })}
+                  />
+                </div>
+                <button
+                  onClick={() => handleSaveItem('puestos_trabajo', { nombre: nuevoPuesto.nombre, salario_diario_base: nuevoPuesto.salario_diario_base, puntos_propina: nuevoPuesto.puntos_propina, departamento_id: nuevoPuesto.departamento_id || null }, setPuestos, 'nombre', () => setNuevoPuesto({ nombre: '', salario_diario_base: 250, puntos_propina: 1, departamento_id: '' }))}
+                  className="w-full bg-amber-600 hover:bg-amber-500 text-white py-2.5 rounded-xl font-bold text-sm transition-colors flex items-center justify-center gap-1 shadow-sm font-sans"
+                >
+                  <Plus size={16} /> Agregar Puesto de Trabajo
+                </button>
+
+                <div className="overflow-hidden rounded-xl border border-gray-100 dark:border-gray-800 font-sans">
+                  <table className="w-full text-left text-xs">
+                    <thead>
+                      <tr className="bg-gray-100/60 dark:bg-gray-900/40 p-3 border-b border-gray-200 dark:border-gray-800 font-semibold text-gray-500">
+                        <th className="p-3">Puesto</th>
+                        <th className="p-3">Sueldo Diario</th>
+                        <th className="p-3">Ptos Propina</th>
+                        <th className="p-3 text-right">Acción</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100 dark:divide-gray-800/40">
+                      {puestos.map((p: any) => (
+                        <tr key={p.id} className="hover:bg-gray-50 dark:hover:bg-gray-900/10">
+                          <td className="p-3 font-semibold text-gray-800 dark:text-gray-200">{p.nombre}</td>
+                          <td className="p-3 text-emerald-600 dark:text-emerald-400 font-bold">${p.salario_diario_base}</td>
+                          <td className="p-3 text-gray-500 font-bold">{p.puntos_propina} pts</td>
+                          <td className="p-3 text-right">
+                            <button
+                              onClick={() => handleDeleteItem('puestos_trabajo', p.id, setPuestos, 'nombre')}
+                              className="text-gray-400 hover:text-red-500 p-1 rounded-md transition-colors"
+                            >
+                              <Trash2 size={15} />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                      {puestos.length === 0 && (
+                        <tr>
+                          <td colSpan={4} className="p-4 text-center text-gray-400 italic">No hay puestos registrados</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             </div>
           )}
 

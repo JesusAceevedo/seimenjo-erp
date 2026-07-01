@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
-import { Soup, LayoutDashboard, Users, FileDown, Settings, LogOut, Package, Truck, Boxes } from 'lucide-react';
+import { Soup, LayoutDashboard, Users, FileDown, Settings, LogOut, Package, Truck, Boxes, Clock } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import OnboardingWizard from './components/OnboardingWizard';
 
@@ -69,28 +69,44 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           return;
         }
 
-        // 2. Esperar a que Supabase Auth restaure la sesión en memoria
-        let { data: { session } } = await supabase.auth.getSession();
-        if (!session) {
-          // Espera corta para evitar condiciones de carrera en la carga del cliente de Supabase
-          await new Promise(resolve => setTimeout(resolve, 200));
-          const res = await supabase.auth.getSession();
-          session = res.data.session;
+        // 2. Si ya coinciden los datos del localStorage con el estado actual, y los módulos ya están cargados,
+        // evitar volver a consultar las APIs de Supabase para evitar demoras innecesarias.
+        const datosSesion = JSON.parse(sesionGuardada);
+        if (
+          empresaId === datosSesion.empresa_id &&
+          usuarioEmail === (datosSesion.email || 'Usuario Staff') &&
+          activeModules.length > 0 &&
+          !isLoginPage
+        ) {
+          setLoadingOnboarding(false);
+          return;
         }
 
-        // 3. Si sigue sin haber sesión activa en Supabase, verificar si hay token en localStorage antes de redirigir
-        if (!session) {
-          const urlPart = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-          const projectId = urlPart.includes('//') ? (urlPart.split('//')[1]?.split('.')[0] || 'ioxfhgmeapwyfrgvtyjd') : 'ioxfhgmeapwyfrgvtyjd';
-          const supabaseSessionKey = `sb-${projectId}-auth-token`;
-          const hasSupabaseSessionInStorage = typeof window !== 'undefined' && !!localStorage.getItem(supabaseSessionKey);
+        const isSuper = !!datosSesion.es_superusuario;
+        setEsSuperusuario(isSuper);
+        setUsuarioEmail(datosSesion.email || 'Usuario Staff');
+        if (datosSesion.empresa_id) {
+          setEmpresaId(datosSesion.empresa_id);
+        }
 
-          if (hasSupabaseSessionInStorage) {
-            console.log('Sesión en inicialización detectada en localStorage de Supabase. Evitando redirección.');
-            setLoadingOnboarding(false);
-            return;
+        // 3. Esperar a que Supabase Auth restaure la sesión en memoria (hasta 1.5 segundos con reintentos)
+        let session = null;
+        for (let i = 0; i < 5; i++) {
+          const { data: { session: s } } = await supabase.auth.getSession();
+          if (s) {
+            session = s;
+            break;
           }
+          await new Promise(resolve => setTimeout(resolve, 300));
+        }
 
+        // 4. Si sigue sin haber sesión activa en memoria, verificar si hay token en localStorage antes de redirigir
+        const urlPart = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+        const projectId = urlPart.includes('//') ? (urlPart.split('//')[1]?.split('.')[0] || 'ioxfhgmeapwyfrgvtyjd') : 'ioxfhgmeapwyfrgvtyjd';
+        const supabaseSessionKey = `sb-${projectId}-auth-token`;
+        const hasSupabaseSessionInStorage = typeof window !== 'undefined' && !!localStorage.getItem(supabaseSessionKey);
+
+        if (!session && !hasSupabaseSessionInStorage) {
           if (!isLoginPage) {
             console.warn('Sesión de Supabase no detectada o expirada. Redirigiendo a login...');
             localStorage.removeItem('seimenjo_session');
@@ -102,87 +118,78 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           return;
         }
 
-        // 4. Continuar con la validación utilizando la sesión autenticada garantizada
-        const datosSesion = JSON.parse(sesionGuardada);
-        if (datosSesion.tipo === 'staff') {
-          const isSuper = !!datosSesion.es_superusuario;
-          setEsSuperusuario(isSuper);
-          setUsuarioEmail(datosSesion.email || 'Usuario Staff');
+        // 5. Cargar información de la empresa e inquilino
+        const targetEmpresaId = datosSesion.empresa_id;
+        if (targetEmpresaId) {
+          // Consultar si la empresa ya tiene RFC o Razón Social registrada
+          const { data: empresaData, error: empresaError } = await supabase
+            .from('empresas')
+            .select('nombre, rfc, razon_social, logo_url')
+            .eq('id', targetEmpresaId)
+            .maybeSingle();
 
-          if (datosSesion.empresa_id) {
-            setEmpresaId(datosSesion.empresa_id);
+          if (empresaData?.nombre) {
+            setEmpresaNombre(empresaData.nombre);
+          }
 
-            // Consultar si la empresa ya tiene RFC o Razón Social registrada
-            const { data: empresaData, error: empresaError } = await supabase
-              .from('empresas')
-              .select('nombre, rfc, razon_social, logo_url')
-              .eq('id', datosSesion.empresa_id)
-              .maybeSingle();
+          if (empresaData?.logo_url && empresaData.logo_url !== 'null' && empresaData.logo_url !== 'undefined') {
+            setLogoUrl(empresaData.logo_url);
+            setLogoError(false);
+          } else {
+            setLogoUrl(null);
+          }
 
-            if (empresaData?.nombre) {
-              setEmpresaNombre(empresaData.nombre);
-            }
-
-            if (empresaData?.logo_url && empresaData.logo_url !== 'null' && empresaData.logo_url !== 'undefined') {
-              setLogoUrl(empresaData.logo_url);
-              setLogoError(false);
-            } else {
-              setLogoUrl(null);
-            }
-
-            if (!isSuper && !empresaError && (!empresaData || !empresaData.rfc || !empresaData.razon_social)) {
-              setNeedsOnboarding(true);
-            }
-          } else if (!isSuper) {
-            // Si no hay empresa_id y no es superusuario, requiere configuración
+          if (!isSuper && !empresaError && (!empresaData || !empresaData.rfc || !empresaData.razon_social)) {
             setNeedsOnboarding(true);
           }
 
           // Consultar los módulos activos de la empresa
-          if (datosSesion.empresa_id) {
-            const { data: modulosData } = await supabase
-              .from('modulos_empresa')
-              .select('modulo')
-              .eq('empresa_id', datosSesion.empresa_id)
-              .eq('activo', true);
+          const { data: modulosData } = await supabase
+            .from('modulos_empresa')
+            .select('modulo')
+            .eq('empresa_id', targetEmpresaId)
+            .eq('activo', true);
 
-            if (modulosData) {
-              setActiveModules(modulosData.map(m => m.modulo.toLowerCase()));
-            }
+          if (modulosData) {
+            setActiveModules(modulosData.map(m => m.modulo.toLowerCase()));
           }
-          // Cargar catálogo de empresas para cambio de contexto
-          if (isSuper) {
-            const { data: emps } = await supabase.from('empresas').select('id, nombre').order('nombre');
-            if (emps) {
-              setSwitchableCompanies(emps);
-            }
-          } else {
-            // Obtener el registro de staff para encontrar su id
-            const { data: staffUser } = await supabase
-              .from('usuarios_staff')
-              .select('id')
-              .eq('supabase_auth_id', datosSesion.id)
-              .maybeSingle();
+        } else if (!isSuper) {
+          // Si no hay empresa_id y no es superusuario, requiere configuración
+          setNeedsOnboarding(true);
+        }
 
-            if (staffUser) {
-              const { data: pivotEmps } = await supabase
-                .from('empresas_usuario_pivot')
-                .select('empresa_id, empresas(id, nombre)')
-                .eq('usuario_id', staffUser.id);
-              
-              const list = (pivotEmps?.map((p: any) => {
-                const emp = p.empresas;
-                if (Array.isArray(emp)) return emp[0];
-                return emp;
-              }).filter(Boolean) as unknown as { id: string; nombre: string }[]) || [];
-              
-              // Asegurar que la empresa actual esté en la lista
-              if (datosSesion.empresa_id && !list.some(e => e.id === datosSesion.empresa_id)) {
-                const { data: curEmp } = await supabase.from('empresas').select('id, nombre').eq('id', datosSesion.empresa_id).maybeSingle();
-                if (curEmp) list.push(curEmp);
-              }
-              setSwitchableCompanies(list);
+        // Cargar catálogo de empresas para cambio de contexto
+        if (isSuper) {
+          const { data: emps } = await supabase.from('empresas').select('id, nombre').order('nombre');
+          if (emps) {
+            setSwitchableCompanies(emps);
+          }
+        } else {
+          // Obtener el registro de staff para encontrar su id
+          const { data: staffUser } = await supabase
+            .from('usuarios_staff')
+            .select('id')
+            .eq('supabase_auth_id', datosSesion.id)
+            .maybeSingle();
+
+          if (staffUser) {
+            const { data: pivotEmps } = await supabase
+              .from('empresas_usuario_pivot')
+              .select('empresa_id, empresas(id, nombre)')
+              .eq('usuario_id', staffUser.id);
+            
+            const list = (pivotEmps?.map((p: any) => {
+              const emp = p.empresas;
+              if (Array.isArray(emp)) return emp[0];
+              return emp;
+            }).filter(Boolean) as unknown as { id: string; nombre: string }[]) || [];
+            
+            // Asegurar que la empresa actual esté en la lista
+            if (targetEmpresaId && !list.some(e => e.id === targetEmpresaId)) {
+              const { data: curEmp } = await supabase.from('empresas').select('id, nombre').eq('id', targetEmpresaId).maybeSingle();
+              if (curEmp) list.push(curEmp);
             }
+            setSwitchableCompanies(list);
           }
         }
       } catch (err) {
@@ -197,6 +204,9 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
   const hasModule = (moduleName: string) => {
     if (esSuperusuario) return true;
+    if (moduleName === 'ventas') {
+      return activeModules.includes('ventas') || activeModules.includes('pedidos');
+    }
     return activeModules.includes(moduleName);
   };
 
@@ -353,13 +363,23 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
           {/* BOTÓN STAFF & PERSONAL */}
           {hasModule('personal') && (
-            <button
-              onClick={() => router.push('/admin/staff')}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${isSelected('/admin/staff') ? 'bg-amber-600 text-white font-semibold' : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white'
-                }`}
-            >
-              <Users size={18} /> Personal
-            </button>
+            <>
+              <button
+                onClick={() => router.push('/admin/staff')}
+                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${isSelected('/admin/staff') ? 'bg-amber-600 text-white font-semibold' : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white'
+                  }`}
+              >
+                <Users size={18} /> Personal
+              </button>
+
+              <button
+                onClick={() => router.push('/admin/asistencia')}
+                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${isSelected('/admin/asistencia') ? 'bg-amber-600 text-white font-semibold' : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white'
+                  }`}
+              >
+                <Clock size={18} /> Asistencia y Nóminas
+              </button>
+            </>
           )}
 
           {/* BOTÓN CONFIGURACIÓN */}

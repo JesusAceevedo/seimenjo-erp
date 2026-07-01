@@ -62,7 +62,23 @@ export default function AdminMonitor() {
 
   const getSessionToken = async (): Promise<string> => {
     const { data: { session } } = await supabase.auth.getSession();
-    return session?.access_token || '';
+    if (session?.access_token) return session.access_token;
+
+    try {
+      const urlPart = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+      const projectId = urlPart.includes('//') ? (urlPart.split('//')[1]?.split('.')[0] || 'ioxfhgmeapwyfrgvtyjd') : 'ioxfhgmeapwyfrgvtyjd';
+      const supabaseSessionKey = `sb-${projectId}-auth-token`;
+      const localData = localStorage.getItem(supabaseSessionKey);
+      if (localData) {
+        const parsed = JSON.parse(localData);
+        if (parsed?.access_token) {
+          return parsed.access_token;
+        }
+      }
+    } catch (e) {
+      console.error('Error getting session token from localStorage:', e);
+    }
+    return '';
   };
 
   // Helper de Formato Contable
@@ -205,8 +221,12 @@ export default function AdminMonitor() {
 
   useEffect(() => {
     const init = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) return router.push('/admin/login');
+      const token = await getSessionToken();
+      if (!token) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+        const retryToken = await getSessionToken();
+        if (!retryToken) return router.push('/admin/login');
+      }
 
       const [prodsRes, clisRes, repsRes, formasRes] = await Promise.all([
         supabase.from('producto_variantes').select('id, gramaje, precio_base, productos(nombre)'),
