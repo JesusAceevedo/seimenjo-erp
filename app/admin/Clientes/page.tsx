@@ -168,7 +168,7 @@ export default function AdminMonitor() {
       return { variante_id: item.variante_id, cantidad: item.cantidad, comentarios: item.comentarios, precio_aplicado: precioUnitario, subtotal: subtotalItem };
     });
 
-    let pedidoId = null;
+    let pedidoId: string | null = null;
     try {
       const { data: pedido, error } = await supabase.from('pedidos').insert([{
         cliente_id: nuevoPedido.cliente_id || null,

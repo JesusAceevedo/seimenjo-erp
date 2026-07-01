@@ -219,7 +219,7 @@ export default function Tienda() {
     if (carrito.length === 0) return;
     setEnviando(true);
 
-    let pedidoId = null;
+    let pedidoId: string | null = null;
     try {
       const sesionInfo = sesion as unknown as { tipo?: string; id?: string; empresa_id?: string; [key: string]: unknown };
       // 1. Insertar el Pedido
