@@ -204,10 +204,18 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
   const hasModule = (moduleName: string) => {
     if (esSuperusuario) return true;
+    const active = (mod: string) => activeModules.includes(mod);
+
     if (moduleName === 'ventas') {
-      return activeModules.includes('ventas') || activeModules.includes('pedidos');
+      return active('ventas') || active('pedidos');
     }
-    return activeModules.includes(moduleName);
+    if (moduleName === 'inventario') {
+      return active('inventario') || active('productos');
+    }
+    if (moduleName === 'facturacion' || moduleName === 'expediente' || moduleName === 'proveedores') {
+      return active(moduleName) || active('gastos');
+    }
+    return active(moduleName);
   };
 
   const isLoginPage = pathname === '/admin/login' || pathname === '/login';
@@ -311,6 +319,14 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           )}
           {hasModule('productos') && (
             <button
+              onClick={() => router.push('/admin/productos')}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${isSelected('/admin/productos') ? 'bg-amber-600 text-white font-semibold' : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white'}`}
+            >
+              <Package size={18} /> Productos
+            </button>
+          )}
+          {hasModule('inventario') && (
+            <button
               onClick={() => router.push('/admin/inventario')}
               className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${isSelected('/admin/inventario') ? 'bg-amber-600 text-white font-semibold' : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white'}`}
             >
@@ -329,7 +345,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           )}
 
           {/* BOTÓN CONCILIACIÓN */}
-          {hasModule('gastos') && (
+          {hasModule('facturacion') && (
             <button
               onClick={() => router.push('/admin/gastos')}
               className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${isSelected('/admin/gastos') ? 'bg-amber-600 text-white font-semibold' : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white'
@@ -340,7 +356,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           )}
 
           {/* BOTÓN EXPEDIENTE */}
-          {hasModule('gastos') && (
+          {hasModule('expediente') && (
             <button
               onClick={() => router.push('/admin/expediente')}
               className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${isSelected('/admin/expediente') ? 'bg-amber-600 text-white font-semibold' : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white'
@@ -351,7 +367,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           )}
 
           {/* BOTÓN PROVEEDORES */}
-          {hasModule('gastos') && (
+          {hasModule('proveedores') && (
             <button
               onClick={() => router.push('/admin/proveedores')}
               className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${isSelected('/admin/proveedores') ? 'bg-amber-600 text-white font-semibold' : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white'

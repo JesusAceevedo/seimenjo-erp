@@ -45,7 +45,7 @@ export default function OnboardingWizard({ empresaId, onSuccess }: OnboardingWiz
   const [keyFile, setKeyFile] = useState<File | null>(null);
 
   // Paso 4: Módulos y Parámetros
-  const [modulos, setModulos] = useState<string[]>(['ventas', 'gastos', 'clientes', 'personal', 'productos', 'produccion']);
+  const [modulos, setModulos] = useState<string[]>(['ventas', 'clientes', 'productos', 'inventario', 'gastos', 'facturacion', 'expediente', 'proveedores', 'personal', 'configuracion', 'produccion']);
 
   useEffect(() => {
     const fetchRegimenes = async () => {
@@ -458,12 +458,16 @@ export default function OnboardingWizard({ empresaId, onSuccess }: OnboardingWiz
                 <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 block mb-2">Selección de Módulos Activos</label>
                 <div className="grid grid-cols-2 gap-3 bg-slate-50 dark:bg-slate-900/50 p-4 rounded-2xl border border-slate-200 dark:border-slate-800">
                   {[
-                    { id: 'ventas', label: 'Ventas' },
-                    { id: 'gastos', label: 'Gastos' },
+                    { id: 'ventas', label: 'Pedidos' },
                     { id: 'clientes', label: 'Clientes' },
+                    { id: 'productos', label: 'Productos' },
+                    { id: 'inventario', label: 'Inventario' },
+                    { id: 'gastos', label: 'Egresos' },
+                    { id: 'facturacion', label: 'Facturación' },
+                    { id: 'expediente', label: 'Expediente' },
+                    { id: 'proveedores', label: 'Proveedores' },
                     { id: 'personal', label: 'Personal (Staff)' },
                     { id: 'configuracion', label: 'Configuración ERP' },
-                    { id: 'productos', label: 'Productos' },
                     { id: 'produccion', label: 'Producción' }
                   ].map((mod) => {
                     const isSelected = modulos.includes(mod.id);

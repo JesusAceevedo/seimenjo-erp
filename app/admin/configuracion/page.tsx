@@ -436,7 +436,7 @@ export default function ConfigPage() {
         if (error) throw error;
 
         // Auto-inicializar módulos
-        const modulosDefecto = ['ventas', 'clientes', 'productos', 'gastos', 'personal', 'configuracion', 'facturacion', 'produccion'];
+        const modulosDefecto = ['ventas', 'clientes', 'productos', 'inventario', 'gastos', 'facturacion', 'expediente', 'proveedores', 'personal', 'configuracion', 'produccion'];
         const insertsModulos = modulosDefecto.map(m => ({ empresa_id: data.id, modulo: m, activo: true }));
         await supabase.from('modulos_empresa').insert(insertsModulos);
         alert('¡Empresa creada e inicializada correctamente!');
@@ -632,7 +632,7 @@ export default function ConfigPage() {
                 : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-200/50 dark:hover:bg-gray-800/50'
               }`}
           >
-            <Truck size={16} /> Módulo de Ventas
+            <Truck size={16} /> Módulo de Pedidos
           </button>
           <button
             onClick={() => setActiveTab('clientes')}
@@ -1912,7 +1912,23 @@ export default function ConfigPage() {
                     </thead>
                     <tbody className="divide-y divide-gray-100 dark:divide-gray-800/40">
                       {empresas.map(emp => {
-                        const modulosDisponibles = ['ventas', 'clientes', 'productos', 'gastos', 'personal', 'configuracion', 'facturacion', 'produccion'];
+                        const modulosDisponibles = ['ventas', 'clientes', 'productos', 'inventario', 'gastos', 'facturacion', 'expediente', 'proveedores', 'personal', 'configuracion', 'produccion'];
+                        const getModuloLabel = (modulo: string) => {
+                          const labels: Record<string, string> = {
+                            ventas: 'Pedidos',
+                            clientes: 'Clientes',
+                            productos: 'Productos',
+                            inventario: 'Inventario',
+                            gastos: 'Egresos',
+                            facturacion: 'Facturación',
+                            expediente: 'Expediente',
+                            proveedores: 'Proveedores',
+                            personal: 'Personal',
+                            configuracion: 'Configuración',
+                            produccion: 'Producción'
+                          };
+                          return (labels[modulo] || modulo).toUpperCase();
+                        };
                         return (
                           <tr key={emp.id} className="hover:bg-gray-50 dark:hover:bg-gray-900/10">
                             <td className="p-3 font-mono text-[10px] text-gray-400">{emp.id}</td>
@@ -1931,7 +1947,7 @@ export default function ConfigPage() {
                                           : 'bg-gray-100 dark:bg-gray-800 text-gray-400 dark:text-gray-500 border border-gray-200 dark:border-gray-700'
                                         }`}
                                     >
-                                      {m.toUpperCase()}
+                                      {getModuloLabel(m)}
                                     </button>
                                   );
                                 })}

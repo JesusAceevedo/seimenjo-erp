@@ -66,7 +66,9 @@ export default function StaffPage() {
     inventario: { read: true, write: false },
     expediente: { read: true, write: false },
     facturacion: { read: true, write: false },
-    configuracion: { read: true, write: false }
+    configuracion: { read: true, write: false },
+    personal: { read: true, write: false },
+    produccion: { read: true, write: false }
   };
   const [permisosPerfil, setPermisosPerfil] = useState<Record<string, { read: boolean; write: boolean }>>(initialStatePermisos);
 
@@ -386,40 +388,55 @@ export default function StaffPage() {
                 <div>
                   <label className="text-[10px] font-bold text-gray-500 uppercase block mb-2">Asignación de Permisos del Módulo</label>
                   <div className="space-y-3 bg-white dark:bg-gray-950 p-3 rounded-lg border border-gray-200 dark:border-gray-800">
-                    {(['ventas', 'clientes', 'productos', 'proveedores', 'gastos', 'inventario', 'expediente', 'facturacion', 'configuracion']).map(mod => (
-                      <div key={mod} className="flex justify-between items-center text-xs">
-                        <span className="font-semibold text-gray-700 dark:text-gray-300">
-                          {mod === 'ventas' ? 'Pedidos' : 
-                           mod === 'gastos' ? 'Egresos / Gastos' : 
-                           mod === 'facturacion' ? 'Facturación' : 
-                           mod.charAt(0).toUpperCase() + mod.slice(1)}
-                        </span>
-                        <div className="flex gap-4">
-                          <button
-                            onClick={() => togglePermiso(mod, 'read')}
-                            className="flex items-center gap-1 hover:text-amber-500 transition-colors"
-                          >
-                            {permisosPerfil[mod].read ? (
-                              <CheckSquare size={14} className="text-emerald-500" />
-                            ) : (
-                              <Square size={14} />
-                            )}
-                            Ver (Lectura)
-                          </button>
-                          <button
-                            onClick={() => togglePermiso(mod, 'write')}
-                            className="flex items-center gap-1 hover:text-amber-500 transition-colors"
-                          >
-                            {permisosPerfil[mod].write ? (
-                              <CheckSquare size={14} className="text-emerald-500" />
-                            ) : (
-                              <Square size={14} />
-                            )}
-                            Gestionar (Escritura)
-                          </button>
+                    {(['ventas', 'clientes', 'productos', 'proveedores', 'gastos', 'inventario', 'expediente', 'facturacion', 'personal', 'configuracion', 'produccion']).map(mod => {
+                      const getLabel = (m: string) => {
+                        const labels: Record<string, string> = {
+                          ventas: 'Pedidos',
+                          clientes: 'Clientes',
+                          productos: 'Productos',
+                          inventario: 'Inventario',
+                          gastos: 'Egresos',
+                          facturacion: 'Facturación',
+                          expediente: 'Expediente',
+                          proveedores: 'Proveedores',
+                          personal: 'Personal / Asistencia y Nóminas',
+                          configuracion: 'Configuración',
+                          produccion: 'Producción'
+                        };
+                        return labels[m] || m;
+                      };
+                      return (
+                        <div key={mod} className="flex justify-between items-center text-xs">
+                          <span className="font-semibold text-gray-700 dark:text-gray-300">
+                            {getLabel(mod)}
+                          </span>
+                          <div className="flex gap-4">
+                            <button
+                              onClick={() => togglePermiso(mod, 'read')}
+                              className="flex items-center gap-1 hover:text-amber-500 transition-colors"
+                            >
+                              {(permisosPerfil[mod] || { read: false }).read ? (
+                                <CheckSquare size={14} className="text-emerald-500" />
+                              ) : (
+                                <Square size={14} />
+                              )}
+                              Ver (Lectura)
+                            </button>
+                            <button
+                              onClick={() => togglePermiso(mod, 'write')}
+                              className="flex items-center gap-1 hover:text-amber-500 transition-colors"
+                            >
+                              {(permisosPerfil[mod] || { write: false }).write ? (
+                                <CheckSquare size={14} className="text-emerald-500" />
+                              ) : (
+                                <Square size={14} />
+                              )}
+                              Gestionar (Escritura)
+                            </button>
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
 
@@ -446,22 +463,37 @@ export default function StaffPage() {
                       <tr key={perf.id} className="hover:bg-gray-50 dark:hover:bg-gray-900/10">
                         <td className="p-3 font-semibold text-gray-800 dark:text-gray-200">{perf.nombre}</td>
                         <td className="p-3 text-[10px] space-y-0.5">
-                          {Object.entries(perf.permisos || {}).map(([mod, rules]: [string, {read:boolean; write:boolean}]) => (
-                            <div key={mod}>
-                              <span className="font-bold text-gray-500 uppercase">
-                                {mod === 'ventas' ? 'Pedidos' : 
-                                 mod === 'gastos' ? 'Egresos' : 
-                                 mod === 'facturacion' ? 'Facturación' : 
-                                 mod}:
-                              </span>{' '}
-                              <span className="text-gray-400">
-                                {rules.read ? 'Lectura' : ''}
-                                {rules.read && rules.write ? ' + ' : ''}
-                                {rules.write ? 'Escritura' : ''}
-                                {!rules.read && !rules.write ? 'Ninguno' : ''}
-                              </span>
-                            </div>
-                          ))}
+                          {Object.entries(perf.permisos || {}).map(([mod, rules]: [string, {read:boolean; write:boolean}]) => {
+                            const getLabel = (m: string) => {
+                              const labels: Record<string, string> = {
+                                ventas: 'Pedidos',
+                                clientes: 'Clientes',
+                                productos: 'Productos',
+                                inventario: 'Inventario',
+                                gastos: 'Egresos',
+                                facturacion: 'Facturación',
+                                expediente: 'Expediente',
+                                proveedores: 'Proveedores',
+                                personal: 'Personal / Asistencia y Nóminas',
+                                configuracion: 'Configuración',
+                                produccion: 'Producción'
+                              };
+                              return labels[m] || m;
+                            };
+                            return (
+                              <div key={mod}>
+                                <span className="font-bold text-gray-500 uppercase">
+                                  {getLabel(mod)}:
+                                </span>{' '}
+                                <span className="text-gray-400">
+                                  {rules.read ? 'Lectura' : ''}
+                                  {rules.read && rules.write ? ' + ' : ''}
+                                  {rules.write ? 'Escritura' : ''}
+                                  {!rules.read && !rules.write ? 'Ninguno' : ''}
+                                </span>
+                              </div>
+                            );
+                          })}
                         </td>
                         <td className="p-3 text-right">
                           <button
