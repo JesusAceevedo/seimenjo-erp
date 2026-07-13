@@ -208,15 +208,23 @@ export default function DocumentViewer({ open, onClose, title, documents }: Docu
                 <AlertCircle size={48} className="mb-4 opacity-50" />
                 <h3 className="font-bold text-lg mb-2">Error al cargar el documento</h3>
                 <p className="text-sm">{error}</p>
-                <a href={activeDoc.url} target="_blank" rel="noreferrer" className="mt-4 underline text-sm text-blue-500">
-                  Intentar abrir en una nueva pestaña
-                </a>
+                {activeDoc && (
+                  <a href={activeDoc.url} target="_blank" rel="noreferrer" className="mt-4 underline text-sm text-blue-500">
+                    Intentar abrir en una nueva pestaña
+                  </a>
+                )}
+              </div>
+            ) : !activeDoc ? (
+              <div className="flex-1 flex flex-col items-center justify-center text-gray-500 p-8 text-center">
+                <AlertCircle size={48} className="mb-4 opacity-30 text-gray-400" />
+                <h3 className="font-bold text-lg mb-2 text-gray-700 dark:text-gray-300">Sin documentos disponibles</h3>
+                <p className="text-sm text-gray-500 dark:text-gray-400">Este registro no tiene ningún archivo o comprobante adjunto.</p>
               </div>
             ) : activeDoc.type === 'pdf' ? (
               <iframe
-                src={`${signedPdfUrl}#view=FitH`}
+                src={`${signedPdfUrl || ''}#view=FitH`}
                 className="w-full h-full border-0"
-                title={`PDF Viewer ${activeDoc.label}`}
+                title={`PDF Viewer ${activeDoc.label || 'Documento'}`}
               />
             ) : activeDoc.type === 'cfdi' ? (
               <div className="flex-1 overflow-auto p-4 bg-gray-100 dark:bg-gray-800 cfdi-modal-content">

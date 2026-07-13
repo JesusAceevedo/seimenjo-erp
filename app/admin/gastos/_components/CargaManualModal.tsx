@@ -86,6 +86,8 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId 
   });
 
   const [esReembolso, setEsReembolso] = useState(false);
+  const [noLlevaTicket, setNoLlevaTicket] = useState(false);
+  const [originalTicketUrl, setOriginalTicketUrl] = useState<string | null>(null);
 
   // Campos de captura manual / pre-llenados
   const [uuidFiscal, setUuidFiscal] = useState<string | null>(null);
@@ -154,16 +156,20 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId 
         
         if (data) {
           const isMov = tipo === 'movimiento';
+          const ticketVal = isMov ? data.pdf_ticket_url : data.ticket_url;
+          setNoLlevaTicket(ticketVal === 'no_lleva');
+          setOriginalTicketUrl(ticketVal || null);
+
           setExistingDocs({
             xml: !!data.xml_url,
             pdf: !!(isMov ? data.pdf_factura_url : data.pdf_url),
-            ticket: !!(isMov ? data.pdf_ticket_url : data.ticket_url),
+            ticket: !!ticketVal && ticketVal !== 'no_lleva',
             soporte_reembolso: !!data.soporte_reembolso_url
           });
           setLinks({
             xml: data.xml_url ? data.xml_url.split(',')[0] : '',
             pdf: (isMov ? data.pdf_factura_url : data.pdf_url) ? (isMov ? data.pdf_factura_url : data.pdf_url).split(',')[0] : '',
-            ticket: (isMov ? data.pdf_ticket_url : data.ticket_url) ? (isMov ? data.pdf_ticket_url : data.ticket_url).split(',')[0] : '',
+            ticket: (ticketVal && ticketVal !== 'no_lleva') ? ticketVal.split(',')[0] : '',
             soporte_reembolso: data.soporte_reembolso_url ? data.soporte_reembolso_url.split(',')[0] : ''
           });
 
@@ -337,7 +343,7 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId 
       if (!registroId && tipo === 'gasto' && !manualFields.concepto) {
         throw new Error('Debes proporcionar el concepto del gasto.');
       }
-      if (tipo === 'gasto' && !esDeducible && !esReembolso) {
+      if (tipo === 'gasto' && !esDeducible && !esReembolso && !noLlevaTicket) {
         const hasTicket = (fileMode.ticket === 'upload' && files.ticket) || (fileMode.ticket === 'link' && links.ticket) || existingDocs.ticket;
         if (!hasTicket) {
           throw new Error('Para un gasto no deducible (solo ticket), debes cargar el archivo o enlace del Ticket obligatoriamente.');
@@ -355,8 +361,9 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId 
       const basePath = tipo === 'gasto' ? 'gastos/' : (tipo === 'movimiento' ? 'reconciliation/' : 'ventas/');
       let finalXmlUrl = fileMode.xml === 'link' ? links.xml : null;
       let finalPdfUrl = fileMode.pdf === 'link' ? links.pdf : null;
-      let finalTicketUrl = fileMode.ticket === 'link' ? links.ticket : null;
       let finalSoporteUrl = fileMode.soporte_reembolso === 'link' ? links.soporte_reembolso : null;
+      let finalTicketUrl: string | null = null;
+      let ticketChanged = false;
 
       const oldFilesToDelete: { bucket: string; path: string }[] = [];
 
@@ -406,7 +413,47 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId 
 
       if (fileMode.xml === 'upload' && files.xml) finalXmlUrl = await uploadFile(files.xml, 'xml', links.xml);
       if (fileMode.pdf === 'upload' && files.pdf) finalPdfUrl = await uploadFile(files.pdf, 'pdf', links.pdf);
-      if (fileMode.ticket === 'upload' && files.ticket) finalTicketUrl = await uploadFile(files.ticket, 'ticket', links.ticket);
+      
+      // Manejar el valor de ticket y si ha cambiado
+      if (registroId) {
+        if (noLlevaTicket) {
+          if (originalTicketUrl !== 'no_lleva') {
+            finalTicketUrl = 'no_lleva';
+            ticketChanged = true;
+          }
+        } else {
+          // noLlevaTicket is false
+          if (originalTicketUrl === 'no_lleva') {
+            ticketChanged = true;
+            if (fileMode.ticket === 'link' && links.ticket) {
+              finalTicketUrl = links.ticket;
+            } else if (fileMode.ticket === 'upload' && files.ticket) {
+              finalTicketUrl = await uploadFile(files.ticket, 'ticket', '');
+            } else {
+              finalTicketUrl = null; // Borrar marca anterior de no_lleva
+            }
+          } else {
+            // No era 'no_lleva' originalmente
+            if (fileMode.ticket === 'link' && links.ticket && links.ticket !== originalTicketUrl) {
+              finalTicketUrl = links.ticket;
+              ticketChanged = true;
+            } else if (fileMode.ticket === 'upload' && files.ticket) {
+              finalTicketUrl = await uploadFile(files.ticket, 'ticket', originalTicketUrl || '');
+              ticketChanged = true;
+            }
+          }
+        }
+      } else {
+        // Creación
+        if (noLlevaTicket) {
+          finalTicketUrl = 'no_lleva';
+        } else if (fileMode.ticket === 'link' && links.ticket) {
+          finalTicketUrl = links.ticket;
+        } else if (fileMode.ticket === 'upload' && files.ticket) {
+          finalTicketUrl = await uploadFile(files.ticket, 'ticket', '');
+        }
+      }
+
       if (fileMode.soporte_reembolso === 'upload' && files.soporte_reembolso) {
         finalSoporteUrl = await uploadFile(files.soporte_reembolso, 'soporte_reembolso', links.soporte_reembolso);
       }
@@ -438,7 +485,7 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId 
         if (tipo === 'movimiento') {
           if (finalXmlUrl !== null) updateData.xml_url = finalXmlUrl;
           if (finalPdfUrl !== null) updateData.pdf_factura_url = finalPdfUrl;
-          if (finalTicketUrl !== null) updateData.pdf_ticket_url = finalTicketUrl;
+          if (ticketChanged) updateData.pdf_ticket_url = finalTicketUrl;
           if (finalSoporteUrl !== null) updateData.soporte_reembolso_url = finalSoporteUrl;
 
           updateData.concepto = manualFields.concepto;
@@ -448,7 +495,7 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId 
         } else {
           if (finalXmlUrl !== null) updateData.xml_url = finalXmlUrl;
           if (finalPdfUrl !== null) updateData.pdf_url = finalPdfUrl;
-          if (finalTicketUrl !== null) updateData.ticket_url = finalTicketUrl;
+          if (ticketChanged) updateData.ticket_url = finalTicketUrl;
           if (finalSoporteUrl !== null) updateData.soporte_reembolso_url = finalSoporteUrl;
         }
 
@@ -801,6 +848,28 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId 
             </div>
           )}
 
+          {(tipo === 'gasto' || tipo === 'movimiento') && (
+            <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-5 shadow-sm flex items-center justify-between">
+              <div>
+                <label className="text-sm font-bold text-gray-950 dark:text-white">No lleva ticket</label>
+                <p className="text-xs text-gray-500 mt-1">Marca esta opción si el proveedor no entrega ticket o nota de venta para esta operación.</p>
+              </div>
+              <input
+                type="checkbox"
+                checked={noLlevaTicket}
+                onChange={(e) => {
+                  const val = e.target.checked;
+                  setNoLlevaTicket(val);
+                  if (val) {
+                    setFiles(prev => ({ ...prev, ticket: null }));
+                    setLinks(prev => ({ ...prev, ticket: '' }));
+                  }
+                }}
+                className="w-5 h-5 accent-blue-600 rounded cursor-pointer"
+              />
+            </div>
+          )}
+
           {/* Sección de Archivos */}
           <div className="space-y-4">
             <h3 className="text-xs font-extrabold text-gray-400 dark:text-gray-500 uppercase tracking-wider">Archivos de Soporte</h3>
@@ -810,7 +879,7 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId 
               <>
                 {esDeducible && renderFileSection("Archivo XML (Opcional)", "xml", ".xml", false)}
                 {esDeducible && renderFileSection("Representación Impresa (PDF)", "pdf", ".pdf", false)}
-                {renderFileSection(esDeducible ? "Ticket / Nota / Foto" : "Ticket / Nota / Foto (Obligatorio)", "ticket", "image/*,.pdf", !esDeducible)}
+                {!noLlevaTicket && renderFileSection(esDeducible ? "Ticket / Nota / Foto" : "Ticket / Nota / Foto (Obligatorio)", "ticket", "image/*,.pdf", !esDeducible)}
               </>
             )}
           </div>

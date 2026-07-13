@@ -1,6 +1,7 @@
 'use server';
 
 import { supabaseAdmin, getUserEmpresaId } from '../../../lib/supabaseAdmin';
+import { XMLParser } from 'fast-xml-parser';
 
 function parseNumberClean(val: any): number {
   if (val === undefined || val === null) return 0;
@@ -204,10 +205,8 @@ export async function importarMovimientosBancarios(
     const parrotId = parrotAcc?.id;
 
     const formattedMovements = movements.map((m) => {
-      const r = Math.abs(parseNumberClean(m.retiro));
-      const d = Math.abs(parseNumberClean(m.deposito));
-      const montoVal = d - r;
-      const tipo = d > 0 ? 'Deposito' : 'Retiro';
+      let r = Math.abs(parseNumberClean(m.retiro));
+      let d = Math.abs(parseNumberClean(m.deposito));
       const rfc = extraerRfcDeConcepto(m.concepto);
 
       // Enrutamiento automático
@@ -221,6 +220,15 @@ export async function importarMovimientosBancarios(
       } else {
         targetCuentaId = bbvaId || targetCuentaId;
       }
+
+      // Si se enruta a la Caja Chica y era un Retiro (salida del banco), lo sumamos en la Caja Chica (se convierte a Depósito)
+      if (targetCuentaId === cajaId && r > 0 && d === 0) {
+        d = r;
+        r = 0;
+      }
+
+      const montoVal = d - r;
+      const tipo = d > 0 ? 'Deposito' : 'Retiro';
 
       // Parse date format DD-MM-YYYY, YYYY-MM-DD, or Excel serial number
       let fechaFormatted = m.fecha;
@@ -728,11 +736,191 @@ export async function guardarConciliacionManual(
     soporteReembolsoUrl?: string | null;
     storageProvider?: 'Supabase' | 'GoogleDrive';
     estatusClave?: string;
+    comentarios?: string | null;
   },
   token: string
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    const { empresaId } = await getUserEmpresaId(token);
+    const { empresaId, userId } = await getUserEmpresaId(token);
+
+    // 1. Obtener el ID del personal (usuarios_staff) para asociarlo al campo registrado_por del gasto
+    const { data: staffData } = await supabaseAdmin
+      .from('usuarios_staff')
+      .select('id')
+      .eq('supabase_auth_id', userId)
+      .maybeSingle();
+    const staffId = staffData?.id || null;
+
+    // 2. Procesar y auto-registrar en la tabla 'gastos' cualquier XML subido manualmente en este movimiento
+    if (payload.xmlUrl) {
+      const xmlPaths = payload.xmlUrl.split(',').filter(Boolean);
+      for (const path of xmlPaths) {
+        if (!path.toLowerCase().endsWith('.xml')) continue;
+
+        try {
+          // Descargar XML desde el storage
+          const { data: fileData, error: downloadError } = await supabaseAdmin
+            .storage
+            .from('facturas')
+            .download(path);
+
+          if (!downloadError && fileData) {
+            const xmlText = await fileData.text();
+            const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_' });
+            const jsonObj = parser.parse(xmlText);
+            const cfdi = jsonObj['cfdi:Comprobante'] || jsonObj['Comprobante'];
+
+            if (cfdi) {
+              const timbre = cfdi['cfdi:Complemento']?.['tfd:TimbreFiscalDigital'] || 
+                             cfdi['cfdi:Complemento']?.['TimbreFiscalDigital'] || 
+                             cfdi['Complemento']?.['tfd:TimbreFiscalDigital'] || 
+                             cfdi['Complemento']?.['TimbreFiscalDigital'];
+              const uuid = timbre?.['@_UUID'] || timbre?.['@_uuid'];
+
+              if (uuid) {
+                // Verificar si ya existe este gasto por su UUID fiscal
+                const { data: existingGasto } = await supabaseAdmin
+                  .from('gastos')
+                  .select('id')
+                  .eq('uuid_fiscal', uuid.toUpperCase())
+                  .eq('empresa_id', empresaId)
+                  .maybeSingle();
+
+                let gastoId = existingGasto?.id;
+
+                if (!gastoId) {
+                  // Extraer campos del CFDI
+                  const emisor = cfdi['cfdi:Emisor'] || cfdi['Emisor'];
+                  const rfcEmisor = emisor?.['@_Rfc'] || emisor?.['@_rfc'];
+                  const nombreEmisor = emisor?.['@_Nombre'] || emisor?.['@_nombre'];
+
+                  const total = parseFloat(cfdi['@_Total'] || cfdi['@_total'] || '0');
+                  const subtotal = parseFloat(cfdi['@_SubTotal'] || cfdi['@_subtotal'] || '0') || total;
+                  const fecha = cfdi['@_Fecha'] || cfdi['@_fecha'] || '';
+                  const fecha_emision = fecha ? fecha.split('T')[0] : new Date().toISOString().split('T')[0];
+                  const serie = cfdi['@_Serie'] || cfdi['@_serie'] || '';
+                  const folio = cfdi['@_Folio'] || cfdi['@_folio'] || '';
+                  const folioStr = folio ? `${serie}${folio}`.trim() : (serie ? serie.trim() : '');
+                  const formaPagoCode = cfdi['@_FormaPago'] || cfdi['@_formaPago'] || '';
+
+                  // Extraer IVA
+                  let globalIva = 0;
+                  const impuestos = cfdi['cfdi:Impuestos'] || cfdi['Impuestos'];
+                  const traslados = impuestos?.['cfdi:Traslados']?.['cfdi:Traslado'] || impuestos?.['Traslados']?.['Traslado'];
+                  if (traslados) {
+                    const trasladosArr = Array.isArray(traslados) ? traslados : [traslados];
+                    for (const t of trasladosArr) {
+                      if (t['@_Impuesto'] === '002') {
+                        globalIva += parseFloat(t['@_Importe'] || '0');
+                      }
+                    }
+                  }
+
+                  // Obtener o registrar proveedor
+                  let proveedorId = null;
+                  if (rfcEmisor) {
+                    const { data: prov } = await supabaseAdmin
+                      .from('proveedores')
+                      .select('id')
+                      .eq('rfc', rfcEmisor.toUpperCase())
+                      .eq('empresa_id', empresaId)
+                      .maybeSingle();
+
+                    if (prov) {
+                      proveedorId = prov.id;
+                    } else {
+                      const { data: newProv, error: errP } = await supabaseAdmin
+                        .from('proveedores')
+                        .insert({
+                          rfc: rfcEmisor.toUpperCase(),
+                          nombre_comercial: nombreEmisor || rfcEmisor,
+                          razon_social: nombreEmisor || rfcEmisor,
+                          empresa_id: empresaId
+                        })
+                        .select('id')
+                        .single();
+
+                      if (!errP && newProv) {
+                        proveedorId = newProv.id;
+                      }
+                    }
+                  }
+
+                  // Mapear método de pago y ID de forma_pago
+                  const { data: formasPagoData } = await supabaseAdmin.from('formas_pago').select('id, nombre, codigo');
+                  let formaPagoId = null;
+                  let metodoPago = '99';
+                  if (formasPagoData && formasPagoData.length > 0) {
+                    const code = formaPagoCode ? String(formaPagoCode).trim().padStart(2, '0') : '03';
+                    const match = formasPagoData.find(f => f.codigo === code);
+                    if (match) {
+                      formaPagoId = match.id;
+                    } else {
+                      formaPagoId = formasPagoData.find(f => f.codigo === '99')?.id || formasPagoData[0].id;
+                    }
+
+                    if (code === '01') metodoPago = 'Efectivo';
+                    else if (code === '03') metodoPago = 'Transferencia';
+                    else if (code === '04') metodoPago = 'Tarjeta de crédito';
+                    else if (code === '28') metodoPago = 'Tarjeta de débito';
+                    else if (code === '02') metodoPago = 'Cheque';
+                    else metodoPago = 'Por definir';
+                  }
+
+                  // Estatus de factura por defecto (Facturado)
+                  const { data: estatusData } = await supabaseAdmin
+                    .from('estatus_factura')
+                    .select('id')
+                    .ilike('nombre', 'Facturado')
+                    .maybeSingle();
+                  let defaultEstatusId = estatusData?.id;
+                  if (!defaultEstatusId) {
+                    const { data: firstE } = await supabaseAdmin.from('estatus_factura').select('id').limit(1).maybeSingle();
+                    defaultEstatusId = firstE?.id;
+                  }
+
+                  // Insertar nuevo Gasto en Egresos
+                  const { data: newGastoData, error: insertGastoErr } = await supabaseAdmin
+                    .from('gastos')
+                    .insert({
+                      folio_factura: folioStr || null,
+                      uuid_fiscal: uuid.toUpperCase(),
+                      monto: total,
+                      subtotal: subtotal,
+                      iva_acreditable: globalIva,
+                      xml_url: path,
+                      fecha_gasto: fecha_emision,
+                      empresa_id: empresaId,
+                      concepto: `Gasto por factura XML (UUID: ${uuid.substring(0, 8)})`,
+                      registrado_por: staffId,
+                      proveedor_id: proveedorId,
+                      forma_pago_id: formaPagoId,
+                      estatus_factura_id: defaultEstatusId,
+                      estatus_facturado: true,
+                      metodo_pago: metodoPago,
+                      es_deducible: true,
+                      movimiento_bancario_id: movimientoId
+                    })
+                    .select('id')
+                    .single();
+
+                  if (!insertGastoErr && newGastoData) {
+                    gastoId = newGastoData.id;
+                  }
+                }
+
+                // Forzar vinculación agregándolo a la lista de gastosIds reconciliados
+                if (gastoId && !payload.gastosIds.includes(gastoId)) {
+                  payload.gastosIds.push(gastoId);
+                }
+              }
+            }
+          }
+        } catch (xmlErr) {
+          console.error('Error al procesar/registrar XML subido en conciliación:', xmlErr);
+        }
+      }
+    }
 
     const { data: mov, error: movErr } = await supabaseAdmin
       .from('movimientos_bancarios')
@@ -779,14 +967,14 @@ export async function guardarConciliacionManual(
 
       if (linkErr) throw linkErr;
 
-      const { data: gastosFiles } = await supabaseAdmin
+      const { data: gastosInfo } = await supabaseAdmin
         .from('gastos')
-        .select('xml_url, pdf_url, ticket_url')
+        .select('id, monto, xml_url, pdf_url, ticket_url')
         .in('id', payload.gastosIds)
         .eq('empresa_id', empresaId);
 
-      if (gastosFiles) {
-        for (const g of gastosFiles) {
+      if (gastosInfo) {
+        for (const g of gastosInfo) {
           if (!associatedXml && g.xml_url) associatedXml = g.xml_url;
           if (!associatedPdf && g.pdf_url) associatedPdf = g.pdf_url;
           if (!associatedTicket && g.ticket_url) associatedTicket = g.ticket_url;
@@ -794,10 +982,12 @@ export async function guardarConciliacionManual(
       }
 
       const junctionEntries = payload.gastosIds.map((gId) => {
+        const gInfo = gastosInfo?.find((g) => g.id === gId);
+        const montoGasto = gInfo ? Number(gInfo.monto) : Math.abs(mov.monto);
         return {
           movimiento_id: movimientoId,
           gasto_id: gId,
-          monto_asociado: Math.abs(mov.monto),
+          monto_asociado: montoGasto,
           empresa_id: empresaId
         };
       });
@@ -815,6 +1005,12 @@ export async function guardarConciliacionManual(
 
       if (linkErr) throw linkErr;
 
+      const { data: pedidosInfo } = await supabaseAdmin
+        .from('pedidos')
+        .select('id, precio_total')
+        .in('id', payload.pedidosIds)
+        .eq('empresa_id', empresaId);
+
       const { data: pedidosFiles } = await supabaseAdmin
         .from('facturas_clientes')
         .select('xml_url, pdf_url, ticket_url')
@@ -830,10 +1026,12 @@ export async function guardarConciliacionManual(
       }
 
       const junctionEntries = payload.pedidosIds.map((pId) => {
+        const pInfo = pedidosInfo?.find((p) => p.id === pId);
+        const montoPedido = pInfo ? Number(pInfo.precio_total) : Math.abs(mov.monto);
         return {
           movimiento_id: movimientoId,
           pedido_id: pId,
-          monto_asociado: Math.abs(mov.monto),
+          monto_asociado: montoPedido,
           empresa_id: empresaId
         };
       });
@@ -884,6 +1082,7 @@ export async function guardarConciliacionManual(
     updatePayload.pdf_ticket_url = payload.pdfTicketUrl || associatedTicket || mov.pdf_ticket_url || null;
     updatePayload.soporte_reembolso_url = payload.soporteReembolsoUrl || mov.soporte_reembolso_url || null;
     if (payload.storageProvider !== undefined) updatePayload.storage_provider = payload.storageProvider;
+    if (payload.comentarios !== undefined) updatePayload.comentarios = payload.comentarios;
 
     const { error: updateMovErr } = await supabaseAdmin
       .from('movimientos_bancarios')
@@ -1129,6 +1328,31 @@ export async function desconciliarMovimientoBancario(
     if (deleteJuncErr) throw deleteJuncErr;
 
     // 5. Update the movements table: reset status, files, and visibility
+    const { data: currentMov } = await supabaseAdmin
+      .from('movimientos_bancarios')
+      .select('movimiento_reembolso_id')
+      .eq('id', movimientoId)
+      .eq('empresa_id', empresaId)
+      .single();
+
+    if (currentMov?.movimiento_reembolso_id) {
+      await supabaseAdmin
+        .from('movimientos_bancarios')
+        .update({
+          estatus_conciliacion_id: estatusId,
+          visible_egresos: false,
+          visible_ingresos: false,
+          xml_url: null,
+          pdf_factura_url: null,
+          pdf_ticket_url: null,
+          soporte_reembolso_url: null,
+          comentarios: null,
+          movimiento_reembolso_id: null
+        })
+        .eq('id', currentMov.movimiento_reembolso_id)
+        .eq('empresa_id', empresaId);
+    }
+
     const { error: updateMovErr } = await supabaseAdmin
       .from('movimientos_bancarios')
       .update({
@@ -1137,7 +1361,10 @@ export async function desconciliarMovimientoBancario(
         visible_ingresos: false,
         xml_url: null,
         pdf_factura_url: null,
-        pdf_ticket_url: null
+        pdf_ticket_url: null,
+        soporte_reembolso_url: null,
+        comentarios: null,
+        movimiento_reembolso_id: null
       })
       .eq('id', movimientoId)
       .eq('empresa_id', empresaId);
@@ -1254,4 +1481,409 @@ export async function conciliarGastoEfectivoAutomatico(
     return { success: false, error: err.message || 'Error al auto-conciliar gasto en efectivo.' };
   }
 }
+
+export async function actualizarMesConciliacionMovimiento(
+  movimientoId: string,
+  mesConciliacion: string | null,
+  token: string
+) {
+  try {
+    const { empresaId } = await getUserEmpresaId(token);
+    const { error } = await supabaseAdmin
+      .from('movimientos_bancarios')
+      .update({ mes_conciliacion: mesConciliacion })
+      .eq('id', movimientoId)
+      .eq('empresa_id', empresaId);
+
+    if (error) throw error;
+    return { success: true };
+  } catch (err: any) {
+    console.error('Error in actualizarMesConciliacionMovimiento:', err);
+    return { success: false, error: err.message || 'Error al vincular el movimiento a otro mes.' };
+  }
+}
+
+export async function crearComprobanteDeposito(
+  payload: {
+    tipo: 'deposito_ventanilla' | 'corte_tarjeta';
+    fecha: string;
+    monto: number;
+    descripcion?: string;
+    archivo_url?: string;
+    storage_provider?: 'Supabase' | 'GoogleDrive';
+    cuenta_bancaria_id?: string | null;
+    movimiento_bancario_id?: string | null;
+    monto_debito?: number;
+    monto_credito?: number;
+    propina_debito?: number;
+    propina_credito?: number;
+    monto_amex?: number;
+    propina_amex?: number;
+  },
+  token: string
+) {
+  try {
+    const { empresaId } = await getUserEmpresaId(token);
+    const { data, error } = await supabaseAdmin
+      .from('comprobantes_deposito')
+      .insert({
+        tipo: payload.tipo,
+        fecha: payload.fecha,
+        monto: payload.monto,
+        descripcion: payload.descripcion || null,
+        archivo_url: payload.archivo_url || null,
+        storage_provider: payload.storage_provider || 'Supabase',
+        cuenta_bancaria_id: payload.cuenta_bancaria_id || null,
+        empresa_id: empresaId,
+        monto_debito: payload.monto_debito || 0,
+        monto_credito: payload.monto_credito || 0,
+        propina_debito: payload.propina_debito || 0,
+        propina_credito: payload.propina_credito || 0,
+        monto_amex: payload.monto_amex || 0,
+        propina_amex: payload.propina_amex || 0
+      })
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    if (payload.movimiento_bancario_id) {
+      const { error: relErr } = await supabaseAdmin
+        .from('comprobantes_deposito_movimientos')
+        .insert({
+          comprobante_id: data.id,
+          movimiento_id: payload.movimiento_bancario_id,
+          monto_asociado: payload.monto,
+          empresa_id: empresaId
+        });
+      if (relErr) throw relErr;
+      await autoActualizarEstatusMovimiento(payload.movimiento_bancario_id, empresaId);
+    }
+
+    return { success: true, comprobante: data };
+  } catch (err: any) {
+    console.error('Error in crearComprobanteDeposito:', err);
+    return { success: false, error: err.message || 'Error al crear comprobante.' };
+  }
+}
+
+export async function actualizarComprobanteDeposito(
+  id: string,
+  payload: {
+    tipo: 'deposito_ventanilla' | 'corte_tarjeta';
+    fecha: string;
+    monto: number;
+    descripcion?: string;
+    archivo_url?: string;
+    storage_provider?: 'Supabase' | 'GoogleDrive';
+    cuenta_bancaria_id?: string | null;
+    monto_debito?: number;
+    monto_credito?: number;
+    propina_debito?: number;
+    propina_credito?: number;
+    monto_amex?: number;
+    propina_amex?: number;
+  },
+  token: string
+) {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('comprobantes_deposito')
+      .update({
+        tipo: payload.tipo,
+        fecha: payload.fecha,
+        monto: payload.monto,
+        descripcion: payload.descripcion || null,
+        archivo_url: payload.archivo_url || null,
+        storage_provider: payload.storage_provider || 'Supabase',
+        cuenta_bancaria_id: payload.cuenta_bancaria_id || null,
+        monto_debito: payload.monto_debito || 0,
+        monto_credito: payload.monto_credito || 0,
+        propina_debito: payload.propina_debito || 0,
+        propina_credito: payload.propina_credito || 0,
+        monto_amex: payload.monto_amex || 0,
+        propina_amex: payload.propina_amex || 0
+      })
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) throw error;
+    return { success: true, comprobante: data };
+  } catch (err: any) {
+    console.error('Error in actualizarComprobanteDeposito:', err);
+    return { success: false, error: err.message || 'Error al actualizar comprobante.' };
+  }
+}
+
+export async function eliminarComprobanteDeposito(id: string, token: string) {
+  try {
+    const { empresaId } = await getUserEmpresaId(token);
+    const { data: rels } = await supabaseAdmin
+      .from('comprobantes_deposito_movimientos')
+      .select('movimiento_id')
+      .eq('comprobante_id', id);
+
+    const { error } = await supabaseAdmin
+      .from('comprobantes_deposito')
+      .delete()
+      .eq('id', id)
+      .eq('empresa_id', empresaId);
+
+    if (error) throw error;
+
+    if (rels && rels.length > 0) {
+      for (const rel of rels) {
+        await autoActualizarEstatusMovimiento(rel.movimiento_id, empresaId);
+      }
+    }
+
+    return { success: true };
+  } catch (err: any) {
+    console.error('Error in eliminarComprobanteDeposito:', err);
+    return { success: false, error: err.message || 'Error al eliminar comprobante.' };
+  }
+}
+
+export async function vincularComprobanteAMovimiento(
+  comprobanteId: string,
+  movimientoBancarioId: string,
+  token: string,
+  montoAsociadoCustom?: number
+) {
+  try {
+    const { empresaId } = await getUserEmpresaId(token);
+    
+    let monto = montoAsociadoCustom;
+    if (!monto) {
+      const { data: comp } = await supabaseAdmin
+        .from('comprobantes_deposito')
+        .select('monto')
+        .eq('id', comprobanteId)
+        .single();
+      monto = comp ? Number(comp.monto) : 0;
+    }
+
+    const { error } = await supabaseAdmin
+      .from('comprobantes_deposito_movimientos')
+      .insert({
+        comprobante_id: comprobanteId,
+        movimiento_id: movimientoBancarioId,
+        monto_asociado: monto,
+        empresa_id: empresaId
+      });
+
+    if (error) throw error;
+
+    await autoActualizarEstatusMovimiento(movimientoBancarioId, empresaId);
+
+    return { success: true };
+  } catch (err: any) {
+    console.error('Error in vincularComprobanteAMovimiento:', err);
+    return { success: false, error: err.message || 'Error al vincular comprobante.' };
+  }
+}
+
+export async function desvincularComprobanteDeMovimiento(
+  comprobanteId: string,
+  movimientoBancarioId: string | null,
+  token: string
+) {
+  try {
+    const { empresaId } = await getUserEmpresaId(token);
+    
+    let movsToUpdate: string[] = [];
+    if (movimientoBancarioId) {
+      movsToUpdate = [movimientoBancarioId];
+    } else {
+      const { data: rels } = await supabaseAdmin
+        .from('comprobantes_deposito_movimientos')
+        .select('movimiento_id')
+        .eq('comprobante_id', comprobanteId);
+      movsToUpdate = rels?.map(r => r.movimiento_id) || [];
+    }
+
+    let query = supabaseAdmin
+      .from('comprobantes_deposito_movimientos')
+      .delete()
+      .eq('comprobante_id', comprobanteId)
+      .eq('empresa_id', empresaId);
+
+    if (movimientoBancarioId) {
+      query = query.eq('movimiento_id', movimientoBancarioId);
+    }
+
+    const { error } = await query;
+    if (error) throw error;
+
+    for (const movId of movsToUpdate) {
+      await autoActualizarEstatusMovimiento(movId, empresaId);
+    }
+
+    return { success: true };
+  } catch (err: any) {
+    console.error('Error in desvincularComprobanteDeMovimiento:', err);
+    return { success: false, error: err.message || 'Error al desvincular comprobante.' };
+  }
+}
+
+export async function obtenerComprobantesDeposito(token: string) {
+  try {
+    const { empresaId } = await getUserEmpresaId(token);
+    const { data, error } = await supabaseAdmin
+      .from('comprobantes_deposito')
+      .select(`
+        *,
+        cuentas_bancarias(*),
+        comprobantes_deposito_movimientos(
+          *,
+          movimientos_bancarios(*)
+        )
+      `)
+      .eq('empresa_id', empresaId)
+      .order('fecha', { ascending: false });
+
+    if (error) throw error;
+    return { success: true, comprobantes: data };
+  } catch (err: any) {
+    console.error('Error in obtenerComprobantesDeposito:', err);
+    return { success: false, error: err.message || 'Error al obtener comprobantes.' };
+  }
+}
+
+async function autoActualizarEstatusMovimiento(movimientoId: string, empresaId: string) {
+  const { data: mov } = await supabaseAdmin
+    .from('movimientos_bancarios')
+    .select('monto, estatus_conciliacion_id')
+    .eq('id', movimientoId)
+    .single();
+
+  if (!mov) return;
+
+  const { data: rels } = await supabaseAdmin
+    .from('comprobantes_deposito_movimientos')
+    .select('monto_asociado')
+    .eq('movimiento_id', movimientoId);
+
+  const totalComprobantes = rels?.reduce((acc, r) => acc + Number(r.monto_asociado), 0) || 0;
+  const absMontoMov = Math.abs(Number(mov.monto));
+
+  const { data: statusConciliado } = await supabaseAdmin
+    .from('estatus_conciliacion_bancaria')
+    .select('id')
+    .eq('clave', 'conciliado')
+    .single();
+
+  const { data: statusParcial } = await supabaseAdmin
+    .from('estatus_conciliacion_bancaria')
+    .select('id')
+    .eq('clave', 'parcial')
+    .maybeSingle();
+
+  const { data: statusPendiente } = await supabaseAdmin
+    .from('estatus_conciliacion_bancaria')
+    .select('id')
+    .eq('clave', 'pendiente')
+    .single();
+
+  let targetStatusId = statusPendiente?.id;
+
+  if (totalComprobantes > 0) {
+    if (Math.abs(totalComprobantes - absMontoMov) < 0.05) {
+      targetStatusId = statusConciliado?.id;
+    } else {
+      targetStatusId = statusParcial?.id || statusConciliado?.id;
+    }
+  }
+
+  await supabaseAdmin
+    .from('movimientos_bancarios')
+    .update({ estatus_conciliacion_id: targetStatusId })
+    .eq('id', movimientoId)
+    .eq('empresa_id', empresaId);
+}
+
+// 18. FUSIONAR MOVIMIENTOS DE REEMBOLSO (INGRESO Y EGRESO CRUZADOS)
+export async function fusionarMovimientosReembolso(
+  movimientoId1: string,
+  movimientoId2: string,
+  payload: {
+    soporteReembolsoUrl?: string | null;
+    comentarios?: string | null;
+    storageProvider?: 'Supabase' | 'GoogleDrive';
+  },
+  token: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { empresaId } = await getUserEmpresaId(token);
+
+    // 1. Verificar ambos movimientos
+    const { data: mov1, error: err1 } = await supabaseAdmin
+      .from('movimientos_bancarios')
+      .select('*')
+      .eq('id', movimientoId1)
+      .eq('empresa_id', empresaId)
+      .single();
+
+    const { data: mov2, error: err2 } = await supabaseAdmin
+      .from('movimientos_bancarios')
+      .select('*')
+      .eq('id', movimientoId2)
+      .eq('empresa_id', empresaId)
+      .single();
+
+    if (err1 || err2 || !mov1 || !mov2) {
+      throw new Error('Uno o ambos movimientos no fueron encontrados.');
+    }
+
+    // Asegurarse de que uno es Depósito y otro es Retiro
+    if (mov1.tipo_movimiento === mov2.tipo_movimiento) {
+      throw new Error('Los movimientos a fusionar deben ser uno de depósito (+) y otro de retiro (-).');
+    }
+
+    // Obtener el ID del estatus "comprobado" (o "conciliado")
+    const { data: catalog } = await supabaseAdmin
+      .from('estatus_conciliacion_bancaria')
+      .select('id, clave');
+    const statusComprobadoId = catalog?.find((c) => c.clave === 'comprobado')?.id || 
+                               catalog?.find((c) => c.clave === 'conciliado')?.id || null;
+
+    // 2. Vincular y actualizar el movimiento 1
+    const { error: upd1 } = await supabaseAdmin
+      .from('movimientos_bancarios')
+      .update({
+        estatus_conciliacion_id: statusComprobadoId,
+        soporte_reembolso_url: payload.soporteReembolsoUrl || null,
+        comentarios: payload.comentarios || null,
+        storage_provider: payload.storageProvider || 'Supabase',
+        movimiento_reembolso_id: movimientoId2
+      })
+      .eq('id', movimientoId1)
+      .eq('empresa_id', empresaId);
+
+    if (upd1) throw upd1;
+
+    // 3. Vincular y actualizar el movimiento 2
+    const { error: upd2 } = await supabaseAdmin
+      .from('movimientos_bancarios')
+      .update({
+        estatus_conciliacion_id: statusComprobadoId,
+        soporte_reembolso_url: payload.soporteReembolsoUrl || null,
+        comentarios: payload.comentarios || null,
+        storage_provider: payload.storageProvider || 'Supabase',
+        movimiento_reembolso_id: movimientoId1
+      })
+      .eq('id', movimientoId2)
+      .eq('empresa_id', empresaId);
+
+    if (upd2) throw upd2;
+
+    return { success: true };
+  } catch (err: any) {
+    console.error('Error al fusionar movimientos:', err);
+    return { success: false, error: err.message || 'Error al fusionar movimientos.' };
+  }
+}
+
+
 

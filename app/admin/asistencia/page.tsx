@@ -189,6 +189,51 @@ export default function AsistenciaNominasPage() {
   const [nominaCalculada, setNominaCalculada] = useState<any[]>([]);
   const [calculandoNomina, setCalculandoNomina] = useState(false);
 
+  const [syncingTime, setSyncingTime] = useState(false);
+
+  const handleSyncTime = async () => {
+    try {
+      setSyncingTime(true);
+      const sns = Array.from(new Set(checadasRaw.map(c => c.dispositivo_sn).filter(Boolean)));
+      
+      const now = new Date();
+      const unixTimestamp = Math.floor(now.getTime() / 1000);
+      
+      const timezoneOffsetMinutes = now.getTimezoneOffset();
+      const offsetSign = timezoneOffsetMinutes > 0 ? '-' : '+';
+      const absOffsetMinutes = Math.abs(timezoneOffsetMinutes);
+      const offsetHours = Math.floor(absOffsetMinutes / 60).toString().padStart(2, '0');
+      const offsetMins = (absOffsetMinutes % 60).toString().padStart(2, '0');
+      const serverTZ = `${offsetSign}${offsetHours}${offsetMins}`;
+
+      const targets = sns.length > 0 ? sns : [null];
+
+      for (const sn of targets) {
+        const cmdId = Math.floor(100000 + Math.random() * 900000).toString();
+        const cmdText = `SET OPTIONS DateTime=${unixTimestamp},ServerTZ=${serverTZ}`;
+
+        const { error } = await supabase
+          .from('zkteco_comandos')
+          .insert({
+            empresa_id: empresaId,
+            dispositivo_sn: sn,
+            comando_id: cmdId,
+            comando_texto: cmdText,
+            procesado: false
+          });
+
+        if (error) throw error;
+      }
+
+      alert(`Se ha programado la sincronización de hora (${serverTZ}) para ${sns.length > 0 ? `${sns.length} dispositivo(s)` : 'todos los dispositivos'}. El reloj recibirá la hora en su próxima comunicación.`);
+    } catch (err: any) {
+      console.error('Error al encolar comando de sincronización de hora:', err);
+      alert('Error al programar la sincronización: ' + err.message);
+    } finally {
+      setSyncingTime(false);
+    }
+  };
+
   // --- CARGA DE CONTEXTO ---
   const loadContext = useCallback(async () => {
     try {
@@ -710,41 +755,62 @@ export default function AsistenciaNominasPage() {
               </div>
             </div>
 
-            {/* Logs Recientes del Dispositivo */}
-            <div className="bg-white dark:bg-gray-950 p-6 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-sm space-y-4">
-              <h3 className="text-sm font-bold text-gray-800 dark:text-gray-100 uppercase tracking-wide flex items-center gap-2">
-                <Sliders className="text-amber-500" size={18} /> Actividad de Reloj (Raw)
-              </h3>
-              
-              <div className="space-y-3 max-h-[400px] overflow-y-auto pr-1">
-                {checadasRaw.map((log) => {
-                  const matchingEmp = empleados.find(e => e.zkteco_user_id === log.zkteco_user_id);
-                  return (
-                    <div key={log.id} className="p-3 rounded-lg bg-gray-50 dark:bg-gray-900 border border-gray-100 dark:border-gray-800 flex items-center justify-between text-xs">
-                      <div>
-                        <p className="font-bold text-gray-900 dark:text-white">
-                          {matchingEmp ? matchingEmp.nombre_completo : `PIN: ${log.zkteco_user_id}`}
-                        </p>
-                        <p className="text-[10px] text-gray-400 mt-0.5">
-                          {new Date(log.timestamp).toLocaleString()}
-                        </p>
+            {/* Logs Recientes y Configuración del Dispositivo */}
+            <div className="space-y-6 lg:col-span-1">
+              {/* Tarjeta de Dispositivo & Sincronización */}
+              <div className="bg-white dark:bg-gray-950 p-6 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-sm space-y-4">
+                <h3 className="text-sm font-bold text-gray-800 dark:text-gray-100 uppercase tracking-wide flex items-center gap-2">
+                  <Settings className="text-amber-500" size={18} /> Dispositivo & Sincronización
+                </h3>
+                <p className="text-xs text-gray-500">
+                  Sincroniza la hora y zona horaria de tu navegador con el reloj checador físico encolando un comando ADMS.
+                </p>
+                <button
+                  onClick={handleSyncTime}
+                  disabled={syncingTime}
+                  className="w-full flex items-center justify-center gap-2 text-xs font-semibold px-4 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 disabled:bg-gray-400 disabled:dark:bg-gray-800 text-white transition-colors"
+                >
+                  <RefreshCw size={14} className={syncingTime ? "animate-spin" : ""} />
+                  {syncingTime ? 'Sincronizando...' : 'Sincronizar Hora y Zona Horaria'}
+                </button>
+              </div>
+
+              {/* Logs Recientes del Dispositivo */}
+              <div className="bg-white dark:bg-gray-950 p-6 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-sm space-y-4">
+                <h3 className="text-sm font-bold text-gray-800 dark:text-gray-100 uppercase tracking-wide flex items-center gap-2">
+                  <Sliders className="text-amber-500" size={18} /> Actividad de Reloj (Raw)
+                </h3>
+                
+                <div className="space-y-3 max-h-[400px] overflow-y-auto pr-1">
+                  {checadasRaw.map((log) => {
+                    const matchingEmp = empleados.find(e => e.zkteco_user_id === log.zkteco_user_id);
+                    return (
+                      <div key={log.id} className="p-3 rounded-lg bg-gray-50 dark:bg-gray-900 border border-gray-100 dark:border-gray-800 flex items-center justify-between text-xs">
+                        <div>
+                          <p className="font-bold text-gray-900 dark:text-white">
+                            {matchingEmp ? matchingEmp.nombre_completo : `PIN: ${log.zkteco_user_id}`}
+                          </p>
+                          <p className="text-[10px] text-gray-400 mt-0.5">
+                            {new Date(log.timestamp).toLocaleString()}
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          <span className={`px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase ${
+                            log.tipo_evento === 'CHECKIN' ? 'bg-blue-500/10 text-blue-600' : 'bg-orange-500/10 text-orange-600'
+                          }`}>
+                            {log.tipo_evento}
+                          </span>
+                          <p className="text-[9px] text-gray-400 mt-1 font-mono">
+                            SN: {log.dispositivo_sn.substring(0, 8)}...
+                          </p>
+                        </div>
                       </div>
-                      <div className="text-right">
-                        <span className={`px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase ${
-                          log.tipo_evento === 'CHECKIN' ? 'bg-blue-500/10 text-blue-600' : 'bg-orange-500/10 text-orange-600'
-                        }`}>
-                          {log.tipo_evento}
-                        </span>
-                        <p className="text-[9px] text-gray-400 mt-1 font-mono">
-                          SN: {log.dispositivo_sn.substring(0, 8)}...
-                        </p>
-                      </div>
-                    </div>
-                  );
-                })}
-                {checadasRaw.length === 0 && (
-                  <p className="text-gray-400 text-center italic text-xs py-4">No se han recibido logs biométricos</p>
-                )}
+                    );
+                  })}
+                  {checadasRaw.length === 0 && (
+                    <p className="text-gray-400 text-center italic text-xs py-4">No se han recibido logs biométricos</p>
+                  )}
+                </div>
               </div>
             </div>
           </div>

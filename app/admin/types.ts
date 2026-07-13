@@ -256,6 +256,11 @@ export interface MovimientoBancario {
   categoria_movimiento_id?: string | null;
   categorias_movimiento_bancario?: CategoriaMovimientoBancario | null;
   conciliaciones_bancarias?: any[] | null;
+  mes_conciliacion?: string | null;
+  comprobantes_deposito_movimientos?: any[] | null;
+  comentarios?: string | null;
+  soporte_reembolso_url?: string | null;
+  movimiento_reembolso_id?: string | null;
 }
 
 export interface CategoriaMovimientoBancario {
@@ -272,4 +277,25 @@ export interface EstatusConciliacion {
   nombre: string;
   color?: string;
   descripcion?: string;
+}
+
+export interface ComprobanteDeposito {
+  id: string;
+  tipo: 'deposito_ventanilla' | 'corte_tarjeta';
+  fecha: string;
+  monto: number;
+  descripcion?: string | null;
+  archivo_url?: string | null;
+  storage_provider?: 'Supabase' | 'GoogleDrive';
+  cuenta_bancaria_id?: string | null;
+  empresa_id?: string;
+  created_at?: string;
+  cuentas_bancarias?: CuentaBancaria | null;
+  comprobantes_deposito_movimientos?: any[] | null;
+  monto_debito?: number;
+  monto_credito?: number;
+  propina_debito?: number;
+  propina_credito?: number;
+  monto_amex?: number;
+  propina_amex?: number;
 }

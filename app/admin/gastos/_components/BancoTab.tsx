@@ -11,10 +11,10 @@ import React from 'react';
 import {
   FileCode, FileText, CreditCard, List, Scale, Settings,
   ArrowRightLeft, Play, RefreshCw, FileSpreadsheet, Plus, Trash2, Edit3,
-  Layers, Check, X, UploadCloud
+  Layers, Check, X, UploadCloud, Paperclip, AlertTriangle
 } from 'lucide-react';
 import { formatCurrency } from '../../../../lib/formatters';
-import type { MovimientoBancario, EstatusConciliacion, GastoReconciliable, FormaPago } from '../../types';
+import type { MovimientoBancario, EstatusConciliacion, GastoReconciliable, FormaPago, ComprobanteDeposito } from '../../types';
 import { supabase } from '../../../../lib/supabase';
 
 // ── Tipos de estado que se pasan como props ──────────────────────────────────
@@ -61,8 +61,8 @@ interface PedidoPendiente {
 
 export interface BancoTabProps {
   // Sub-tab activo
-  bancoSubTab: 'movimientos' | 'global';
-  setBancoSubTab: (sub: 'movimientos' | 'global') => void;
+  bancoSubTab: 'movimientos' | 'global' | 'comprobantes';
+  setBancoSubTab: (sub: 'movimientos' | 'global' | 'comprobantes') => void;
 
   cuentasBancarias?: any[];
   gastosFacturados?: any[];
@@ -105,7 +105,12 @@ export interface BancoTabProps {
   manualMatchSearch: string;
   setManualMatchSearch: (v: string) => void;
   handleOpenReconcileModal?: (m: MovimientoBancario) => void;
-  handleSaveReconciliation?: (customGastosIds?: string[], customEstatusClave?: string, customPedidosIds?: string[]) => void;
+  handleSaveReconciliation?: (
+    customGastosIds?: string[],
+    customEstatusClave?: string,
+    customPedidosIds?: string[],
+    comentario?: string
+  ) => void;
   handleUploadReconciliationFile?: (e: React.ChangeEvent<HTMLInputElement>, field: 'xml' | 'pdf' | 'ticket' | 'soporte_reembolso') => Promise<void>;
   handleRemoveReconciliationFile?: (field: 'xml' | 'pdf' | 'ticket' | 'soporte_reembolso', indexToRemove: number) => void;
   handleToggleVisibility: (id: string, modulo: 'egresos'|'ingresos', visible: boolean) => void;
@@ -139,6 +144,15 @@ export interface BancoTabProps {
   setSelectedCuentaId: (id: string) => void;
   handleUnlinkReconciliation?: (movimientoId: string) => void;
   handleBulkMoveMovimientos?: (movimientoIds: string[], cuentaBancariaId: string | null) => Promise<void>;
+  handleUpdateMesConciliacion?: (movimientoId: string, mes: string) => Promise<void>;
+
+  comprobantes?: ComprobanteDeposito[];
+  onCrearComprobante?: (payload: any) => Promise<any>;
+  onActualizarComprobante?: (id: string, payload: any) => Promise<any>;
+  onEliminarComprobante?: (id: string) => Promise<any>;
+  onVincularComprobante?: (comprobanteId: string, movimientoBancarioId: string, montoAsociado?: number) => Promise<any>;
+  onDesvincularComprobante?: (comprobanteId: string, movimientoBancarioId?: string | null) => Promise<any>;
+  onFusionarReembolso?: (movId1: string, movId2: string, payload: { soporteReembolsoUrl?: string | null; comentarios?: string | null }) => Promise<any>;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -288,6 +302,14 @@ export default function BancoTab({
   onViewCfdi,
   handleUnlinkReconciliation,
   handleBulkMoveMovimientos,
+  handleUpdateMesConciliacion,
+  comprobantes = [],
+  onCrearComprobante,
+  onActualizarComprobante,
+  onEliminarComprobante,
+  onVincularComprobante,
+  onDesvincularComprobante,
+  onFusionarReembolso,
 }: BancoTabProps) {
 
   const [tiposSelected, setTiposSelected] = React.useState<string[]>([]);
@@ -296,7 +318,98 @@ export default function BancoTab({
   const [categoriasSelected, setCategoriasSelected] = React.useState<string[]>([]);
   const [selectedMovimientos, setSelectedMovimientos] = React.useState<string[]>([]);
 
+  const [activeDepositMov, setActiveDepositMov] = React.useState<any | null>(null);
+  const [activeCompToLink, setActiveCompToLink] = React.useState<ComprobanteDeposito | null>(null);
+  const [editingCompId, setEditingCompId] = React.useState<string | null>(null);
+  const currentCompToLink = activeCompToLink ? (comprobantes.find(c => c.id === activeCompToLink.id) || activeCompToLink) : null;
+
+  const [fusionModal, setFusionModal] = React.useState<{
+    open: boolean;
+    mov1: any | null;
+    mov2: any | null;
+    soporteReembolsoUrl: string;
+    comentarios: string;
+    loading: boolean;
+    error: string;
+  }>({
+    open: false,
+    mov1: null,
+    mov2: null,
+    soporteReembolsoUrl: '',
+    comentarios: '',
+    loading: false,
+    error: ''
+  });
+
+  const isCompCuadrado = (c: ComprobanteDeposito) => {
+    const sum = (c.comprobantes_deposito_movimientos || []).reduce((acc, rel) => acc + Number(rel.monto_asociado), 0);
+    return Math.abs(c.monto - sum) < 0.05;
+  };
+
+  const [newCompForm, setNewCompForm] = React.useState<{
+    tipo: 'deposito_ventanilla' | 'corte_tarjeta';
+    fecha: string;
+    monto: string;
+    descripcion: string;
+    archivoUrl: string;
+    storageProvider: 'Supabase' | 'GoogleDrive';
+    cuentaBancariaId: string;
+    loading: boolean;
+    error: string;
+    montoDebito: string;
+    montoCredito: string;
+    propinaDebito: string;
+    propinaCredito: string;
+    montoAmex: string;
+    propinaAmex: string;
+  }>({
+    tipo: 'deposito_ventanilla',
+    fecha: new Date().toISOString().substring(0, 10),
+    monto: '',
+    descripcion: '',
+    archivoUrl: '',
+    storageProvider: 'Supabase',
+    cuentaBancariaId: '',
+    loading: false,
+    error: '',
+    montoDebito: '',
+    montoCredito: '',
+    propinaDebito: '',
+    propinaCredito: '',
+    montoAmex: '',
+    propinaAmex: ''
+  });
+
+  const [compUploadLoading, setCompUploadLoading] = React.useState(false);
+
+  const handleUploadCompFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setCompUploadLoading(true);
+    try {
+      const timestamp = Date.now();
+      const filePath = `comprobantes_deposito/${timestamp}_${file.name.replace(/\s+/g, '_')}`;
+      const { error } = await supabase.storage.from('facturas').upload(filePath, file);
+      if (error) throw error;
+      setNewCompForm(prev => ({
+        ...prev,
+        archivoUrl: filePath
+      }));
+    } catch (err: any) {
+      alert('Error al subir archivo: ' + err.message);
+    } finally {
+      setCompUploadLoading(false);
+    }
+  };
+
+  const [linkSearchQuery, setLinkSearchQuery] = React.useState('');
+  const [selectedLinkMovIds, setSelectedLinkMovIds] = React.useState<Set<string>>(new Set());
+  const [linkDateFrom, setLinkDateFrom] = React.useState('');
+  const [linkDateTo, setLinkDateTo] = React.useState('');
+  const [linkingBatch, setLinkingBatch] = React.useState(false);
+
   const [uploadedXmlAmounts, setUploadedXmlAmounts] = React.useState<{[key: string]: number}>({});
+  const xmlAmountsCache = React.useRef<{[key: string]: number}>({});
 
   const parseXmlTotal = (file: File): Promise<number> => {
     return new Promise((resolve) => {
@@ -339,11 +452,12 @@ export default function BancoTab({
 
   const fetchAndParseXmlAmount = async (path: string): Promise<number> => {
     try {
-      const { data } = supabase.storage.from('facturas').getPublicUrl(path);
-      if (!data?.publicUrl) return 0;
-      const res = await fetch(data.publicUrl);
-      if (!res.ok) return 0;
-      const text = await res.text();
+      const { data, error } = await supabase.storage.from('facturas').download(path);
+      if (error || !data) {
+        console.error('Error downloading XML:', error);
+        return 0;
+      }
+      const text = await data.text();
       const parser = new DOMParser();
       const xmlDoc = parser.parseFromString(text, 'application/xml');
       const comprobante = xmlDoc.getElementsByTagName('cfdi:Comprobante')[0] || xmlDoc.getElementsByTagName('Comprobante')[0];
@@ -371,46 +485,116 @@ export default function BancoTab({
   };
 
   React.useEffect(() => {
-    if (reconcileModal.open) {
-      const paths = reconcileModal.xmlUrl ? reconcileModal.xmlUrl.split(',').filter(Boolean) : [];
-      
-      // Clean up deleted paths
-      setUploadedXmlAmounts(prev => {
-        const next = { ...prev };
-        let changed = false;
-        Object.keys(next).forEach(key => {
-          const stillExists = paths.some(p => p === key || p.endsWith(key));
-          if (!stillExists) {
-            delete next[key];
-            changed = true;
-          }
-        });
-        return changed ? next : prev;
-      });
-
-      // Fetch newly added paths
-      paths.forEach((path) => {
-        setUploadedXmlAmounts(prev => {
-          if (prev[path]) return prev;
-          (async () => {
-            const amt = await fetchAndParseXmlAmount(path);
-            if (amt > 0) {
-              setUploadedXmlAmounts(p => ({ ...p, [path]: amt }));
-            }
-          })();
-          return prev;
-        });
-      });
-    } else {
+    if (!reconcileModal.open) {
       setUploadedXmlAmounts({});
+      xmlAmountsCache.current = {};
+      return;
     }
+
+    const paths = reconcileModal.xmlUrl ? reconcileModal.xmlUrl.split(',').filter(Boolean) : [];
+
+    const loadAmounts = async () => {
+      const nextAmounts: {[key: string]: number} = {};
+      
+      for (const path of paths) {
+        // Check cache first
+        if (xmlAmountsCache.current[path] !== undefined) {
+          nextAmounts[path] = xmlAmountsCache.current[path];
+          continue;
+        }
+
+        // Check if we have a local upload key in cache (e.g. key is the file name and path ends with it)
+        const cachedKey = Object.keys(xmlAmountsCache.current).find(
+          key => path === key || path.endsWith(key)
+        );
+        if (cachedKey !== undefined) {
+          const amt = xmlAmountsCache.current[cachedKey];
+          xmlAmountsCache.current[path] = amt;
+          nextAmounts[path] = amt;
+          continue;
+        }
+
+        // Fetch and parse
+        const amt = await fetchAndParseXmlAmount(path);
+        xmlAmountsCache.current[path] = amt;
+        nextAmounts[path] = amt;
+      }
+
+      setUploadedXmlAmounts(nextAmounts);
+    };
+
+    loadAmounts();
   }, [reconcileModal.open, reconcileModal.xmlUrl]);
+
+  const handleUploadFusionFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !fusionModal.mov1) return;
+
+    setFusionModal(prev => ({ ...prev, loading: true, error: '' }));
+    try {
+      const timestamp = Date.now();
+      const yearMonth = new Date(fusionModal.mov1.fecha).toISOString().substring(0, 7);
+      const filePath = `reconciliation/${yearMonth}/${timestamp}_${file.name.replace(/\s+/g, '_')}`;
+
+      const { error } = await supabase.storage.from('facturas').upload(filePath, file);
+      if (error) throw error;
+
+      setFusionModal(prev => ({
+        ...prev,
+        soporteReembolsoUrl: prev.soporteReembolsoUrl ? `${prev.soporteReembolsoUrl},${filePath}` : filePath
+      }));
+    } catch (err: any) {
+      setFusionModal(prev => ({ ...prev, error: 'Error al subir archivo: ' + err.message }));
+    } finally {
+      setFusionModal(prev => ({ ...prev, loading: false }));
+    }
+  };
+
+  const handleRemoveFusionFile = (idx: number) => {
+    setFusionModal(prev => {
+      const paths = prev.soporteReembolsoUrl.split(',').filter(Boolean);
+      const newPaths = paths.filter((_, i) => i !== idx).join(',');
+      return {
+        ...prev,
+        soporteReembolsoUrl: newPaths
+      };
+    });
+  };
+
+  const handleConfirmFusion = async () => {
+    if (!fusionModal.mov1 || !fusionModal.mov2) return;
+    setFusionModal(prev => ({ ...prev, loading: true, error: '' }));
+    try {
+      if (onFusionarReembolso) {
+        const res = await onFusionarReembolso(fusionModal.mov1.id, fusionModal.mov2.id, {
+          soporteReembolsoUrl: fusionModal.soporteReembolsoUrl,
+          comentarios: fusionModal.comentarios
+        });
+        if (res && !res.success) {
+          throw new Error(res.error || 'Error al fusionar movimientos.');
+        }
+        setFusionModal({
+          open: false,
+          mov1: null,
+          mov2: null,
+          soporteReembolsoUrl: '',
+          comentarios: '',
+          loading: false,
+          error: ''
+        });
+        setSelectedMovimientos([]);
+      }
+    } catch (err: any) {
+      setFusionModal(prev => ({ ...prev, error: err.message, loading: false }));
+    }
+  };
 
   const handleXmlUploadChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
       const amount = await parseXmlTotal(file);
       if (amount > 0) {
+        xmlAmountsCache.current[file.name] = amount;
         setUploadedXmlAmounts(prev => ({
           ...prev,
           [file.name]: amount
@@ -669,6 +853,59 @@ export default function BancoTab({
     }
   };
 
+  const exportComprobantesToExcel = async () => {
+    try {
+      const XLSX = await import('xlsx');
+      
+      const rows = comprobantes.map((c) => {
+        const isVentanilla = c.tipo === 'deposito_ventanilla';
+        const linkedSum = (c.comprobantes_deposito_movimientos || []).reduce((acc, rel) => acc + Number(rel.monto_asociado), 0);
+        const estatus = isCompCuadrado(c) ? 'Conciliado' : 'Pendiente';
+        const fechaComp = c.fecha ? new Date(c.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : '';
+        
+        return {
+          'Fecha': fechaComp,
+          'Tipo': isVentanilla ? 'Depósito Ventanilla' : 'Corte Tarjeta',
+          'Estatus': estatus,
+          'Banco Destino': c.cuentas_bancarias?.nombre || 'No especificado',
+          'Descripción': c.descripcion || '',
+          'Monto Total': Number(c.monto || 0),
+          'Monto Asociado': linkedSum,
+          'Diferencia (Sin Cuadrar)': Number(c.monto || 0) - linkedSum,
+          // Desglose de Pagos (separados débito, crédito, amex y propinas)
+          'Débito (Base)': isVentanilla ? 0 : Number(c.monto_debito || 0),
+          'Débito (Propina)': isVentanilla ? 0 : Number(c.propina_debito || 0),
+          'Crédito (Base)': isVentanilla ? 0 : Number(c.monto_credito || 0),
+          'Crédito (Propina)': isVentanilla ? 0 : Number(c.propina_credito || 0),
+          'Amex (Base)': isVentanilla ? 0 : Number(c.monto_amex || 0),
+          'Amex (Propina)': isVentanilla ? 0 : Number(c.propina_amex || 0)
+        };
+      });
+
+      const ws = XLSX.utils.json_to_sheet(rows);
+      
+      const maxLens = Object.keys(rows[0] || {}).reduce((acc: any, key) => {
+        let maxL = key.length;
+        rows.forEach((row: any) => {
+          const val = String(row[key] || '');
+          if (val.length > maxL) maxL = val.length;
+        });
+        acc[key] = Math.min(maxL + 2, 40);
+        return acc;
+      }, {});
+
+      ws['!cols'] = Object.keys(maxLens).map(key => ({ wch: maxLens[key] }));
+
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Comprobantes');
+
+      XLSX.writeFile(wb, 'Reporte_Comprobantes_Conciliacion.xlsx');
+    } catch (err: any) {
+      console.error('Error generating Excel report for comprobantes:', err);
+      alert(`Error al generar reporte en Excel: ${err.message}`);
+    }
+  };
+
   const filtered = filterMovimientos(
     movimientos, 
     busquedaBanco, 
@@ -688,6 +925,7 @@ export default function BancoTab({
         {([
           { key: 'movimientos', label: 'Movimientos de Cuenta', icon: <List size={14} /> },
           { key: 'global', label: 'Facturación Global (Ingresos)', icon: <Scale size={14} /> },
+          { key: 'comprobantes', label: 'Comprobantes Pendientes', icon: <CreditCard size={14} /> },
           ] as const).map(({ key, label, icon }) => (
           <button
             key={key}
@@ -1026,6 +1264,34 @@ export default function BancoTab({
                         ))}
                       </select>
                     </div>
+
+                    {selectedMovimientos.length === 2 && (() => {
+                      const m1 = movimientos.find(x => x.id === selectedMovimientos[0]);
+                      const m2 = movimientos.find(x => x.id === selectedMovimientos[1]);
+                      const isOppositeType = m1 && m2 && m1.tipo_movimiento !== m2.tipo_movimiento;
+                      const hasSameAccount = m1 && m2 && m1.cuenta_bancaria_id === m2.cuenta_bancaria_id;
+                      
+                      if (isOppositeType && hasSameAccount) {
+                        return (
+                          <button
+                            type="button"
+                            onClick={() => setFusionModal({
+                              open: true,
+                              mov1: m1.tipo_movimiento === 'Retiro' ? m1 : m2,
+                              mov2: m1.tipo_movimiento === 'Deposito' ? m1 : m2,
+                              soporteReembolsoUrl: '',
+                              comentarios: '',
+                              loading: false,
+                              error: ''
+                            })}
+                            className="px-3 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded text-xs font-bold transition-all shadow flex items-center gap-1.5"
+                          >
+                            <ArrowRightLeft size={13} /> Fusionar Reembolso
+                          </button>
+                        );
+                      }
+                      return null;
+                    })()}
                   </div>
                 </div>
               )}
@@ -1170,6 +1436,39 @@ export default function BancoTab({
                                 })}
                               </div>
                             )}
+
+                            {m.movimiento_reembolso_id && (() => {
+                              const otherMov = movimientos.find(x => x.id === m.movimiento_reembolso_id);
+                              return (
+                                <div className="mt-2 p-2.5 rounded-xl bg-amber-50/60 dark:bg-amber-955/20 border border-amber-100 dark:border-amber-900/40 text-[10px] text-gray-600 dark:text-gray-300 font-sans space-y-1 shadow-sm animate-in slide-in-from-top-1 duration-150">
+                                  <div className="flex justify-between items-center font-semibold text-amber-850 dark:text-amber-400 gap-2 flex-wrap">
+                                    <span>🔄 Reembolso Fusionado: {otherMov ? otherMov.concepto : 'Movimiento Vinculado'}</span>
+                                    <div className="flex items-center gap-2">
+                                      {otherMov && (
+                                        <span className="font-mono bg-amber-100/60 dark:bg-amber-900/50 px-1.5 py-0.5 rounded text-[9px] font-bold">
+                                          Monto: {formatCurrency(Math.abs(otherMov.monto))}
+                                        </span>
+                                      )}
+                                      {handleUnlinkReconciliation && (
+                                        <button
+                                          type="button"
+                                          onClick={() => handleUnlinkReconciliation(m.id)}
+                                          className="text-red-550 hover:text-white hover:bg-red-500 dark:hover:bg-red-655 px-1.5 py-0.5 rounded text-[9px] font-bold border border-red-200 dark:border-red-900/50 transition-all flex items-center gap-0.5"
+                                          title="Desvincular o deshacer fusión"
+                                        >
+                                          <X size={10} /> Desvincular
+                                        </button>
+                                      )}
+                                    </div>
+                                  </div>
+                                  {m.comentarios && (
+                                    <p className="text-gray-550 dark:text-gray-400 text-[9px] italic mt-0.5">
+                                      <strong>Nota:</strong> {m.comentarios}
+                                    </p>
+                                  )}
+                                </div>
+                              );
+                            })()}
                           </td>
                           <td className="p-3">
                             <select
@@ -1184,9 +1483,50 @@ export default function BancoTab({
                             </select>
                           </td>
                           <td className="p-3 text-right font-mono font-bold">
-                            {isRetiro
-                              ? <span className="text-red-500">-{formatCurrency(m.retiro)}</span>
-                              : <span className="text-emerald-500">+{formatCurrency(m.deposito)}</span>}
+                            {isRetiro ? (
+                              <span className="text-red-500">-{formatCurrency(m.retiro)}</span>
+                            ) : (
+                              <div className="flex flex-col items-end gap-1 font-sans">
+                                <span className="text-emerald-500">+{formatCurrency(m.deposito)}</span>
+                                {(() => {
+                                  const associatedComps = (comprobantes || []).filter(c => 
+                                    c.comprobantes_deposito_movimientos?.some(rel => rel.movimiento_id === m.id)
+                                  );
+                                  const compsSum = associatedComps.reduce((acc, c) => {
+                                    const rel = c.comprobantes_deposito_movimientos?.find(r => r.movimiento_id === m.id);
+                                    return acc + (rel ? Number(rel.monto_asociado) : 0);
+                                  }, 0);
+                                  if (associatedComps.length > 0) {
+                                    const match = Math.abs(compsSum - Number(m.deposito)) < 0.05;
+                                    return (
+                                      <button
+                                        type="button"
+                                        onClick={() => setActiveDepositMov(m)}
+                                        className={`px-1.5 py-0.5 rounded text-[9px] font-bold border flex items-center gap-1 transition-all hover:scale-105 ${
+                                          match
+                                            ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-600 dark:text-emerald-400'
+                                            : 'bg-amber-500/10 border-amber-500/20 text-amber-600 dark:text-amber-400'
+                                        }`}
+                                        title={`Suma: ${formatCurrency(compsSum)} / Depósito: ${formatCurrency(m.deposito)}`}
+                                      >
+                                        <span>📋 {associatedComps.length} comp</span>
+                                        <span>({formatCurrency(compsSum)})</span>
+                                        {match ? <span>✓</span> : <span>⚠️</span>}
+                                      </button>
+                                    );
+                                  }
+                                  return (
+                                    <button
+                                      type="button"
+                                      onClick={() => setActiveDepositMov(m)}
+                                      className="px-1.5 py-0.5 rounded text-[8px] font-bold border border-dashed border-gray-300 dark:border-gray-700 text-gray-400 hover:text-gray-655 dark:hover:text-gray-250 transition-all hover:bg-gray-50 dark:hover:bg-gray-900/40"
+                                    >
+                                      + Comprobantes
+                                    </button>
+                                  );
+                                })()}
+                              </div>
+                            )}
                           </td>
                           <td className="p-3 text-center">
                             <span className="px-2 py-0.5 rounded-full text-[9px] font-bold border"
@@ -1243,6 +1583,14 @@ export default function BancoTab({
                                   <CreditCard size={13} />{a.length > 1 && <span className="text-[8px] font-bold font-mono">{i + 1}</span>}
                                 </button>
                               )) : <button disabled className="p-1 rounded text-[10px] text-gray-300 cursor-not-allowed"><CreditCard size={13} /></button>}
+                              
+                              {/* Soporte Reembolso */}
+                              {m.soporte_reembolso_url && m.soporte_reembolso_url.split(',').filter(Boolean).map((url, i, a) => (
+                                <button key={i} onClick={() => onDownloadFile(url)}
+                                  className="p-1 rounded text-[10px] text-amber-605 dark:text-amber-400 hover:bg-amber-500/10 flex items-center gap-0.5" title={`Soporte Reembolso ${i + 1}`}>
+                                  <Paperclip size={13} />{a.length > 1 && <span className="text-[8px] font-bold font-mono">{i + 1}</span>}
+                                </button>
+                              ))}
                             </div>
                           </td>
                           <td className="p-3 text-center">
@@ -1443,15 +1791,558 @@ export default function BancoTab({
           </div>
         )}
 
+        {/* ── SUB-TAB 3: COMPROBANTES PENDIENTES ───────────────────────────── */}
+        {bancoSubTab === 'comprobantes' && (
+          <div className="flex-1 flex flex-col p-4 overflow-hidden min-h-0 gap-6">
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 flex-1 min-h-0 overflow-hidden">
+              
+              {/* Formulario de creación */}
+              <div className="flex flex-col min-h-0 bg-white dark:bg-gray-955 border border-gray-200 dark:border-gray-800 rounded-xl p-4 overflow-auto shadow-sm font-sans">
+                <h4 className="text-xs font-extrabold uppercase text-amber-500 flex items-center gap-1.5 mb-4 border-b border-gray-150 dark:border-gray-900 pb-2">
+                  <Plus size={14} /> Registrar Comprobante Independiente
+                </h4>
+                
+                <div className="space-y-4">
+                  <div>
+                    <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block mb-1">Tipo de Comprobante</label>
+                    <select
+                      value={newCompForm.tipo}
+                      onChange={(e) => setNewCompForm(p => ({ ...p, tipo: e.target.value as any }))}
+                      className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs text-gray-900 dark:text-white focus:ring-1 focus:ring-amber-500 outline-none"
+                    >
+                      <option value="deposito_ventanilla">Depósito en Ventanilla</option>
+                      <option value="corte_tarjeta">Corte Diario de Tarjeta</option>
+                    </select>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block mb-1">Fecha</label>
+                      <input
+                        type="date"
+                        value={newCompForm.fecha}
+                        onChange={(e) => setNewCompForm(p => ({ ...p, fecha: e.target.value }))}
+                        className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs text-gray-900 dark:text-white focus:ring-1 focus:ring-amber-500 outline-none"
+                      />
+                    </div>
+                    {newCompForm.tipo === 'deposito_ventanilla' ? (
+                      <div>
+                        <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block mb-1">Monto (MXN)</label>
+                        <input
+                          type="number"
+                          placeholder="0.00"
+                          step="0.01"
+                          value={newCompForm.monto}
+                          onChange={(e) => setNewCompForm(p => ({ ...p, monto: e.target.value }))}
+                          className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs text-gray-900 dark:text-white focus:ring-1 focus:ring-amber-500 outline-none font-mono"
+                        />
+                      </div>
+                    ) : (
+                      <div>
+                        <label className="text-[10px] font-bold text-amber-500 uppercase tracking-wider block mb-1">Monto Calculado</label>
+                        <div className="w-full bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-750 p-2 rounded-lg text-xs font-mono font-bold text-gray-900 dark:text-white">
+                          {(() => {
+                            const tot = Number(newCompForm.montoDebito || 0) +
+                                        Number(newCompForm.montoCredito || 0) +
+                                        Number(newCompForm.propinaDebito || 0) +
+                                        Number(newCompForm.propinaCredito || 0) +
+                                        Number(newCompForm.montoAmex || 0) +
+                                        Number(newCompForm.propinaAmex || 0);
+                            return formatCurrency(tot);
+                          })()}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {newCompForm.tipo === 'corte_tarjeta' && (
+                    <div className="p-3 bg-gray-50 dark:bg-gray-900/40 border border-gray-200 dark:border-gray-800 rounded-xl space-y-3">
+                      <h5 className="text-[10px] font-extrabold uppercase text-gray-400 tracking-wider">Desglose del Corte Diario</h5>
+                      
+                      <div className="grid grid-cols-2 gap-2 text-[10px]">
+                        <div>
+                          <label className="font-bold text-gray-550 block mb-0.5">Importe Débito</label>
+                          <input
+                            type="number"
+                            placeholder="0.00"
+                            step="0.01"
+                            value={newCompForm.montoDebito}
+                            onChange={(e) => setNewCompForm(p => ({ ...p, montoDebito: e.target.value }))}
+                            className="w-full bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 p-1.5 rounded text-xs font-mono text-gray-900 dark:text-white"
+                          />
+                        </div>
+                        <div>
+                          <label className="font-bold text-gray-550 block mb-0.5">Propina Débito</label>
+                          <input
+                            type="number"
+                            placeholder="0.00"
+                            step="0.01"
+                            value={newCompForm.propinaDebito}
+                            onChange={(e) => setNewCompForm(p => ({ ...p, propinaDebito: e.target.value }))}
+                            className="w-full bg-white dark:bg-gray-955 border border-gray-300 dark:border-gray-700 p-1.5 rounded text-xs font-mono text-gray-900 dark:text-white"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2 text-[10px]">
+                        <div>
+                          <label className="font-bold text-gray-550 block mb-0.5">Importe Crédito</label>
+                          <input
+                            type="number"
+                            placeholder="0.00"
+                            step="0.01"
+                            value={newCompForm.montoCredito}
+                            onChange={(e) => setNewCompForm(p => ({ ...p, montoCredito: e.target.value }))}
+                            className="w-full bg-white dark:bg-gray-955 border border-gray-300 dark:border-gray-700 p-1.5 rounded text-xs font-mono text-gray-900 dark:text-white"
+                          />
+                        </div>
+                        <div>
+                          <label className="font-bold text-gray-550 block mb-0.5">Propina Crédito</label>
+                          <input
+                            type="number"
+                            placeholder="0.00"
+                            step="0.01"
+                            value={newCompForm.propinaCredito}
+                            onChange={(e) => setNewCompForm(p => ({ ...p, propinaCredito: e.target.value }))}
+                            className="w-full bg-white dark:bg-gray-955 border border-gray-300 dark:border-gray-700 p-1.5 rounded text-xs font-mono text-gray-900 dark:text-white"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2 text-[10px]">
+                        <div>
+                          <label className="font-bold text-gray-550 block mb-0.5">Importe Amex</label>
+                          <input
+                            type="number"
+                            placeholder="0.00"
+                            step="0.01"
+                            value={newCompForm.montoAmex}
+                            onChange={(e) => setNewCompForm(p => ({ ...p, montoAmex: e.target.value }))}
+                            className="w-full bg-white dark:bg-gray-955 border border-gray-300 dark:border-gray-700 p-1.5 rounded text-xs font-mono text-gray-900 dark:text-white"
+                          />
+                        </div>
+                        <div>
+                          <label className="font-bold text-gray-550 block mb-0.5">Propina Amex</label>
+                          <input
+                            type="number"
+                            placeholder="0.00"
+                            step="0.01"
+                            value={newCompForm.propinaAmex}
+                            onChange={(e) => setNewCompForm(p => ({ ...p, propinaAmex: e.target.value }))}
+                            className="w-full bg-white dark:bg-gray-955 border border-gray-300 dark:border-gray-700 p-1.5 rounded text-xs font-mono text-gray-900 dark:text-white"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block mb-1">Cuenta de Destino Relacionada</label>
+                    <select
+                      value={newCompForm.cuentaBancariaId}
+                      onChange={(e) => setNewCompForm(p => ({ ...p, cuentaBancariaId: e.target.value }))}
+                      className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs text-gray-900 dark:text-white focus:ring-1 focus:ring-amber-500 outline-none"
+                    >
+                      <option value="">- Ninguna / Seleccionar Banco -</option>
+                      {cuentasBancarias.map((cb) => (
+                        <option key={cb.id} value={cb.id}>{cb.nombre} ({cb.moneda})</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block mb-1">Descripción / Notas</label>
+                    <textarea
+                      value={newCompForm.descripcion}
+                      onChange={(e) => setNewCompForm(p => ({ ...p, descripcion: e.target.value }))}
+                      placeholder="Ej: Depósito efectivo ventas fin de semana..."
+                      rows={2}
+                      className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs text-gray-900 dark:text-white focus:ring-1 focus:ring-amber-500 outline-none resize-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block mb-1">Proveedor de Almacenamiento</label>
+                    <div className="flex gap-4 mt-1 text-xs">
+                      <label className="flex items-center gap-1.5 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="comp_storage"
+                          checked={newCompForm.storageProvider === 'Supabase'}
+                          onChange={() => setNewCompForm(p => ({ ...p, storageProvider: 'Supabase', archivoUrl: '' }))}
+                        />
+                        <span>Supabase Storage</span>
+                      </label>
+                      <label className="flex items-center gap-1.5 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="comp_storage"
+                          checked={newCompForm.storageProvider === 'GoogleDrive'}
+                          onChange={() => setNewCompForm(p => ({ ...p, storageProvider: 'GoogleDrive', archivoUrl: '' }))}
+                        />
+                        <span>Google Drive Link</span>
+                      </label>
+                    </div>
+                  </div>
+
+                  {newCompForm.storageProvider === 'Supabase' ? (
+                    <div>
+                      <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block mb-1">Ticket de Depósito (Imagen / PDF)</label>
+                      <div className="relative overflow-hidden w-full">
+                        <input
+                          type="file"
+                          accept="image/*,.pdf"
+                          onChange={handleUploadCompFile}
+                          disabled={compUploadLoading}
+                          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
+                        />
+                        <button
+                          type="button"
+                          disabled={compUploadLoading}
+                          className="w-full py-2 bg-gray-100 hover:bg-gray-200 dark:bg-gray-900 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-700 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5"
+                        >
+                          {compUploadLoading ? <RefreshCw size={14} className="animate-spin" /> : <UploadCloud size={14} />}
+                          {newCompForm.archivoUrl ? 'Archivo cargado con éxito ✓' : 'Seleccionar Archivo...'}
+                        </button>
+                      </div>
+                      {newCompForm.archivoUrl && (
+                        <p className="text-[9px] text-gray-400 font-mono mt-1 truncate">{newCompForm.archivoUrl.split('/').pop()}</p>
+                      )}
+                    </div>
+                  ) : (
+                    <div>
+                      <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block mb-1">Enlace de Google Drive</label>
+                      <input
+                        type="url"
+                        placeholder="https://drive.google.com/..."
+                        value={newCompForm.archivoUrl}
+                        onChange={(e) => setNewCompForm(p => ({ ...p, archivoUrl: e.target.value }))}
+                        className="w-full bg-white dark:bg-gray-955 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs text-gray-900 dark:text-white focus:ring-1 focus:ring-amber-500 outline-none font-mono"
+                      />
+                    </div>
+                  )}
+
+                  {newCompForm.error && (
+                    <div className="text-[11px] text-red-500 bg-red-50 dark:bg-red-955/20 border border-red-200 dark:border-red-900/50 p-2.5 rounded-lg">{newCompForm.error}</div>
+                  )}
+
+                  {editingCompId && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingCompId(null);
+                        setNewCompForm({
+                          tipo: 'deposito_ventanilla',
+                          fecha: new Date().toISOString().substring(0, 10),
+                          monto: '',
+                          descripcion: '',
+                          archivoUrl: '',
+                          storageProvider: 'Supabase',
+                          cuentaBancariaId: '',
+                          loading: false,
+                          error: '',
+                          montoDebito: '',
+                          montoCredito: '',
+                          propinaDebito: '',
+                          propinaCredito: '',
+                          montoAmex: '',
+                          propinaAmex: ''
+                        });
+                      }}
+                      className="w-full mb-2 py-2 border border-gray-300 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300 rounded-lg text-xs font-bold transition-all shadow-sm"
+                    >
+                      Cancelar Edición
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const tot = newCompForm.tipo === 'deposito_ventanilla'
+                        ? Number(newCompForm.monto)
+                        : Number(newCompForm.montoDebito || 0) +
+                          Number(newCompForm.montoCredito || 0) +
+                          Number(newCompForm.propinaDebito || 0) +
+                          Number(newCompForm.propinaCredito || 0) +
+                          Number(newCompForm.montoAmex || 0) +
+                          Number(newCompForm.propinaAmex || 0);
+
+                      if (!tot || tot <= 0) {
+                        setNewCompForm(p => ({ ...p, error: 'Por favor ingresa un monto válido mayor a 0.' }));
+                        return;
+                      }
+                      if (!newCompForm.fecha) {
+                        setNewCompForm(p => ({ ...p, error: 'Por favor selecciona la fecha del ticket.' }));
+                        return;
+                      }
+
+                      // Advertencia si el monto modificado no coincide con la suma de lo ya vinculado
+                      if (editingCompId) {
+                        const currentComp = comprobantes.find(c => c.id === editingCompId);
+                        if (currentComp) {
+                          const linkedSum = (currentComp.comprobantes_deposito_movimientos || []).reduce((acc, rel) => acc + Number(rel.monto_asociado), 0);
+                          if (linkedSum > 0 && Math.abs(tot - linkedSum) >= 0.05) {
+                            if (!confirm(`Advertencia: El nuevo monto del comprobante (${formatCurrency(tot)}) no coincide con la suma de los movimientos vinculados (${formatCurrency(linkedSum)}). ¿Deseas continuar?`)) {
+                              return;
+                            }
+                          }
+                        }
+                      }
+
+                      setNewCompForm(p => ({ ...p, loading: true, error: '' }));
+                      try {
+                        const payload = {
+                          tipo: newCompForm.tipo,
+                          fecha: newCompForm.fecha,
+                          monto: tot,
+                          descripcion: newCompForm.descripcion,
+                          archivo_url: newCompForm.archivoUrl,
+                          storage_provider: newCompForm.storageProvider,
+                          cuenta_bancaria_id: newCompForm.cuentaBancariaId || null,
+                          monto_debito: Number(newCompForm.montoDebito || 0),
+                          monto_credito: Number(newCompForm.montoCredito || 0),
+                          propina_debito: Number(newCompForm.propinaDebito || 0),
+                          propina_credito: Number(newCompForm.propinaCredito || 0),
+                          monto_amex: Number(newCompForm.montoAmex || 0),
+                          propina_amex: Number(newCompForm.propinaAmex || 0)
+                        };
+
+                        let res;
+                        if (editingCompId) {
+                          res = await onActualizarComprobante?.(editingCompId, payload);
+                        } else {
+                          res = await onCrearComprobante?.(payload);
+                        }
+
+                        if (res && !res.success) {
+                          throw new Error(res.error);
+                        }
+
+                        // Reset form
+                        setEditingCompId(null);
+                        setNewCompForm({
+                          tipo: 'deposito_ventanilla',
+                          fecha: new Date().toISOString().substring(0, 10),
+                          monto: '',
+                          descripcion: '',
+                          archivoUrl: '',
+                          storageProvider: 'Supabase',
+                          cuentaBancariaId: '',
+                          loading: false,
+                          error: '',
+                          montoDebito: '',
+                          montoCredito: '',
+                          propinaDebito: '',
+                          propinaCredito: '',
+                          montoAmex: '',
+                          propinaAmex: ''
+                        });
+                      } catch (err: any) {
+                        setNewCompForm(p => ({ ...p, error: err.message || 'Error al guardar.' }));
+                      } finally {
+                        setNewCompForm(p => ({ ...p, loading: false }));
+                      }
+                    }}
+                    disabled={newCompForm.loading || compUploadLoading}
+                    className="w-full py-2.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-lg text-xs font-extrabold shadow-md flex items-center justify-center gap-1.5 transition-all"
+                  >
+                    {newCompForm.loading ? <RefreshCw size={14} className="animate-spin" /> : (editingCompId ? <Check size={14} /> : <Plus size={14} />)}
+                    {editingCompId ? 'Actualizar Comprobante' : 'Guardar Comprobante'}
+                  </button>
+
+                </div>
+              </div>
+
+              {/* Listado de comprobantes pendientes de vincular */}
+              <div className="lg:col-span-2 flex flex-col min-h-0 bg-white dark:bg-gray-955 border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden shadow-sm font-sans">
+                <div className="p-3 bg-gray-50/50 dark:bg-gray-900/40 border-b border-gray-200 dark:border-gray-800 flex justify-between items-center shrink-0">
+                  <h4 className="text-xs font-extrabold uppercase text-amber-500 flex items-center gap-1.5">
+                    <List size={14} /> Comprobantes Registrados y Conciliación
+                  </h4>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={exportComprobantesToExcel}
+                      className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[10px] font-extrabold shadow-sm flex items-center gap-1 transition-all"
+                      title="Exportar Comprobantes a Excel"
+                    >
+                      <FileSpreadsheet size={12} />
+                      Exportar Excel
+                    </button>
+                    <span className="bg-amber-500/10 text-amber-600 dark:text-amber-400 font-mono text-[10px] font-bold px-2 py-0.5 rounded-full">
+                      {comprobantes.filter(c => !isCompCuadrado(c)).length} sin cuadrar de {comprobantes.length} totales
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex-1 overflow-auto">
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead>
+                      <tr className="bg-gray-50 dark:bg-gray-900/50 border-b border-gray-200 dark:border-gray-800 text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+                        <th className="p-3">Fecha</th>
+                        <th className="p-3">Tipo / Desglose</th>
+                        <th className="p-3">Banco Destino</th>
+                        <th className="p-3">Descripción</th>
+                        <th className="p-3 text-right">Monto</th>
+                        <th className="p-3 text-center">Ticket</th>
+                        <th className="p-3 text-center">Acciones</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100 dark:divide-gray-800/60 font-sans">
+                      {comprobantes
+                        .map((c) => {
+                          const isVentanilla = c.tipo === 'deposito_ventanilla';
+                          const linkedSum = (c.comprobantes_deposito_movimientos || []).reduce((acc, rel) => acc + Number(rel.monto_asociado), 0);
+                          const isCuadrado = isCompCuadrado(c);
+                          return (
+                            <tr key={c.id} className="hover:bg-gray-50/55 dark:hover:bg-gray-900/10 transition-colors">
+                              <td className="p-3 font-mono text-gray-500">{new Date(c.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })}</td>
+                              <td className="p-3 font-semibold text-gray-700 dark:text-gray-300">
+                                <div className="flex flex-col gap-1.5">
+                                  <div className="flex flex-wrap gap-1">
+                                    <span className={`px-2 py-0.5 rounded-full text-[9px] w-fit ${
+                                      isVentanilla
+                                        ? 'bg-blue-100 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400'
+                                        : 'bg-indigo-100 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-400'
+                                    }`}>
+                                      {isVentanilla ? 'Depósito Ventanilla' : 'Corte Tarjeta'}
+                                    </span>
+                                    {isCuadrado ? (
+                                      <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-emerald-100 dark:bg-emerald-950/20 text-emerald-700 dark:text-emerald-400">
+                                        Conciliado
+                                      </span>
+                                    ) : (
+                                      <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-amber-100 dark:bg-amber-955/20 text-amber-700 dark:text-amber-400">
+                                        Pendiente
+                                      </span>
+                                    )}
+                                  </div>
+                                  {!isVentanilla && (
+                                    <span className="text-[8px] text-gray-400 font-mono leading-tight block mt-1">
+                                      💳 D: {formatCurrency(c.monto_debito || 0)} (+{formatCurrency(c.propina_debito || 0)})<br />
+                                      💳 C: {formatCurrency(c.monto_credito || 0)} (+{formatCurrency(c.propina_credito || 0)})<br />
+                                      💳 A: {formatCurrency(c.monto_amex || 0)} (+{formatCurrency(c.propina_amex || 0)})
+                                    </span>
+                                  )}
+                                </div>
+                              </td>
+                              <td className="p-3 font-medium text-gray-700 dark:text-gray-300">
+                                {c.cuentas_bancarias?.nombre ? `🏦 ${c.cuentas_bancarias.nombre}` : <span className="text-gray-400 italic">No especificado</span>}
+                              </td>
+                              <td className="p-3 text-gray-650 dark:text-gray-400 font-medium max-w-[200px] truncate" title={c.descripcion || ''}>
+                                {c.descripcion || '-'}
+                              </td>
+                              <td className="p-3 text-right font-mono font-bold">
+                                <div className="flex flex-col items-end">
+                                  <span className="text-emerald-655 dark:text-emerald-400 font-black">{formatCurrency(c.monto)}</span>
+                                  {linkedSum > 0 && (
+                                    <span className="text-[9px] text-gray-400">Asoc: {formatCurrency(linkedSum)}</span>
+                                  )}
+                                </div>
+                              </td>
+                              <td className="p-3 text-center">
+                                {c.archivo_url ? (
+                                  <button
+                                    onClick={() => onDownloadFile(c.archivo_url!)}
+                                    className="p-1 rounded text-amber-500 hover:bg-amber-500/10 font-bold inline-flex items-center gap-0.5"
+                                    title="Descargar Ticket"
+                                  >
+                                    <FileText size={13} />
+                                    <span className="text-[9px]">Ver</span>
+                                  </button>
+                                ) : (
+                                  <span className="text-gray-300 italic text-[10px]">Sin archivo</span>
+                                )}
+                              </td>
+                              <td className="p-3 text-center">
+                                <div className="flex gap-2 justify-center items-center">
+                                  <button
+                                    onClick={() => {
+                                      setEditingCompId(c.id);
+                                      setNewCompForm({
+                                        tipo: c.tipo as any,
+                                        fecha: c.fecha.substring(0, 10),
+                                        monto: String(c.monto),
+                                        descripcion: c.descripcion || '',
+                                        archivoUrl: c.archivo_url || '',
+                                        storageProvider: (c.storage_provider as any) || 'Supabase',
+                                        cuentaBancariaId: c.cuenta_bancaria_id || '',
+                                        loading: false,
+                                        error: '',
+                                        montoDebito: String(c.monto_debito || ''),
+                                        montoCredito: String(c.monto_credito || ''),
+                                        propinaDebito: String(c.propina_debito || ''),
+                                        propinaCredito: String(c.propina_credito || ''),
+                                        montoAmex: String(c.monto_amex || ''),
+                                        propinaAmex: String(c.propina_amex || '')
+                                      });
+                                    }}
+                                    className="p-1 rounded text-blue-500 hover:bg-blue-500/10 font-bold inline-flex items-center gap-0.5 border border-blue-250 dark:border-blue-900/50 px-1.5 py-0.5 text-[10px]"
+                                    title="Editar Comprobante"
+                                  >
+                                    <Edit3 size={11} /> Editar
+                                  </button>
+                                  <button
+                                    onClick={() => setActiveCompToLink(c)}
+                                    className="p-1 rounded text-amber-500 hover:bg-amber-500/10 font-bold inline-flex items-center gap-0.5 border border-amber-200 dark:border-amber-900/50 px-1.5 py-0.5 text-[10px]"
+                                    title="Vincular con depósitos bancarios"
+                                  >
+                                    <ArrowRightLeft size={11} /> Vincular Banco
+                                  </button>
+                                  <button
+                                    onClick={async () => {
+                                      if (confirm('¿Deseas eliminar este comprobante de forma permanente?')) {
+                                        const res = await onEliminarComprobante?.(c.id);
+                                        if (res && !res.success) {
+                                          alert(res.error);
+                                        }
+                                      }
+                                    }}
+                                    className="p-1 rounded text-red-500 hover:bg-red-500/10 font-bold inline-flex items-center gap-0.5"
+                                    title="Eliminar Comprobante"
+                                  >
+                                    <Trash2 size={13} />
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      {comprobantes.length === 0 && (
+                        <tr>
+                          <td colSpan={7} className="p-8 text-center text-gray-400 italic">
+                            No hay comprobantes registrados.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+            </div>
+          </div>
+        )}
+
         
 
         
 
       </div>
 
-      {/* ── MODAL DE CONCILIACIÓN MANUAL (overlay global) ──────────────────── */}
       {reconcileModal.open && reconcileModal.movimiento && (() => {
         const isOutflow = reconcileModal.movimiento.tipo_movimiento === 'Retiro';
+        const movMonto = Math.abs(Number(reconcileModal.movimiento.monto));
+        const totalEgresosSistema = isOutflow 
+          ? gastosReconciliables
+              .filter((g) => reconcileModal.gastosSeleccionados.includes(g.id))
+              .reduce((s, g) => s + Number(g.monto), 0)
+          : pedidosPendientes
+              .filter((p) => reconcileModal.pedidosSeleccionados.includes(p.id))
+              .reduce((s, p) => s + Number(p.precio_total), 0);
+        const totalXmlsCargados = Object.values(uploadedXmlAmounts).reduce((s, val) => s + val, 0);
+        const totalComprobado = totalEgresosSistema + totalXmlsCargados;
+        const dif = movMonto - totalComprobado;
+        const match = Math.abs(dif) < 0.05;
         return (
           <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4"
             onClick={(e) => { if (e.target === e.currentTarget) setReconcileModal((p) => ({ ...p, open: false })); }}>
@@ -1758,62 +2649,43 @@ export default function BancoTab({
               )}
 
               {/* Resumen de montos y conciliación */}
-              {(() => {
-                const movMonto = Math.abs(Number(reconcileModal.movimiento.monto));
-                
-                const totalEgresosSistema = isOutflow 
-                  ? gastosReconciliables
-                      .filter((g) => reconcileModal.gastosSeleccionados.includes(g.id))
-                      .reduce((s, g) => s + Number(g.monto), 0)
-                  : pedidosPendientes
-                      .filter((p) => reconcileModal.pedidosSeleccionados.includes(p.id))
-                      .reduce((s, p) => s + Number(p.precio_total), 0);
-                
-                const totalXmlsCargados = Object.values(uploadedXmlAmounts).reduce((s, val) => s + val, 0);
-                const totalComprobado = totalEgresosSistema + totalXmlsCargados;
-                const dif = movMonto - totalComprobado;
-                const match = Math.abs(dif) < 0.05;
-                
-                return (
-                  <div className="p-4 bg-amber-500/10 border border-amber-500/20 rounded-xl flex justify-between items-center flex-wrap gap-4 font-sans">
-                    <div className="flex gap-6 flex-wrap text-xs">
-                      <div>
-                        <span className="text-gray-500 dark:text-gray-400 block font-semibold">Movimiento:</span>
-                        <span className="text-base font-extrabold text-amber-600 dark:text-amber-400">{formatCurrency(movMonto)}</span>
-                      </div>
-                      <div>
-                        <span className="text-gray-500 dark:text-gray-400 block font-semibold">{isOutflow ? 'Egresos/Facturas:' : 'Ventas/Pedidos:'}</span>
-                        <span className="text-base font-extrabold text-emerald-600 dark:text-emerald-400">{formatCurrency(totalEgresosSistema)}</span>
-                      </div>
-                      {totalXmlsCargados > 0 && (
-                        <div>
-                          <span className="text-gray-500 dark:text-gray-400 block font-semibold">XMLs Asignados:</span>
-                          <span className="text-base font-extrabold text-blue-600 dark:text-blue-400">{formatCurrency(totalXmlsCargados)}</span>
-                        </div>
-                      )}
-                      <div>
-                        <span className="text-gray-500 dark:text-gray-400 block font-semibold">Total Comprobado:</span>
-                        <span className="text-base font-extrabold text-indigo-600 dark:text-indigo-400">{formatCurrency(totalComprobado)}</span>
-                      </div>
-                      <div>
-                        <span className="text-gray-500 dark:text-gray-400 block font-semibold">Diferencia:</span>
-                        <span className={`text-base font-mono font-extrabold ${match ? 'text-emerald-500' : 'text-amber-500'}`}>{formatCurrency(dif)}</span>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      {match ? (
-                        <span className="bg-emerald-100 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-400 px-2.5 py-1 rounded-lg text-xs font-bold flex items-center gap-1">
-                          <Check size={14} /> Coincide
-                        </span>
-                      ) : (
-                        <span className="bg-amber-100 dark:bg-amber-955/20 text-amber-700 dark:text-amber-400 px-2.5 py-1 rounded-lg text-xs font-bold flex items-center gap-1 animate-pulse">
-                          ⚠️ Diferencia
-                        </span>
-                      )}
-                    </div>
+              <div className="p-4 bg-amber-500/10 border border-amber-500/20 rounded-xl flex justify-between items-center flex-wrap gap-4 font-sans">
+                <div className="flex gap-6 flex-wrap text-xs font-sans">
+                  <div>
+                    <span className="text-gray-500 dark:text-gray-400 block font-semibold">Movimiento:</span>
+                    <span className="text-base font-extrabold text-amber-600 dark:text-amber-400">{formatCurrency(movMonto)}</span>
                   </div>
-                );
-              })()}
+                  <div>
+                    <span className="text-gray-500 dark:text-gray-400 block font-semibold">{isOutflow ? 'Egresos/Facturas:' : 'Ventas/Pedidos:'}</span>
+                    <span className="text-base font-extrabold text-emerald-600 dark:text-emerald-400">{formatCurrency(totalEgresosSistema)}</span>
+                  </div>
+                  {totalXmlsCargados > 0 && (
+                    <div>
+                      <span className="text-gray-500 dark:text-gray-400 block font-semibold">XMLs Asignados:</span>
+                      <span className="text-base font-extrabold text-blue-600 dark:text-blue-400">{formatCurrency(totalXmlsCargados)}</span>
+                    </div>
+                  )}
+                  <div>
+                    <span className="text-gray-500 dark:text-gray-400 block font-semibold">Total Comprobado:</span>
+                    <span className="text-base font-extrabold text-indigo-600 dark:text-indigo-400">{formatCurrency(totalComprobado)}</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-500 dark:text-gray-400 block font-semibold">Diferencia:</span>
+                    <span className={`text-base font-mono font-extrabold ${match ? 'text-emerald-500' : 'text-amber-500'}`}>{formatCurrency(dif)}</span>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  {match ? (
+                    <span className="bg-emerald-100 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-400 px-2.5 py-1 rounded-lg text-xs font-bold flex items-center gap-1">
+                      <Check size={14} /> Coincide
+                    </span>
+                  ) : (
+                    <span className="bg-amber-100 dark:bg-amber-955/20 text-amber-700 dark:text-amber-400 px-2.5 py-1 rounded-lg text-xs font-bold flex items-center gap-1 animate-pulse">
+                      ⚠️ Diferencia
+                    </span>
+                  )}
+                </div>
+              </div>
 
               {/* Estatus a asignar */}
               <div>
@@ -1835,8 +2707,25 @@ export default function BancoTab({
                   className="flex-1 py-2.5 border border-gray-300 dark:border-gray-700 rounded-xl text-xs font-semibold hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-50">
                   Cancelar
                 </button>
-                <button onClick={() => handleSaveReconciliation && handleSaveReconciliation()} disabled={reconcileModal.loading || !reconcileModal.estatusClave}
-                  className="flex-1 py-2.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-md flex items-center justify-center gap-2">
+                 <button 
+                  onClick={() => {
+                    if (!handleSaveReconciliation) return;
+                    const isExact = Math.abs(movMonto - totalComprobado) < 0.05;
+                    let comentario = '';
+                    if (!isExact) {
+                      const resComment = prompt('La conciliación no es exacta. Por favor, introduce un comentario explicando el porqué de la diferencia:');
+                      if (resComment === null) return; // User cancelled
+                      if (!resComment.trim()) {
+                        alert('El comentario es obligatorio cuando la conciliación no es exacta.');
+                        return;
+                      }
+                      comentario = resComment.trim();
+                    }
+                    handleSaveReconciliation(undefined, undefined, undefined, comentario);
+                  }} 
+                  disabled={reconcileModal.loading || !reconcileModal.estatusClave}
+                  className="flex-1 py-2.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-md flex items-center justify-center gap-2"
+                >
                   {reconcileModal.loading ? <><RefreshCw size={14} className="animate-spin" /> Guardando...</> : <><Check size={14} /> Guardar Conciliación</>}
                 </button>
               </div>
@@ -1844,6 +2733,971 @@ export default function BancoTab({
           </div>
         );
       })()}
+
+      {/* MODAL DE ASOCIACIÓN DE COMPROBANTES DE DEPÓSITO (TICKETS Y CORTES) */}
+      {activeDepositMov && (() => {
+        const movMonto = Number(activeDepositMov.deposito || activeDepositMov.monto);
+        const associated = (comprobantes || []).filter(c => 
+          c.comprobantes_deposito_movimientos?.some(rel => rel.movimiento_id === activeDepositMov.id)
+        );
+        const compsSum = associated.reduce((acc, c) => {
+          const rel = c.comprobantes_deposito_movimientos?.find(r => r.movimiento_id === activeDepositMov.id);
+          return acc + (rel ? Number(rel.monto_asociado) : 0);
+        }, 0);
+        const dif = movMonto - compsSum;
+        const match = Math.abs(dif) < 0.05;
+
+        const availableToLink = (comprobantes || []).filter(
+          c => !associated.some(ac => ac.id === c.id) &&
+               (!c.cuenta_bancaria_id || c.cuenta_bancaria_id === activeDepositMov.cuenta_bancaria_id)
+        );
+
+        return (
+          <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-2xl max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col shadow-2xl">
+              <div className="p-6 border-b border-gray-150 dark:border-gray-800 flex justify-between items-center bg-gray-50/50 dark:bg-gray-900/30">
+                <div>
+                  <h3 className="font-extrabold text-base flex items-center gap-2">
+                    <CreditCard size={16} className="text-amber-500" /> Vincular Comprobantes al Depósito Bancario
+                  </h3>
+                  <p className="text-xs text-gray-500 mt-0.5 font-sans">
+                    Asocia tickets de depósito en ventanilla y cortes de tarjeta con este movimiento de {formatCurrency(movMonto)} ({new Date(activeDepositMov.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })}).
+                  </p>
+                </div>
+                <button
+                  onClick={() => {
+                    setActiveDepositMov(null);
+                    setNewCompForm(p => ({
+                      ...p,
+                      error: '',
+                      archivoUrl: '',
+                      montoDebito: '',
+                      montoCredito: '',
+                      propinaDebito: '',
+                      propinaCredito: '',
+                      montoAmex: '',
+                      propinaAmex: ''
+                    }));
+                  }}
+                  className="text-gray-400 hover:text-gray-655 dark:hover:text-gray-300 p-1.5 rounded-lg hover:bg-gray-200/50 dark:hover:bg-gray-800/50 transition-all"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-auto p-6 grid grid-cols-1 lg:grid-cols-2 gap-6 min-h-0">
+                
+                {/* Izquierda: Comprobantes ya vinculados y estado de cuadre */}
+                <div className="flex flex-col gap-4 min-h-0 overflow-hidden">
+                  <h4 className="text-xs font-extrabold uppercase text-amber-500 border-b border-gray-100 dark:border-gray-900 pb-1 shrink-0">
+                    Comprobantes Vinculados ({associated.length})
+                  </h4>
+                  
+                  <div className="flex-1 overflow-auto space-y-2">
+                    {associated.map((c) => {
+                      const isVentanilla = c.tipo === 'deposito_ventanilla';
+                      const rel = c.comprobantes_deposito_movimientos?.find(r => r.movimiento_id === activeDepositMov.id);
+                      return (
+                        <div
+                          key={c.id}
+                          className="p-3 bg-gray-50 dark:bg-gray-900/50 rounded-xl border border-gray-200 dark:border-gray-800 flex justify-between items-start gap-3 text-xs"
+                        >
+                          <div className="space-y-1 flex-1 min-w-0">
+                            <div className="flex items-center gap-1.5">
+                              <span className={`px-1.5 py-0.2 rounded-full text-[8px] font-bold ${
+                                isVentanilla
+                                  ? 'bg-blue-100 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400'
+                                  : 'bg-indigo-100 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-400'
+                              }`}>
+                                {isVentanilla ? 'Ventanilla' : 'Tarjeta'}
+                              </span>
+                              <span className="font-mono text-gray-550 text-[10px]">
+                                {new Date(c.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })}
+                              </span>
+                            </div>
+                            <p className="font-bold text-gray-800 dark:text-gray-255 truncate">{c.descripcion || 'Sin descripción'}</p>
+                            {c.archivo_url && (
+                              <button
+                                type="button"
+                                onClick={() => onDownloadFile(c.archivo_url!)}
+                                className="text-[10px] text-amber-500 hover:underline flex items-center gap-0.5 font-bold"
+                              >
+                                📎 Ver Ticket ({c.storage_provider || 'Supabase'})
+                              </button>
+                            )}
+                          </div>
+                          <div className="flex flex-col items-end gap-1.5 shrink-0 font-sans">
+                            <span className="font-mono font-black text-emerald-600 dark:text-emerald-500">{formatCurrency(rel?.monto_asociado || c.monto)}</span>
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                if (confirm('¿Deseas desvincular este comprobante del depósito?')) {
+                                  const res = await onDesvincularComprobante?.(c.id, activeDepositMov.id);
+                                  if (res && !res.success) {
+                                    alert(res.error);
+                                  }
+                                }
+                              }}
+                              className="text-[10px] text-red-500 hover:bg-red-500/10 font-bold px-1.5 py-0.5 rounded border border-red-200 dark:border-red-900/30 transition-all"
+                            >
+                              Desvincular
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {associated.length === 0 && (
+                      <div className="h-32 border border-dashed border-gray-200 dark:border-gray-800 rounded-xl flex items-center justify-center text-gray-400 italic text-xs">
+                        No hay comprobantes vinculados a este depósito
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Resumen del cuadre de montos */}
+                  <div className="p-3 bg-gray-50 dark:bg-gray-900/40 border border-gray-250 dark:border-gray-800/80 rounded-xl space-y-1.5 shrink-0 font-sans">
+                    <div className="flex justify-between text-xs font-semibold">
+                      <span className="text-gray-500">Monto del Depósito:</span>
+                      <span className="font-mono text-gray-800 dark:text-gray-200 font-bold">{formatCurrency(movMonto)}</span>
+                    </div>
+                    <div className="flex justify-between text-xs font-semibold">
+                      <span className="text-gray-500">Suma Comprobantes:</span>
+                      <span className="font-mono text-emerald-600 dark:text-emerald-500 font-bold">+{formatCurrency(compsSum)}</span>
+                    </div>
+                    <div className="border-t border-gray-200 dark:border-gray-800 pt-1.5 flex justify-between items-baseline">
+                      <span className="text-[10px] text-gray-400 font-extrabold uppercase tracking-wider">Diferencia:</span>
+                      <span className={`text-sm font-mono font-black ${match ? 'text-emerald-500' : 'text-amber-500'}`}>
+                        {formatCurrency(dif)}
+                      </span>
+                    </div>
+                    <div className="flex justify-end pt-1">
+                      {match ? (
+                        <span className="bg-emerald-100 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-400 px-2 py-0.5 rounded text-[10px] font-bold flex items-center gap-1">
+                          ✓ Cuadra perfectamente
+                        </span>
+                      ) : (
+                        <span className="bg-amber-100 dark:bg-amber-955/20 text-amber-700 dark:text-amber-400 px-2 py-0.5 rounded text-[10px] font-bold flex items-center gap-1">
+                          ⚠️ Pendiente por cuadrar ({formatCurrency(dif)})
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Derecha: Crear nuevo o Vincular comprobantes independientes existentes */}
+                <div className="flex flex-col gap-4 min-h-0 overflow-hidden border-l border-gray-100 dark:border-gray-900 pl-6 font-sans">
+                  
+                  {/* Crear y Subir un Comprobante Nuevo en caliente */}
+                  <div className="shrink-0 bg-gray-50/50 dark:bg-gray-900/30 p-4 border border-gray-200 dark:border-gray-800 rounded-xl space-y-3 font-sans">
+                    <h4 className="text-[11px] font-black uppercase text-gray-500 tracking-wider">
+                      + Registrar y Vincular Nuevo Ticket
+                    </h4>
+                    
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div>
+                        <label className="text-[9px] font-bold text-gray-400 uppercase tracking-wider block mb-0.5">Tipo</label>
+                        <select
+                          value={newCompForm.tipo}
+                          onChange={(e) => setNewCompForm(p => ({ ...p, tipo: e.target.value as any }))}
+                          className="w-full bg-white dark:bg-gray-955 border border-gray-300 dark:border-gray-700 p-1.5 rounded-lg text-xs text-gray-900 dark:text-white"
+                        >
+                          <option value="deposito_ventanilla">Ventanilla</option>
+                          <option value="corte_tarjeta">Corte Tarjeta</option>
+                        </select>
+                      </div>
+                      {newCompForm.tipo === 'deposito_ventanilla' ? (
+                        <div>
+                          <label className="text-[9px] font-bold text-gray-400 uppercase tracking-wider block mb-0.5">Monto</label>
+                          <input
+                            type="number"
+                            placeholder="0.00"
+                            step="0.01"
+                            value={newCompForm.monto}
+                            onChange={(e) => setNewCompForm(p => ({ ...p, monto: e.target.value }))}
+                            className="w-full bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 p-1.5 rounded-lg text-xs font-mono text-gray-900 dark:text-white"
+                          />
+                        </div>
+                      ) : (
+                        <div>
+                          <label className="text-[9px] font-bold text-amber-500 uppercase tracking-wider block mb-0.5">Monto Calculado</label>
+                          <div className="w-full bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-750 p-1.5 rounded-lg text-xs font-mono font-bold text-gray-900 dark:text-white">
+                            {(() => {
+                              const tot = Number(newCompForm.montoDebito || 0) +
+                                          Number(newCompForm.montoCredito || 0) +
+                                          Number(newCompForm.propinaDebito || 0) +
+                                          Number(newCompForm.propinaCredito || 0) +
+                                          Number(newCompForm.montoAmex || 0) +
+                                          Number(newCompForm.propinaAmex || 0);
+                              return formatCurrency(tot);
+                            })()}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {newCompForm.tipo === 'corte_tarjeta' && (
+                      <div className="p-2 bg-gray-100 dark:bg-gray-900/30 border border-gray-250 dark:border-gray-800 rounded-lg space-y-2 text-[9px] font-sans">
+                        <div className="grid grid-cols-2 gap-1.5">
+                          <div>
+                            <span className="text-gray-400 font-bold block">Imp. Débito</span>
+                            <input
+                              type="number"
+                              placeholder="0.00"
+                              value={newCompForm.montoDebito}
+                              onChange={(e) => setNewCompForm(p => ({ ...p, montoDebito: e.target.value }))}
+                              className="w-full bg-white dark:bg-gray-955 border border-gray-300 dark:border-gray-700 p-1 rounded font-mono text-[10px] text-gray-900 dark:text-white"
+                            />
+                          </div>
+                          <div>
+                            <span className="text-gray-400 font-bold block">Prop. Débito</span>
+                            <input
+                              type="number"
+                              placeholder="0.00"
+                              value={newCompForm.propinaDebito}
+                              onChange={(e) => setNewCompForm(p => ({ ...p, propinaDebito: e.target.value }))}
+                              className="w-full bg-white dark:bg-gray-955 border border-gray-300 dark:border-gray-700 p-1 rounded font-mono text-[10px] text-gray-900 dark:text-white"
+                            />
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-1.5">
+                          <div>
+                            <span className="text-gray-400 font-bold block">Imp. Crédito</span>
+                            <input
+                              type="number"
+                              placeholder="0.00"
+                              value={newCompForm.montoCredito}
+                              onChange={(e) => setNewCompForm(p => ({ ...p, montoCredito: e.target.value }))}
+                              className="w-full bg-white dark:bg-gray-955 border border-gray-300 dark:border-gray-700 p-1 rounded font-mono text-[10px] text-gray-900 dark:text-white"
+                            />
+                          </div>
+                          <div>
+                            <span className="text-gray-400 font-bold block">Prop. Crédito</span>
+                            <input
+                              type="number"
+                              placeholder="0.00"
+                              value={newCompForm.propinaCredito}
+                              onChange={(e) => setNewCompForm(p => ({ ...p, propinaCredito: e.target.value }))}
+                              className="w-full bg-white dark:bg-gray-955 border border-gray-300 dark:border-gray-700 p-1 rounded font-mono text-[10px] text-gray-900 dark:text-white"
+                            />
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-1.5">
+                          <div>
+                            <span className="text-gray-400 font-bold block">Imp. Amex</span>
+                            <input
+                              type="number"
+                              placeholder="0.00"
+                              value={newCompForm.montoAmex}
+                              onChange={(e) => setNewCompForm(p => ({ ...p, montoAmex: e.target.value }))}
+                              className="w-full bg-white dark:bg-gray-955 border border-gray-300 dark:border-gray-700 p-1 rounded font-mono text-[10px] text-gray-900 dark:text-white"
+                            />
+                          </div>
+                          <div>
+                            <span className="text-gray-400 font-bold block">Prop. Amex</span>
+                            <input
+                              type="number"
+                              placeholder="0.00"
+                              value={newCompForm.propinaAmex}
+                              onChange={(e) => setNewCompForm(p => ({ ...p, propinaAmex: e.target.value }))}
+                              className="w-full bg-white dark:bg-gray-955 border border-gray-300 dark:border-gray-700 p-1 rounded font-mono text-[10px] text-gray-900 dark:text-white"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div>
+                        <label className="text-[9px] font-bold text-gray-400 uppercase tracking-wider block mb-0.5">Fecha</label>
+                        <input
+                          type="date"
+                          value={newCompForm.fecha}
+                          onChange={(e) => setNewCompForm(p => ({ ...p, fecha: e.target.value }))}
+                          className="w-full bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 p-1.5 rounded-lg text-xs text-gray-900 dark:text-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[9px] font-bold text-gray-400 uppercase tracking-wider block mb-0.5">Proveedor Almacén</label>
+                        <div className="flex gap-2.5 mt-1 text-gray-955 dark:text-white">
+                          <label className="flex items-center gap-1 cursor-pointer">
+                            <input
+                              type="radio"
+                              name="modal_storage"
+                              checked={newCompForm.storageProvider === 'Supabase'}
+                              onChange={() => setNewCompForm(p => ({ ...p, storageProvider: 'Supabase', archivoUrl: '' }))}
+                            />
+                            <span className="text-[10px]">Supa</span>
+                          </label>
+                          <label className="flex items-center gap-1 cursor-pointer">
+                            <input
+                              type="radio"
+                              name="modal_storage"
+                              checked={newCompForm.storageProvider === 'GoogleDrive'}
+                              onChange={() => setNewCompForm(p => ({ ...p, storageProvider: 'GoogleDrive', archivoUrl: '' }))}
+                            />
+                            <span className="text-[10px]">GDrive</span>
+                          </label>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="text-xs">
+                      <label className="text-[9px] font-bold text-gray-400 uppercase tracking-wider block mb-0.5">Archivo / Ticket</label>
+                      {newCompForm.storageProvider === 'Supabase' ? (
+                        <div className="relative overflow-hidden w-full">
+                          <input
+                            type="file"
+                            accept="image/*,.pdf"
+                            onChange={handleUploadCompFile}
+                            disabled={compUploadLoading}
+                            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
+                          />
+                          <button
+                            type="button"
+                            disabled={compUploadLoading}
+                            className="w-full py-1.5 bg-white hover:bg-gray-100 dark:bg-gray-950 dark:hover:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-lg text-[11px] font-bold flex items-center justify-center gap-1 text-gray-700 dark:text-gray-300"
+                          >
+                            {compUploadLoading ? <RefreshCw size={12} className="animate-spin" /> : <UploadCloud size={12} />}
+                            {newCompForm.archivoUrl ? 'Cargado ✓' : 'Subir Ticket...'}
+                          </button>
+                        </div>
+                      ) : (
+                        <input
+                          type="url"
+                          placeholder="Enlace de Google Drive..."
+                          value={newCompForm.archivoUrl}
+                          onChange={(e) => setNewCompForm(p => ({ ...p, archivoUrl: e.target.value }))}
+                          className="w-full bg-white dark:bg-gray-955 border border-gray-300 dark:border-gray-700 p-1.5 rounded-lg text-[11px] font-mono text-gray-900 dark:text-white"
+                        />
+                      )}
+                    </div>
+
+                    <div className="text-xs">
+                      <label className="text-[9px] font-bold text-gray-400 uppercase tracking-wider block mb-0.5">Descripción</label>
+                      <input
+                        type="text"
+                        placeholder="Nota (Ej: Ticket caja 1)"
+                        value={newCompForm.descripcion}
+                        onChange={(e) => setNewCompForm(p => ({ ...p, descripcion: e.target.value }))}
+                        className="w-full bg-white dark:bg-gray-955 border border-gray-300 dark:border-gray-700 p-1.5 rounded-lg text-xs text-gray-900 dark:text-white"
+                      />
+                    </div>
+
+                    {newCompForm.error && (
+                      <div className="text-[10px] text-red-500 font-semibold">{newCompForm.error}</div>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const tot = newCompForm.tipo === 'deposito_ventanilla'
+                          ? Number(newCompForm.monto)
+                          : Number(newCompForm.montoDebito || 0) +
+                            Number(newCompForm.montoCredito || 0) +
+                            Number(newCompForm.propinaDebito || 0) +
+                            Number(newCompForm.propinaCredito || 0) +
+                            Number(newCompForm.montoAmex || 0) +
+                            Number(newCompForm.propinaAmex || 0);
+
+                        if (!tot || tot <= 0) {
+                          setNewCompForm(p => ({ ...p, error: 'Monto inválido.' }));
+                          return;
+                        }
+                        setNewCompForm(p => ({ ...p, loading: true, error: '' }));
+                        try {
+                          const res = await onCrearComprobante?.({
+                            tipo: newCompForm.tipo,
+                            fecha: newCompForm.fecha,
+                            monto: tot,
+                            descripcion: newCompForm.descripcion,
+                            archivo_url: newCompForm.archivoUrl,
+                            storage_provider: newCompForm.storageProvider,
+                            cuenta_bancaria_id: activeDepositMov.cuenta_bancaria_id,
+                            movimiento_bancario_id: activeDepositMov.id,
+                            monto_debito: Number(newCompForm.montoDebito || 0),
+                            monto_credito: Number(newCompForm.montoCredito || 0),
+                            propina_debito: Number(newCompForm.propinaDebito || 0),
+                            propina_credito: Number(newCompForm.propinaCredito || 0),
+                            monto_amex: Number(newCompForm.montoAmex || 0),
+                            propina_amex: Number(newCompForm.propinaAmex || 0)
+                          });
+                          if (res && !res.success) throw new Error(res.error);
+                          
+                          setNewCompForm(p => ({
+                            ...p,
+                            monto: '',
+                            montoDebito: '',
+                            montoCredito: '',
+                            propinaDebito: '',
+                            propinaCredito: '',
+                            montoAmex: '',
+                            propinaAmex: '',
+                            descripcion: '',
+                            archivoUrl: '',
+                            error: ''
+                          }));
+                        } catch (err: any) {
+                          setNewCompForm(p => ({ ...p, error: err.message || 'Error al registrar.' }));
+                        } finally {
+                          setNewCompForm(p => ({ ...p, loading: false }));
+                        }
+                      }}
+                      disabled={newCompForm.loading || compUploadLoading}
+                      className="w-full py-1.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-lg text-xs font-bold transition-all"
+                    >
+                      {newCompForm.loading ? 'Registrando...' : 'Registrar y Vincular'}
+                    </button>
+                  </div>
+
+                  {/* Vincular Comprobante Independiente existente */}
+                  <div className="flex-1 flex flex-col min-h-0 font-sans mt-2">
+                    <div className="flex justify-between items-center mb-2 shrink-0">
+                      <h4 className="text-[11px] font-black uppercase text-gray-500 tracking-wider">
+                        Vincular Existentes Pendientes ({availableToLink.length})
+                      </h4>
+                      {availableToLink.length > 3 && (
+                        <input
+                          type="text"
+                          placeholder="Buscar..."
+                          value={linkSearchQuery}
+                          onChange={(e) => setLinkSearchQuery(e.target.value)}
+                          className="bg-transparent border border-gray-300 dark:border-gray-700 px-2 py-0.5 rounded text-[10px] w-28 text-gray-900 dark:text-white"
+                        />
+                      )}
+                    </div>
+
+                    <div className="flex-1 overflow-auto space-y-1.5 border border-gray-150 dark:border-gray-800/80 rounded-xl p-2.5">
+                      {availableToLink
+                        .filter(c => {
+                          if (!linkSearchQuery.trim()) return true;
+                          const q = linkSearchQuery.toLowerCase();
+                          return c.descripcion?.toLowerCase().includes(q) || String(c.monto).includes(q) || c.fecha.includes(q);
+                        })
+                        .map((c) => {
+                          const isVentanilla = c.tipo === 'deposito_ventanilla';
+                          return (
+                            <div
+                              key={c.id}
+                              className="p-2.5 rounded-lg border border-gray-100 dark:border-gray-900 bg-gray-50/30 dark:bg-gray-900/10 flex justify-between items-center gap-2 hover:bg-gray-100 dark:hover:bg-gray-900 transition-colors"
+                            >
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-1">
+                                  <span className="font-mono text-[9px] text-gray-550 dark:text-gray-400">
+                                    {new Date(c.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })}
+                                  </span>
+                                  <span className={`text-[8px] px-1 py-0.1 rounded font-bold ${
+                                    isVentanilla
+                                      ? 'bg-blue-100 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400'
+                                      : 'bg-indigo-100 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-400'
+                                  }`}>
+                                    {isVentanilla ? 'Ventanilla' : 'Tarjeta'}
+                                  </span>
+                                </div>
+                                <p className="font-bold text-[11px] text-gray-700 dark:text-gray-300 truncate">{c.descripcion || 'Sin descripción'}</p>
+                              </div>
+                              <div className="flex items-center gap-2 shrink-0">
+                                <span className="font-mono font-extrabold text-xs text-gray-800 dark:text-gray-255">{formatCurrency(c.monto)}</span>
+                                <button
+                                  type="button"
+                                  onClick={async () => {
+                                    const res = await onVincularComprobante?.(c.id, activeDepositMov.id, Number(c.monto));
+                                    if (res && !res.success) {
+                                      alert(res.error);
+                                    }
+                                  }}
+                                  className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500 hover:bg-amber-600 text-white transition-all shadow"
+                                >
+                                  Vincular
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      {availableToLink.length === 0 && (
+                        <div className="h-24 flex items-center justify-center text-gray-400 italic text-xs">
+                          No hay comprobantes pendientes compatibles para vincular.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                </div>
+
+              </div>
+
+              <div className="p-4 border-t border-gray-150 dark:border-gray-800 flex justify-end gap-3 bg-gray-50/50 dark:bg-gray-900/30">
+                <button
+                  onClick={() => {
+                    setActiveDepositMov(null);
+                    setNewCompForm(p => ({
+                      ...p,
+                      error: '',
+                      archivoUrl: '',
+                      montoDebito: '',
+                      montoCredito: '',
+                      propinaDebito: '',
+                      propinaCredito: '',
+                      montoAmex: '',
+                      propinaAmex: ''
+                    }));
+                  }}
+                  className="px-6 py-2 border border-gray-350 dark:border-gray-700 rounded-xl text-xs font-bold hover:bg-gray-100 dark:hover:bg-gray-800 shadow text-gray-700 dark:text-gray-300"
+                >
+                  Cerrar
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* MODAL DE VINCULACIÓN DE MOVIMIENTOS A UN COMPROBANTE (TICKET) */}
+      {activeCompToLink && currentCompToLink && (() => {
+        const compMonto = Number(currentCompToLink.monto);
+        const associatedMovs = movimientos.filter(m => 
+          currentCompToLink.comprobantes_deposito_movimientos?.some(rel => rel.movimiento_id === m.id)
+        );
+        const movsSum = movimientos.reduce((acc, m) => {
+          const rel = currentCompToLink.comprobantes_deposito_movimientos?.find(r => r.movimiento_id === m.id);
+          return acc + (rel ? Number(rel.monto_asociado) : 0);
+        }, 0);
+
+        // Filtrar movimientos disponibles: excluir ya vinculados a ESTE comprobante, vinculados a otros comprobantes, y los ya completamente conciliados
+        const availableMovs = movimientos.filter(m => 
+          m.tipo_movimiento === 'Deposito' && 
+          !associatedMovs.some(am => am.id === m.id) && 
+          !comprobantes.some(c => c.id !== currentCompToLink.id && c.comprobantes_deposito_movimientos?.some(rel => rel.movimiento_id === m.id)) &&
+          m.estatus_conciliacion_bancaria?.clave !== 'comprobado' &&
+          (!currentCompToLink.cuenta_bancaria_id || m.cuenta_bancaria_id === currentCompToLink.cuenta_bancaria_id)
+        );
+
+        // Suma de movimientos seleccionados (calculada before totalSum)
+        const selectedSum = availableMovs
+          .filter(m => selectedLinkMovIds.has(m.id))
+          .reduce((acc, m) => acc + Number(m.deposito || m.monto), 0);
+
+        const totalSum = movsSum + selectedSum;
+        const dif = compMonto - totalSum;
+        const match = Math.abs(dif) < 0.05;
+
+        return (
+          <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="bg-white dark:bg-gray-955 border border-gray-200 dark:border-gray-800 rounded-2xl max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col shadow-2xl">
+              <div className="p-6 border-b border-gray-150 dark:border-gray-800 flex justify-between items-center bg-gray-50/50 dark:bg-gray-900/30">
+                <div>
+                  <h3 className="font-extrabold text-base flex items-center gap-2">
+                    <ArrowRightLeft size={16} className="text-amber-500" /> Vincular Movimientos al Comprobante
+                  </h3>
+                  <p className="text-xs text-gray-500 mt-0.5 font-sans">
+                    Asocia depósitos bancarios de tu estado de cuenta con el comprobante de {formatCurrency(compMonto)} ({new Date(currentCompToLink.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })}).
+                  </p>
+                </div>
+                <button
+                  onClick={() => {
+                    setActiveCompToLink(null);
+                    setLinkSearchQuery('');
+                    setSelectedLinkMovIds(new Set());
+                    setLinkDateFrom('');
+                    setLinkDateTo('');
+                  }}
+                  className="text-gray-400 hover:text-gray-655 dark:hover:text-gray-300 p-1.5 rounded-lg hover:bg-gray-200/50 dark:hover:bg-gray-800/50 transition-all"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-auto p-6 grid grid-cols-1 lg:grid-cols-2 gap-6 min-h-0 font-sans">
+                
+                {/* Izquierda: Movimientos ya vinculados y estado de cuadre */}
+                <div className="flex flex-col gap-4 min-h-0 overflow-hidden">
+                  <h4 className="text-xs font-extrabold uppercase text-amber-500 border-b border-gray-100 dark:border-gray-900 pb-1 shrink-0">
+                    Depósitos Bancarios Vinculados ({associatedMovs.length})
+                  </h4>
+                  
+                  <div className="flex-1 overflow-auto space-y-2">
+                    {associatedMovs.map((m) => {
+                      const rel = currentCompToLink.comprobantes_deposito_movimientos?.find(r => r.movimiento_id === m.id);
+                      return (
+                        <div
+                          key={m.id}
+                          className="p-3 bg-gray-50 dark:bg-gray-900/50 rounded-xl border border-gray-200 dark:border-gray-800 flex justify-between items-start gap-3 text-xs"
+                        >
+                          <div className="space-y-1 flex-1 min-w-0">
+                            <span className="font-mono text-gray-500 text-[10px]">
+                              {new Date(m.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })}
+                            </span>
+                            <p className="font-bold text-gray-800 dark:text-gray-255 truncate">{m.concepto}</p>
+                            {m.referencia && <span className="text-[10px] text-gray-400">Ref: {m.referencia}</span>}
+                          </div>
+                          <div className="flex flex-col items-end gap-1 shrink-0">
+                            <span className="font-mono font-black text-emerald-600 dark:text-emerald-500">{formatCurrency(m.deposito || m.monto)}</span>
+                            {rel?.monto_asociado && Number(rel.monto_asociado) !== Number(m.deposito || m.monto) && (
+                              <span className="text-[9px] text-gray-400 font-mono">Asoc: {formatCurrency(rel.monto_asociado)}</span>
+                            )}
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                if (confirm('¿Deseas desvincular este movimiento bancario del comprobante?')) {
+                                  const res = await onDesvincularComprobante?.(currentCompToLink.id, m.id);
+                                  if (res && !res.success) {
+                                    alert(res.error);
+                                  }
+                                }
+                              }}
+                              className="text-[10px] text-red-500 hover:bg-red-500/10 font-bold px-1.5 py-0.5 rounded border border-red-200 dark:border-red-900/30 transition-all"
+                            >
+                              Desvincular
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {associatedMovs.length === 0 && (
+                      <div className="h-32 border border-dashed border-gray-200 dark:border-gray-800 rounded-xl flex items-center justify-center text-gray-400 italic text-xs">
+                        No hay movimientos bancarios vinculados a este comprobante
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Resumen del cuadre */}
+                  <div className="p-3 bg-gray-50 dark:bg-gray-900/40 border border-gray-250 dark:border-gray-800/80 rounded-xl space-y-1.5 shrink-0">
+                    <div className="flex justify-between text-xs font-semibold">
+                      <span className="text-gray-500">Monto del Comprobante:</span>
+                      <span className="font-mono text-gray-800 dark:text-gray-200 font-bold">{formatCurrency(compMonto)}</span>
+                    </div>
+                    <div className="flex justify-between text-xs font-semibold">
+                      <span className="text-gray-500">Vinculados:</span>
+                      <span className="font-mono text-emerald-600 dark:text-emerald-500 font-bold">+{formatCurrency(movsSum)}</span>
+                    </div>
+                    {selectedSum > 0 && (
+                      <div className="flex justify-between text-xs font-semibold">
+                        <span className="text-amber-600 dark:text-amber-400">+ Seleccionados ({selectedLinkMovIds.size}):</span>
+                        <span className="font-mono text-amber-600 dark:text-amber-400 font-bold">+{formatCurrency(selectedSum)}</span>
+                      </div>
+                    )}
+                    <div className="border-t border-gray-200 dark:border-gray-800 pt-1.5 flex justify-between items-baseline">
+                      <span className="text-[10px] text-gray-400 font-extrabold uppercase tracking-wider">Diferencia:</span>
+                      <span className={`text-sm font-mono font-black ${match ? 'text-emerald-500' : 'text-amber-500'}`}>
+                        {formatCurrency(dif)}
+                      </span>
+                    </div>
+                    <div className="flex justify-end pt-1">
+                      {match ? (
+                        <span className="bg-emerald-100 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-400 px-2 py-0.5 rounded text-[10px] font-bold flex items-center gap-1">
+                          ✓ Cuadra perfectamente
+                        </span>
+                      ) : (
+                        <span className="bg-amber-100 dark:bg-amber-955/20 text-amber-700 dark:text-amber-400 px-2 py-0.5 rounded text-[10px] font-bold flex items-center gap-1">
+                          ⚠️ Pendiente por cuadrar ({formatCurrency(dif)})
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Derecha: Buscar y Vincular movimientos bancarios del estado de cuenta */}
+                <div className="flex flex-col gap-4 min-h-0 overflow-hidden border-l border-gray-100 dark:border-gray-900 pl-6 font-sans">
+                  <div className="flex flex-col gap-2 shrink-0">
+                    <div className="flex justify-between items-center">
+                      <h4 className="text-[11px] font-black uppercase text-gray-500 tracking-wider">
+                        Depósitos Disponibles ({availableMovs.length})
+                      </h4>
+                      <input
+                        type="text"
+                        placeholder="Buscar concepto o monto..."
+                        value={linkSearchQuery}
+                        onChange={(e) => setLinkSearchQuery(e.target.value)}
+                        className="bg-transparent border border-gray-300 dark:border-gray-700 px-2 py-0.5 rounded text-[10px] w-40 text-gray-900 dark:text-white"
+                      />
+                    </div>
+                    {/* Filtro por fechas */}
+                    <div className="flex items-center gap-2">
+                      <label className="text-[10px] text-gray-500 font-semibold">Desde:</label>
+                      <input
+                        type="date"
+                        value={linkDateFrom}
+                        onChange={(e) => setLinkDateFrom(e.target.value)}
+                        className="bg-transparent border border-gray-300 dark:border-gray-700 px-1.5 py-0.5 rounded text-[10px] text-gray-900 dark:text-white"
+                      />
+                      <label className="text-[10px] text-gray-500 font-semibold">Hasta:</label>
+                      <input
+                        type="date"
+                        value={linkDateTo}
+                        onChange={(e) => setLinkDateTo(e.target.value)}
+                        className="bg-transparent border border-gray-300 dark:border-gray-700 px-1.5 py-0.5 rounded text-[10px] text-gray-900 dark:text-white"
+                      />
+                      {(linkDateFrom || linkDateTo) && (
+                        <button type="button" onClick={() => { setLinkDateFrom(''); setLinkDateTo(''); }} className="text-[10px] text-red-500 hover:underline font-bold">Limpiar</button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex-1 overflow-auto space-y-1.5 border border-gray-150 dark:border-gray-800/80 rounded-xl p-3">
+                    {(() => {
+                      const filteredMovs = availableMovs.filter(m => {
+                        // Text search
+                        if (linkSearchQuery.trim()) {
+                          const q = linkSearchQuery.toLowerCase();
+                          const matchesText = m.concepto?.toLowerCase().includes(q) || String(m.monto).includes(q) || m.fecha.includes(q);
+                          if (!matchesText) return false;
+                        }
+                        // Date filter
+                        if (linkDateFrom && m.fecha < linkDateFrom) return false;
+                        if (linkDateTo && m.fecha > linkDateTo) return false;
+                        return true;
+                      });
+                      if (filteredMovs.length === 0) {
+                        return (
+                          <div className="h-40 flex items-center justify-center text-gray-400 italic text-xs">
+                            No hay depósitos bancarios compatibles pendientes por conciliar.
+                          </div>
+                        );
+                      }
+                      return filteredMovs.map((m) => {
+                        const isSelected = selectedLinkMovIds.has(m.id);
+                        return (
+                          <label
+                            key={m.id}
+                            className={`p-3 rounded-xl border flex items-center gap-3 cursor-pointer transition-colors ${
+                              isSelected
+                                ? 'border-amber-400 bg-amber-50/60 dark:bg-amber-950/20'
+                                : 'border-gray-100 dark:border-gray-900 bg-gray-50/30 dark:bg-gray-900/10 hover:bg-gray-100 dark:hover:bg-gray-900'
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => {
+                                setSelectedLinkMovIds(prev => {
+                                  const next = new Set(prev);
+                                  if (next.has(m.id)) {
+                                    next.delete(m.id);
+                                  } else {
+                                    next.add(m.id);
+                                  }
+                                  return next;
+                                });
+                              }}
+                              className="accent-amber-500 w-4 h-4 shrink-0"
+                            />
+                            <div className="min-w-0 flex-1">
+                              <span className="font-mono text-[9px] text-gray-500 block">
+                                {new Date(m.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })}
+                              </span>
+                              <p className="font-bold text-xs text-gray-750 dark:text-gray-255 truncate">{m.concepto}</p>
+                              {m.referencia && <p className="text-[9px] text-gray-400">Ref: {m.referencia}</p>}
+                            </div>
+                            <span className="font-mono font-extrabold text-sm text-gray-850 dark:text-gray-200 shrink-0">
+                              {formatCurrency(m.deposito || m.monto)}
+                            </span>
+                          </label>
+                        );
+                      });
+                    })()}
+                  </div>
+
+                </div>
+
+              </div>
+
+              <div className="p-4 border-t border-gray-150 dark:border-gray-800 flex justify-between items-center bg-gray-50/50 dark:bg-gray-900/30">
+                <button
+                  onClick={() => {
+                    setActiveCompToLink(null);
+                    setLinkSearchQuery('');
+                    setSelectedLinkMovIds(new Set());
+                    setLinkDateFrom('');
+                    setLinkDateTo('');
+                  }}
+                  className="px-6 py-2 border border-gray-350 dark:border-gray-700 rounded-xl text-xs font-bold hover:bg-gray-100 dark:hover:bg-gray-800 shadow text-gray-700 dark:text-gray-300"
+                >
+                  Cerrar
+                </button>
+                {selectedLinkMovIds.size > 0 && (
+                  <button
+                    disabled={linkingBatch}
+                    onClick={async () => {
+                      setLinkingBatch(true);
+                      try {
+                        const ids = Array.from(selectedLinkMovIds);
+                        for (const movId of ids) {
+                          const mov = availableMovs.find(x => x.id === movId);
+                          const montoAsoc = mov ? Number(mov.deposito || mov.monto) : undefined;
+                          const res = await onVincularComprobante?.(currentCompToLink.id, movId, montoAsoc);
+                          if (res && !res.success) {
+                            alert(`Error vinculando movimiento: ${res.error}`);
+                            break;
+                          }
+                        }
+                        setSelectedLinkMovIds(new Set());
+                      } finally {
+                        setLinkingBatch(false);
+                      }
+                    }}
+                    className="px-6 py-2 rounded-xl text-xs font-bold bg-amber-500 hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed text-white shadow-lg transition-all flex items-center gap-2"
+                  >
+                    {linkingBatch ? (
+                      <>
+                        <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        Vinculando...
+                      </>
+                    ) : (
+                      <>Vincular {selectedLinkMovIds.size} Movimiento{selectedLinkMovIds.size !== 1 ? 's' : ''}</>
+                    )}
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+      {fusionModal.open && fusionModal.mov1 && fusionModal.mov2 && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-3xl w-full max-w-xl flex flex-col shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 max-h-[90vh]">
+            <div className="p-5 border-b border-gray-150 dark:border-gray-800 flex justify-between items-center bg-gray-50/50 dark:bg-gray-900/30">
+              <div>
+                <h3 className="font-extrabold text-base text-gray-800 dark:text-white flex items-center gap-2">
+                  <ArrowRightLeft className="text-amber-500" size={18} />
+                  Fusionar Movimientos de Reembolso
+                </h3>
+                <p className="text-[10px] text-gray-405 dark:text-gray-400 mt-0.5">Se vincularán ambos movimientos bancarios y compartirán el soporte documental.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setFusionModal(prev => ({ ...prev, open: false }))}
+                className="text-gray-400 hover:text-gray-650 dark:hover:text-gray-300 transition-colors p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="p-6 overflow-y-auto space-y-5 font-sans">
+              {fusionModal.error && (
+                <div className="p-3 bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-900 text-red-700 dark:text-red-400 rounded-xl text-xs flex items-center gap-2">
+                  <AlertTriangle size={15} />
+                  <span>{fusionModal.error}</span>
+                </div>
+              )}
+
+              {/* Movimientos seleccionados */}
+              <div className="space-y-2">
+                <span className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider block">Movimientos a Fusionar</span>
+                
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {/* Movimiento 1 (Retiro / Egreso) */}
+                  <div className="p-3.5 bg-red-50/40 dark:bg-red-950/10 border border-red-100 dark:border-red-900/30 rounded-2xl flex flex-col justify-between">
+                    <div>
+                      <span className="text-[9px] font-bold text-red-655 dark:text-red-400 uppercase">Egreso (Retiro)</span>
+                      <p className="font-bold text-xs text-gray-800 dark:text-gray-200 mt-1 truncate">{fusionModal.mov1.concepto}</p>
+                      <span className="text-[9px] text-gray-400 block mt-0.5">Fecha: {new Date(fusionModal.mov1.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })}</span>
+                    </div>
+                    <span className="text-sm font-extrabold text-red-505 mt-3 block">-{formatCurrency(fusionModal.mov1.retiro || Math.abs(fusionModal.mov1.monto))}</span>
+                  </div>
+
+                  {/* Movimiento 2 (Deposito / Ingreso) */}
+                  <div className="p-3.5 bg-emerald-50/40 dark:bg-emerald-950/10 border border-emerald-100 dark:border-emerald-900/30 rounded-2xl flex flex-col justify-between">
+                    <div>
+                      <span className="text-[9px] font-bold text-emerald-655 dark:text-emerald-400 uppercase">Ingreso (Depósito)</span>
+                      <p className="font-bold text-xs text-gray-800 dark:text-gray-200 mt-1 truncate">{fusionModal.mov2.concepto}</p>
+                      <span className="text-[9px] text-gray-400 block mt-0.5">Fecha: {new Date(fusionModal.mov2.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })}</span>
+                    </div>
+                    <span className="text-sm font-extrabold text-emerald-505 mt-3 block">+{formatCurrency(fusionModal.mov2.deposito || Math.abs(fusionModal.mov2.monto))}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Subir archivo de soporte */}
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider block">Adjuntar Soporte de Reembolso</label>
+                <div className="flex items-center gap-3">
+                  <div className="relative overflow-hidden shrink-0">
+                    <input
+                      type="file"
+                      accept="image/*,.pdf"
+                      onChange={handleUploadFusionFile}
+                      disabled={fusionModal.loading}
+                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
+                    />
+                    <button
+                      type="button"
+                      disabled={fusionModal.loading}
+                      className="px-4 py-2 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 shadow"
+                    >
+                      <UploadCloud size={14} /> Subir Soporte
+                    </button>
+                  </div>
+                  {fusionModal.loading && (
+                    <span className="text-[10px] text-gray-400 flex items-center gap-1.5">
+                      <span className="w-3 h-3 border-2 border-amber-500/30 border-t-amber-500 rounded-full animate-spin" />
+                      Subiendo archivo...
+                    </span>
+                  )}
+                </div>
+
+                {/* Lista de archivos subidos */}
+                {fusionModal.soporteReembolsoUrl && (
+                  <div className="space-y-1 mt-2">
+                    {fusionModal.soporteReembolsoUrl.split(',').filter(Boolean).map((path, idx) => {
+                      const fileName = path.split('/').pop() || '';
+                      return (
+                        <div key={idx} className="flex justify-between items-center bg-gray-50 dark:bg-gray-900 p-2 rounded-xl border border-gray-250/60 dark:border-gray-800 text-[10px]">
+                          <span className="truncate max-w-[300px] font-semibold text-gray-700 dark:text-gray-300" title={fileName}>
+                            📎 {fileName}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveFusionFile(idx)}
+                            className="text-red-550 hover:text-red-600 font-bold uppercase hover:underline"
+                          >
+                            Borrar
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* Comentarios */}
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider block">Comentarios / Notas internas</label>
+                <textarea
+                  rows={3}
+                  value={fusionModal.comentarios}
+                  onChange={(e) => setFusionModal(prev => ({ ...prev, comentarios: e.target.value }))}
+                  placeholder="Ej. Reembolso cruzado para cuadrar movimientos..."
+                  className="w-full border border-gray-250 dark:border-gray-800 rounded-xl p-2.5 text-xs bg-transparent dark:text-white focus:ring-1 focus:ring-amber-500 focus:border-amber-500 outline-none outline-0"
+                />
+              </div>
+            </div>
+
+            <div className="p-4 border-t border-gray-150 dark:border-gray-800 flex justify-end gap-3 bg-gray-50/50 dark:bg-gray-900/30">
+              <button
+                type="button"
+                disabled={fusionModal.loading}
+                onClick={() => setFusionModal(prev => ({ ...prev, open: false }))}
+                className="px-5 py-2 border border-gray-350 dark:border-gray-700 rounded-xl text-xs font-bold hover:bg-gray-100 dark:hover:bg-gray-800 shadow text-gray-700 dark:text-gray-300 disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={fusionModal.loading}
+                onClick={handleConfirmFusion}
+                className="px-5 py-2 rounded-xl text-xs font-bold bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white shadow-lg transition-all flex items-center gap-1.5"
+              >
+                {fusionModal.loading ? (
+                  <>
+                    <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    Procesando...
+                  </>
+                ) : (
+                  <>Confirmar Fusión</>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

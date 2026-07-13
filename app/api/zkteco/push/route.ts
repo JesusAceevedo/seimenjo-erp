@@ -17,6 +17,7 @@ export async function GET(request: NextRequest) {
 
   // 1. Handshake Inicial
   if (options === 'all') {
+    const tz = process.env.ZKTECO_TIMEZONE || '-5';
     const configResponse = [
       'RegistryCode=0',
       'ServerVersion=3.1.1',
@@ -27,7 +28,7 @@ export async function GET(request: NextRequest) {
       'Delay=10',
       'TransInterval=10',
       'TransFlag=1000000000',
-      'TimeZone=1',
+      `TimeZone=${tz}`,
       'Realtime=1',
       'Encrypt=0'
     ].join('\n');
@@ -190,9 +191,13 @@ export async function POST(request: NextRequest) {
         // Obtener el empresa_id correcto del empleado o usar el default
         const recordEmpresaId = empresaMap.get(zkteco_user_id) || defaultEmpresaId;
 
-        // Parsear fecha y hora
+        // Parsear fecha y hora aplicando la zona horaria correcta
         try {
-          const timestamp = new Date(timestampStr).toISOString();
+          const offset = process.env.ZKTECO_TIMEZONE_OFFSET || '-05:00';
+          const formattedStr = timestampStr.includes(' ') 
+            ? `${timestampStr.replace(' ', 'T')}${offset}` 
+            : timestampStr;
+          const timestamp = new Date(formattedStr).toISOString();
           records.push({
             empresa_id: recordEmpresaId,
             zkteco_user_id,

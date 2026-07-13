@@ -2,12 +2,13 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../../../lib/supabase';
 import CargaManualModal from '../gastos/_components/CargaManualModal';
-import { Plus } from 'lucide-react';
+import { Plus, Tag } from 'lucide-react';
 import {
   FileText, FileCode, CheckCircle, AlertTriangle, XCircle, Search, Calendar,
   Download, RefreshCw, Layers, DollarSign, CreditCard
 } from 'lucide-react';
 import DocumentViewer from '../_components/DocumentViewer';
+import Pagination from '../_components/Pagination';
 
 interface ExpedienteItem {
   id: string;
@@ -15,12 +16,14 @@ interface ExpedienteItem {
   fecha: string;
   concepto: string;
   monto: number;
+  uuid_fiscal?: string;
   xml_url?: string;
   pdf_url?: string;
   ticket_url?: string;
   soporte_reembolso_url?: string;
   statusColor: 'green' | 'yellow' | 'red';
   statusLabel: string;
+  reconciliado: boolean;
 }
 
 export default function ExpedienteDigital() {
@@ -29,11 +32,34 @@ export default function ExpedienteDigital() {
   const [search, setSearch] = useState('');
   const [filterTipo, setFilterTipo] = useState('todos');
   const [filterEstatus, setFilterEstatus] = useState('todos');
+  const [filterConciliado, setFilterConciliado] = useState('todos');
+  
+  const [currentPage, setCurrentPage] = useState(0);
+  const pageSize = 25;
   
   const [manualModal, setManualModal] = useState<{isOpen: boolean, id?: string, tipo?: 'gasto'|'venta'|'movimiento'}>({isOpen: false});
   const [viewer, setViewer] = useState<{ open: boolean; title: string; docs: any[] }>({
     open: false, title: '', docs: []
   });
+  
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  const handleToggleSelect = (itemKey: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(itemKey)) {
+        next.delete(itemKey);
+      } else {
+        next.add(itemKey);
+      }
+      return next;
+    });
+  };
+
+  useEffect(() => {
+    setSelectedIds(new Set());
+    setCurrentPage(0);
+  }, [filterTipo, filterEstatus, filterConciliado, search]);
 
   const fetchData = async () => {
     setLoading(true);
@@ -41,23 +67,23 @@ export default function ExpedienteDigital() {
       // 1. Fetch Gastos
       const { data: gastos } = await supabase
         .from('gastos')
-        .select('id, fecha_gasto, concepto, monto, xml_url, pdf_url, ticket_url, gasto_padre_id, soporte_reembolso_url')
+        .select('id, fecha_gasto, concepto, monto, xml_url, pdf_url, ticket_url, uuid_fiscal, gasto_padre_id, soporte_reembolso_url, es_deducible, movimiento_bancario_id, proveedor_id, proveedores(nombre_comercial)')
         .order('fecha_gasto', { ascending: false })
-        .limit(500);
+        .limit(5000);
 
       // 2. Fetch Ingresos (Facturas)
       const { data: ingresos } = await supabase
         .from('facturas_clientes')
-        .select('id, fecha_emision, serie_folio, total, xml_url, pdf_url, ticket_url')
+        .select('id, fecha_emision, serie_folio, total, xml_url, pdf_url, ticket_url, pedido_id, pedidos(movimiento_bancario_id), cliente_id, clientes(nombre_local)')
         .order('fecha_emision', { ascending: false })
-        .limit(300);
+        .limit(5000);
 
       // 3. Fetch Movimientos Bancarios
       const { data: movimientos } = await supabase
         .from('movimientos_bancarios')
-        .select('id, fecha, concepto, monto, xml_url, pdf_factura_url, pdf_ticket_url, soporte_reembolso_url, categorias_movimiento_bancario(requiere_comprobante)')
+        .select('id, fecha, concepto, monto, xml_url, pdf_factura_url, pdf_ticket_url, soporte_reembolso_url, estatus_conciliacion_bancaria(clave), categorias_movimiento_bancario(requiere_comprobante)')
         .order('fecha', { ascending: false })
-        .limit(300);
+        .limit(5000);
 
       const allItems: ExpedienteItem[] = [];
 
@@ -98,11 +124,16 @@ export default function ExpedienteDigital() {
 
         const missing = [];
         const hasSoporte = !!soporte_reembolso_url;
+        const isDeducible = g.es_deducible !== false;
 
         if (!hasSoporte) {
-          if (!xml_url) missing.push('XML');
-          if (!pdf_url && !xml_url) missing.push('PDF');
-          if (!ticket_url) missing.push('Ticket');
+          if (isDeducible) {
+            if (!xml_url) missing.push('XML');
+            if (!pdf_url && !xml_url) missing.push('PDF');
+            if (ticket_url !== 'no_lleva' && !ticket_url) missing.push('Ticket');
+          } else {
+            if (ticket_url !== 'no_lleva' && !ticket_url) missing.push('Ticket');
+          }
         }
         
         let color: 'green' | 'yellow' | 'red' = 'green';
@@ -111,7 +142,10 @@ export default function ExpedienteDigital() {
         if (hasSoporte) {
           color = 'green';
           label = 'Completo (Reembolso)';
-        } else if (missing.length === 3) {
+        } else if (ticket_url === 'no_lleva' && missing.length === 0) {
+          color = 'green';
+          label = 'Completo (Sin ticket)';
+        } else if (missing.length === (isDeducible ? 3 : 1)) {
           color = 'red';
           label = 'Sin Documentos';
         } else if (missing.length > 0) {
@@ -123,14 +157,16 @@ export default function ExpedienteDigital() {
           id: g.id,
           tipo: 'Egreso',
           fecha: g.fecha_gasto || '',
-          concepto: g.concepto || 'Sin concepto',
+          concepto: g.proveedores?.nombre_comercial || g.concepto || 'Sin concepto',
           monto: Number(g.monto) || 0,
+          uuid_fiscal: g.uuid_fiscal,
           xml_url,
           pdf_url,
           ticket_url,
           soporte_reembolso_url,
           statusColor: color,
-          statusLabel: label
+          statusLabel: label,
+          reconciliado: !!g.movimiento_bancario_id
         });
       });
 
@@ -156,13 +192,14 @@ export default function ExpedienteDigital() {
           id: i.id,
           tipo: 'Ingreso',
           fecha: i.fecha_emision || '',
-          concepto: `Factura ${i.serie_folio || 'S/F'}`,
+          concepto: i.clientes?.nombre_local || `Factura ${i.serie_folio || 'S/F'}`,
           monto: Number(i.total) || 0,
           xml_url: i.xml_url,
           pdf_url: i.pdf_url,
           ticket_url: i.ticket_url,
           statusColor: color,
-          statusLabel: label
+          statusLabel: label,
+          reconciliado: i.pedidos ? !!i.pedidos.movimiento_bancario_id : false
         });
       });
 
@@ -184,9 +221,12 @@ export default function ExpedienteDigital() {
           const missing = [];
           if (!m.xml_url) missing.push('XML');
           if (!m.pdf_factura_url && !m.xml_url) missing.push('PDF');
-          if (!m.pdf_ticket_url) missing.push('Ticket');
+          if (m.pdf_ticket_url !== 'no_lleva' && !m.pdf_ticket_url) missing.push('Ticket');
           
-          if (missing.length === 3) {
+          if (m.pdf_ticket_url === 'no_lleva' && missing.length === 0) {
+            color = 'green';
+            label = 'Completo (Sin ticket)';
+          } else if (missing.length === 3) {
             color = 'red';
             label = 'Sin Documentos';
           } else if (missing.length > 0) {
@@ -206,7 +246,8 @@ export default function ExpedienteDigital() {
           ticket_url: m.pdf_ticket_url,
           soporte_reembolso_url: m.soporte_reembolso_url,
           statusColor: color,
-          statusLabel: label
+          statusLabel: label,
+          reconciliado: m.estatus_conciliacion_bancaria?.clave !== 'pendiente'
         });
       });
 
@@ -228,18 +269,43 @@ export default function ExpedienteDigital() {
   const filteredItems = items.filter(item => {
     if (filterTipo !== 'todos' && item.tipo !== filterTipo) return false;
     if (filterEstatus !== 'todos' && item.statusColor !== filterEstatus) return false;
+    if (filterConciliado !== 'todos') {
+      if (filterConciliado === 'conciliados' && !item.reconciliado) return false;
+      if (filterConciliado === 'sin_conciliar' && item.reconciliado) return false;
+    }
     if (search) {
       const s = search.toLowerCase();
-      if (!item.concepto.toLowerCase().includes(s) && !String(item.monto).includes(s)) return false;
+      const uuidMatch = item.uuid_fiscal?.toLowerCase().includes(s);
+      const xmlMatch = item.xml_url?.toLowerCase().includes(s);
+      if (!item.concepto.toLowerCase().includes(s) && !String(item.monto).includes(s) && !uuidMatch && !xmlMatch) return false;
     }
     return true;
   });
+
+  const allFilteredKeys = filteredItems.map(item => `${item.tipo}-${item.id}`);
+  const isAllSelected = filteredItems.length > 0 && filteredItems.every(item => selectedIds.has(`${item.tipo}-${item.id}`));
+
+  const handleToggleSelectAll = () => {
+    if (isAllSelected) {
+      setSelectedIds(prev => {
+        const next = new Set(prev);
+        allFilteredKeys.forEach(key => next.delete(key));
+        return next;
+      });
+    } else {
+      setSelectedIds(prev => {
+        const next = new Set(prev);
+        allFilteredKeys.forEach(key => next.add(key));
+        return next;
+      });
+    }
+  };
 
   const handleOpenViewer = (item: ExpedienteItem) => {
     const docs: {url: string, type: 'pdf' | 'xml' | 'cfdi', label: string}[] = [];
     if (item.xml_url) {
       item.xml_url.split(',').forEach((url, i) => {
-        if (url) {
+        if (url && url !== 'no_lleva') {
           docs.push({ url, type: 'xml', label: `XML ${i + 1}` });
           docs.push({ url, type: 'cfdi', label: `Rep. PDF XML ${i + 1}` });
         }
@@ -247,20 +313,84 @@ export default function ExpedienteDigital() {
     }
     if (item.pdf_url) {
       item.pdf_url.split(',').forEach((url, i) => {
-        if (url) docs.push({ url, type: 'pdf', label: `Factura PDF ${i + 1}` });
+        if (url && url !== 'no_lleva') docs.push({ url, type: 'pdf', label: `Factura PDF ${i + 1}` });
       });
     }
     if (item.ticket_url) {
       item.ticket_url.split(',').forEach((url, i) => {
-        if (url) docs.push({ url, type: 'pdf', label: `Ticket PDF ${i + 1}` });
+        if (url && url !== 'no_lleva') docs.push({ url, type: 'pdf', label: `Ticket PDF ${i + 1}` });
       });
     }
     if (item.soporte_reembolso_url) {
       item.soporte_reembolso_url.split(',').forEach((url, i) => {
-        if (url) docs.push({ url, type: 'pdf', label: `Soporte Reembolso ${i + 1}` });
+        if (url && url !== 'no_lleva') docs.push({ url, type: 'pdf', label: `Soporte Reembolso ${i + 1}` });
       });
     }
     setViewer({ open: true, title: item.concepto, docs });
+  };
+
+  const handleBulkNoTicket = async () => {
+    const validSelected = items.filter(item => selectedIds.has(`${item.tipo}-${item.id}`) && (item.tipo === 'Egreso' || item.tipo === 'Movimiento'));
+    if (validSelected.length === 0) {
+      alert("Selecciona al menos un Egreso o Movimiento para marcar como 'No lleva ticket'.");
+      return;
+    }
+    if (!confirm(`¿Estás seguro de que deseas marcar los ${validSelected.length} elementos seleccionados como 'No lleva ticket'?`)) return;
+    
+    setLoading(true);
+    try {
+      const gastosIds = validSelected.filter(i => i.tipo === 'Egreso').map(i => i.id);
+      const movimientosIds = validSelected.filter(i => i.tipo === 'Movimiento').map(i => i.id);
+      
+      if (gastosIds.length > 0) {
+        const { error } = await supabase
+          .from('gastos')
+          .update({ ticket_url: 'no_lleva' })
+          .in('id', gastosIds);
+        if (error) throw error;
+      }
+      
+      if (movimientosIds.length > 0) {
+        const { error } = await supabase
+          .from('movimientos_bancarios')
+          .update({ pdf_ticket_url: 'no_lleva' })
+          .in('id', movimientosIds);
+        if (error) throw error;
+      }
+      
+      alert('Elementos actualizados correctamente.');
+      setSelectedIds(new Set());
+      await fetchData();
+    } catch (err: any) {
+      alert(`Error al actualizar: ${err.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleQuickNoTicket = async (id: string, tipo: 'Egreso' | 'Movimiento' | 'Ingreso') => {
+    if (!confirm("¿Marcar esta operación como 'No lleva ticket'?")) return;
+    setLoading(true);
+    try {
+      if (tipo === 'Egreso') {
+        const { error } = await supabase
+          .from('gastos')
+          .update({ ticket_url: 'no_lleva' })
+          .eq('id', id);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase
+          .from('movimientos_bancarios')
+          .update({ pdf_ticket_url: 'no_lleva' })
+          .eq('id', id);
+        if (error) throw error;
+      }
+      await fetchData();
+    } catch (err: any) {
+      alert(`Error al actualizar: ${err.message}`);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const formatCurrency = (val: number) => new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' }).format(val);
@@ -327,6 +457,12 @@ export default function ExpedienteDigital() {
             <option value="yellow">Faltantes (Amarillo)</option>
             <option value="red">Vacíos (Rojo)</option>
           </select>
+          <select value={filterConciliado} onChange={e => setFilterConciliado(e.target.value)}
+            className="bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 px-3 py-2 rounded-lg text-xs outline-none focus:ring-1 focus:ring-blue-500 transition-all font-semibold">
+            <option value="todos">Todas las Conciliaciones</option>
+            <option value="conciliados">Conciliados</option>
+            <option value="sin_conciliar">Sin Conciliar</option>
+          </select>
           <button onClick={fetchData} className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-bold transition-all flex items-center gap-2 shadow-md">
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> Actualizar
           </button>
@@ -334,14 +470,51 @@ export default function ExpedienteDigital() {
       </div>
 
       <div className="flex-1 p-8 pt-0 overflow-hidden flex flex-col min-h-0">
+        {selectedIds.size > 0 && (
+          <div className="relative z-50 mb-4 p-4 bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800 rounded-xl flex items-center justify-between shadow-sm animate-in slide-in-from-top duration-200">
+            <div className="flex items-center gap-3">
+              <div className="bg-blue-100 dark:bg-blue-900/50 text-blue-600 dark:text-blue-400 px-3 py-1 rounded-full text-xs font-black">
+                {selectedIds.size} seleccionados
+              </div>
+              <span className="text-xs text-gray-600 dark:text-gray-400 font-semibold">
+                Acciones en lote disponibles para Egresos y Movimientos Bancarios.
+              </span>
+            </div>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={handleBulkNoTicket}
+                className="relative z-50 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold transition-all flex items-center gap-2 shadow-sm"
+              >
+                Asignar "No lleva ticket"
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedIds(new Set())}
+                className="relative z-50 px-3.5 py-2 bg-gray-200 dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-700 rounded-lg text-xs font-bold transition-all"
+              >
+                Desmarcar todos
+              </button>
+            </div>
+          </div>
+        )}
+
         <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-2xl shadow-xl flex-1 overflow-hidden flex flex-col">
           <div className="overflow-auto flex-1">
             <table className="w-full text-left border-collapse text-xs min-w-[800px]">
               <thead>
                 <tr className="bg-gray-50 dark:bg-gray-900/50 border-b border-gray-200 dark:border-gray-800 text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+                  <th className="p-4 w-12 text-center">
+                    <input
+                      type="checkbox"
+                      checked={isAllSelected}
+                      onChange={handleToggleSelectAll}
+                      className="rounded border-gray-300 dark:border-gray-700 text-blue-600 focus:ring-blue-500 cursor-pointer w-4 h-4"
+                    />
+                  </th>
                   <th className="p-4 w-24">Tipo</th>
                   <th className="p-4 w-28">Fecha</th>
-                  <th className="p-4">Concepto / Detalle</th>
+                  <th className="p-4">Proveedor / Cliente / Detalle</th>
                   <th className="p-4 text-right w-32">Monto</th>
                   <th className="p-4 text-center w-48">Auditoría (Semáforo)</th>
                   <th className="p-4 text-center w-32">Expediente</th>
@@ -349,21 +522,32 @@ export default function ExpedienteDigital() {
               </thead>
               <tbody className="divide-y divide-gray-100 dark:divide-gray-800/60 font-sans">
                 {loading && items.length === 0 ? (
-                  <tr><td colSpan={6} className="p-8 text-center text-gray-400">Cargando expediente...</td></tr>
+                  <tr><td colSpan={7} className="p-8 text-center text-gray-400">Cargando expediente...</td></tr>
                 ) : filteredItems.length === 0 ? (
-                  <tr><td colSpan={6} className="p-8 text-center text-gray-400">No se encontraron registros.</td></tr>
-                ) : filteredItems.map((item) => (
-                  <tr key={`${item.tipo}-${item.id}`} className="hover:bg-gray-50 dark:hover:bg-gray-900/10 transition-colors">
-                    <td className="p-4 text-center">
-                      <div className={`px-2 py-1 rounded-md inline-flex items-center gap-1 font-bold text-[10px] ${
-                        item.tipo === 'Egreso' ? 'bg-red-50 text-red-600 dark:bg-red-900/20' :
-                        item.tipo === 'Ingreso' ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-900/20' :
-                        'bg-amber-50 text-amber-600 dark:bg-amber-900/20'
-                      }`}>
-                        {item.tipo === 'Egreso' ? <DollarSign size={12}/> : item.tipo === 'Ingreso' ? <Layers size={12}/> : <CreditCard size={12}/>}
-                        {item.tipo}
-                      </div>
-                    </td>
+                  <tr><td colSpan={7} className="p-8 text-center text-gray-400">No se encontraron registros.</td></tr>
+                ) : filteredItems.slice(currentPage * pageSize, (currentPage + 1) * pageSize).map((item) => {
+                  const itemKey = `${item.tipo}-${item.id}`;
+                  const isSelected = selectedIds.has(itemKey);
+                  return (
+                    <tr key={itemKey} className={`hover:bg-gray-50 dark:hover:bg-gray-900/10 transition-colors ${isSelected ? 'bg-blue-50/30 dark:bg-blue-900/10' : ''}`}>
+                      <td className="p-4 text-center">
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => handleToggleSelect(itemKey)}
+                          className="rounded border-gray-300 dark:border-gray-700 text-blue-600 focus:ring-blue-500 cursor-pointer w-4 h-4"
+                        />
+                      </td>
+                      <td className="p-4 text-center">
+                        <div className={`px-2 py-1 rounded-md inline-flex items-center gap-1 font-bold text-[10px] ${
+                          item.tipo === 'Egreso' ? 'bg-red-50 text-red-600 dark:bg-red-900/20' :
+                          item.tipo === 'Ingreso' ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-900/20' :
+                          'bg-amber-50 text-amber-600 dark:bg-amber-900/20'
+                        }`}>
+                          {item.tipo === 'Egreso' ? <DollarSign size={12}/> : item.tipo === 'Ingreso' ? <Layers size={12}/> : <CreditCard size={12}/>}
+                          {item.tipo}
+                        </div>
+                      </td>
                     <td className="p-4 font-mono text-gray-500">
                       {new Date(item.fecha).toLocaleDateString()}
                     </td>
@@ -406,13 +590,30 @@ export default function ExpedienteDigital() {
                         >
                           <Plus size={14} />
                         </button>
+                        {(item.tipo === 'Egreso' || item.tipo === 'Movimiento') && item.ticket_url !== 'no_lleva' && !item.ticket_url && (
+                          <button
+                            onClick={() => handleQuickNoTicket(item.id, item.tipo)}
+                            className="px-2 py-1.5 bg-amber-50 text-amber-600 dark:bg-amber-900/20 hover:bg-amber-100 dark:hover:bg-amber-900/40 rounded-lg text-[10px] font-bold transition-colors flex items-center gap-1"
+                            title="Marcar como 'No lleva ticket'"
+                          >
+                            <Tag size={12} /> Sin ticket
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
+          <Pagination
+            page={currentPage}
+            currentCount={filteredItems.slice(currentPage * pageSize, (currentPage + 1) * pageSize).length}
+            pageSize={pageSize}
+            onPageChange={setCurrentPage}
+            total={filteredItems.length}
+          />
         </div>
       </div>
 

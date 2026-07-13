@@ -40,6 +40,7 @@ import EgresosTab from './_components/EgresosTab';
 import IngresosTab from './_components/IngresosTab';
 import BancoTab from './_components/BancoTab';
 import CfdiViewerModal from './_components/CfdiViewerModal';
+import GastoConciliacionDrawer from './_components/GastoConciliacionDrawer';
 interface GastoFacturado {
   id: string;
   fecha_timbrado?: string;
@@ -349,6 +350,10 @@ export default function AdvancedBillingModule() {
   const [isUploading, setIsUploading] = useState(false);
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
 
+  // --- ESTADO DRAWER CONCILIACION ---
+  const [selectedGastoConciliacion, setSelectedGastoConciliacion] = useState<any | null>(null);
+  const [isConciliacionDrawerOpen, setIsConciliacionDrawerOpen] = useState(false);
+
   useEffect(() => {
     if (message && message.type !== 'info') {
       const timer = setTimeout(() => {
@@ -368,7 +373,7 @@ export default function AdvancedBillingModule() {
       // 1. Gastos facturados y no deducibles (con XML o marcados como no deducibles/solo ticket)
       const { data: gFac } = await supabase
         .from('gastos')
-        .select('*, proveedores(nombre_comercial, rfc), categorias_gasto(nombre), padre:gastos!gasto_padre_id(concepto)')
+        .select('*, proveedores(nombre_comercial, rfc), categorias_gasto(nombre), padre:gastos!gasto_padre_id(concepto), movimientos_bancarios(*, estatus_conciliacion_bancaria(*), cuentas_bancarias(*))')
         .eq('empresa_id', empresaId)
         .or('uuid_fiscal.not.is.null,es_deducible.eq.false')
         .order('fecha_gasto', { ascending: false });
@@ -974,7 +979,12 @@ export default function AdvancedBillingModule() {
     );
   };
 
-  const handleSaveManualReconcile = async (customGastosIds?: string[], customEstatusClave?: string, customPedidosIds?: string[]) => {
+  const handleSaveManualReconcile = async (
+    customGastosIds?: string[],
+    customEstatusClave?: string,
+    customPedidosIds?: string[],
+    comentario?: string
+  ) => {
     if (!reconcileModal.movimiento) return;
     
     const gastosIds = customGastosIds || reconcileModal.gastosSeleccionados;
@@ -1000,7 +1010,8 @@ export default function AdvancedBillingModule() {
         pdfTicketUrl: reconcileModal.pdfTicketUrl,
         soporteReembolsoUrl: reconcileModal.soporteReembolsoUrl,
         storageProvider: reconcileModal.storageProvider,
-        estatusClave
+        estatusClave,
+        comentarios: comentario
       }, token);
 
       if (res.success) {
@@ -1713,10 +1724,10 @@ export default function AdvancedBillingModule() {
         <div className="mb-8 flex justify-between items-start md:items-center flex-col md:flex-row gap-4 shrink-0">
           <div>
             <h2 className="text-3xl font-extrabold flex items-center gap-3">
-              <UploadCloud className="text-blue-500 w-8 h-8" /> Conciliación y Carga de Facturas
+              <DollarSign className="text-blue-500 w-8 h-8" /> Gastos Facturados
             </h2>
             <p className="text-sm text-gray-500 dark:text-gray-400 mt-1 font-sans">
-              Subida dual de CFDI (XML + PDF), lectura automática del SAT y conciliación inteligente entre ingresos y egresos.
+              Subida dual de CFDI (XML + PDF), lectura automática del SAT y control de egresos de la empresa.
             </p>
           </div>
           <div className="flex items-center gap-3">
@@ -1769,167 +1780,59 @@ export default function AdvancedBillingModule() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 flex-1 overflow-hidden min-h-0">
 
           {/* COLUMNA DERECHA: PESTAÑAS DE VISUALIZACIÓN */}
-          <div className={`lg:col-span-3 bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-2xl shadow-xl flex flex-col overflow-hidden h-full`}>
+          <div className={`lg:col-span-3 bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-2xl shadow-xl flex flex-col overflow-hidden h-full transition-all duration-300 ${isConciliacionDrawerOpen ? 'lg:mr-[460px]' : ''}`}>
 
-            {/* PESTAÑAS */}
-            <div className="flex border-b border-gray-200 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-900/30">
-              <button
-                onClick={() => setActiveTab('egresos')}
-                className={`flex-1 py-4 text-sm font-bold border-b-2 transition-all flex items-center justify-center gap-2 ${activeTab === 'egresos'
-                    ? 'border-blue-500 text-blue-500'
-                    : 'border-transparent text-gray-400 hover:text-gray-900 dark:hover:text-white'
-                  }`}
-              >
-                <DollarSign size={16} /> Egresos (Gastos)
-              </button>
-              <button
-                onClick={() => setActiveTab('ingresos')}
-                className={`flex-1 py-4 text-sm font-bold border-b-2 transition-all flex items-center justify-center gap-2 ${activeTab === 'ingresos'
-                    ? 'border-emerald-500 text-emerald-500'
-                    : 'border-transparent text-gray-400 hover:text-gray-900 dark:hover:text-white'
-                  }`}
-              >
-                <Layers size={16} /> Ingresos (Ventas)
-              </button>
-              <button
-                onClick={() => setActiveTab('banco')}
-                className={`flex-1 py-4 text-sm font-bold border-b-2 transition-all flex items-center justify-center gap-2 ${activeTab === 'banco'
-                    ? 'border-amber-500 text-amber-500'
-                    : 'border-transparent text-gray-400 hover:text-gray-900 dark:hover:text-white'
-                  }`}
-              >
-                <CreditCard size={16} /> Conciliación Bancaria
-              </button>
-              
-            </div>
+            {/* VISTA PRINCIPAL: EGRESOS */}
+            <EgresosTab
+              gastosFacturados={gastosFacturados}
+              categorias={categoriasGasto}
+              formasPago={formasPago}
+              onUpdateCategoria={handleUpdateCategoriaGasto}
+              onUpdateMetodoPago={async (id, metodo) => {
+                try {
+                  const matchingFp = formasPago.find(f => f.codigo === metodo);
+                  const formaPagoId = matchingFp ? matchingFp.id : null;
 
-            {/* TAB 1: EGRESOS */}
-            {activeTab === 'egresos' && (
-              <EgresosTab
-                gastosFacturados={gastosFacturados}
-                categorias={categoriasGasto}
-                formasPago={formasPago}
-                onUpdateCategoria={handleUpdateCategoriaGasto}
-                onUpdateMetodoPago={async (id, metodo) => {
-                  try {
-                    const matchingFp = formasPago.find(f => f.codigo === metodo);
-                    const formaPagoId = matchingFp ? matchingFp.id : null;
-
-                    const { error } = await supabase.from('gastos').update({ 
-                      metodo_pago: metodo,
-                      forma_pago_id: formaPagoId
-                    }).eq('id', id);
-                    if (error) throw error;
-                    
-                    setGastosFacturados(prev => prev.map(g => g.id === id ? { 
-                      ...g, 
-                      metodo_pago: metodo || undefined,
-                      forma_pago_id: formaPagoId || undefined
-                    } : g));
-                  } catch (err: any) {
-                    alert(`Error al actualizar método de pago: ${err.message}`);
+                  const { error } = await supabase.from('gastos').update({ 
+                    metodo_pago: metodo,
+                    forma_pago_id: formaPagoId
+                  }).eq('id', id);
+                  if (error) throw error;
+                  
+                  setGastosFacturados(prev => prev.map(g => g.id === id ? { 
+                    ...g, 
+                    metodo_pago: metodo || undefined,
+                    forma_pago_id: formaPagoId || undefined
+                  } : g));
+                } catch (err: any) {
+                  alert(`Error al actualizar método de pago: ${err.message}`);
+                }
+              }}
+              onSincronizarPagos={async () => {
+                try {
+                  const token = await getSessionToken();
+                  const res = await sincronizarMetodosPagoXml(token);
+                  if (res.success) {
+                    alert(`Sincronización terminada. Se corrigieron ${res.count} registros.`);
+                    await fetchData(); // Recargar los datos actualizados
+                  } else {
+                    throw new Error(res.error);
                   }
-                }}
-                onSincronizarPagos={async () => {
-                  try {
-                    const token = await getSessionToken();
-                    const res = await sincronizarMetodosPagoXml(token);
-                    if (res.success) {
-                      alert(`Sincronización terminada. Se corrigieron ${res.count} registros.`);
-                      await fetchData(); // Recargar los datos actualizados
-                    } else {
-                      throw new Error(res.error);
-                    }
-                  } catch (err: any) {
-                    alert(`Error al sincronizar: ${err.message}`);
-                  }
-                }}
-                onOpenComprobacionAcumulada={() => setComprobacionAcumuladaModal(prev => ({ ...prev, open: true }))}
-                onDownloadFile={handleDownloadFile}
-                onViewCfdi={setCfdiViewerUrl}
-                onDeleteGasto={handleDeleteGasto}
-                onEditGasto={setEditingGasto}
-                onRefresh={fetchData}
-              />
-            )}
-
-            {/* TAB 2: INGRESOS */}
-            {activeTab === 'ingresos' && (
-              <IngresosTab
-                ventasFacturadas={ventasFacturadas}
-                onOpenFacturacionAcumulada={() => setFacturacionAcumuladaModal(prev => ({ ...prev, open: true }))}
-                onDownloadFile={handleDownloadFile}
-                onSendEmail={handleSendEmail}
-                onViewCfdi={setCfdiViewerUrl}
-                onDeleteVenta={handleDeleteVenta}
-                onEditVenta={setEditingVenta}
-                onRefresh={fetchData}
-              />
-            )}
-
-            {/* TAB 3: BANCO */}
-            {activeTab === 'banco' && (
-              <BancoTab
-                bancoSubTab={bancoSubTab} setBancoSubTab={setBancoSubTab}
-                cuentasBancarias={cuentasBancarias}
-                movimientos={movimientos}
-                estatusCatalog={estatusCatalog}
-                formasPago={formasPago}
-                categoriasMovimiento={categoriasMovimiento}
-                pedidosPendientes={pedidosPendientes}
-                gastosReconciliables={gastosReconciliables}
-                busquedaBanco={busquedaBanco}
-                setBusquedaBanco={setBusquedaBanco}
-                filtroBancoTipo={filtroBancoTipo}
-                setFiltroBancoTipo={setFiltroBancoTipo}
-                filtroBancoEstatus={filtroBancoEstatus}
-                setFiltroBancoEstatus={setFiltroBancoEstatus}
-                filtroBancoVisibilidad={filtroBancoVisibilidad}
-                setFiltroBancoVisibilidad={setFiltroBancoVisibilidad}
-                bancoPage={bancoPage}
-                setBancoPage={setBancoPage}
-                bancoPageSize={bancoPageSize}
-                excelFile={excelFile}
-                isUploading={isUploading}
-                handleExcelUpload={handleExcelUpload}
-                handleAutoReconcile={handleAutoReconcile}
-                reconcileModal={reconcileModal}
-                setReconcileModal={setReconcileModal}
-                manualMatchSearch={manualMatchSearch}
-                setManualMatchSearch={setManualMatchSearch}
-                handleOpenReconcileModal={handleOpenReconcileModal}
-                handleSaveReconciliation={handleSaveManualReconcile}
-                handleUploadReconciliationFile={handleUploadReconciliationFile}
-                handleRemoveReconciliationFile={handleRemoveReconciliationFile}
-                handleToggleVisibility={handleToggleVisibility}
-                handleUpdateCategoria={handleUpdateCategoria}
-                selectedGlobalDepositId={selectedGlobalDepositId}
-                setSelectedGlobalDepositId={setSelectedGlobalDepositId}
-                selectedGlobalPedidosIds={selectedGlobalPedidosIds}
-                setSelectedGlobalPedidosIds={setSelectedGlobalPedidosIds}
-                handleGlobalLink={handleGlobalLink}
-                catalogEditModal={catalogEditModal}
-                setCatalogEditModal={setCatalogEditModal}
-                handleSaveCatalogItem={handleSaveCatalogItem}
-                handleDeleteCatalogItem={handleDeleteCatalogItem}
-                formasPagoModal={formasPagoModal}
-                setFormasPagoModal={setFormasPagoModal}
-                handleSaveFormaPago={handleSaveFormaPago}
-                handleDeleteFormaPago={handleDeleteFormaPago}
-                onDownloadFile={handleDownloadFile}
-                handleDeleteMovimiento={handleDeleteMovimiento}
-                onEditMovimiento={setEditingMovimiento}
-                selectedCuentaId={selectedCuentaId}
-                setSelectedCuentaId={setSelectedCuentaId}
-                onViewCfdi={setCfdiViewerUrl}
-                handleUnlinkReconciliation={handleUnlinkReconciliation}
-                handleBulkMoveMovimientos={handleBulkMoveMovimientos}
-              />
-
-            )}
-
-            
-
+                } catch (err: any) {
+                  alert(`Error al sincronizar: ${err.message}`);
+                }
+              }}
+              onOpenComprobacionAcumulada={() => setComprobacionAcumuladaModal(prev => ({ ...prev, open: true }))}
+              onDownloadFile={handleDownloadFile}
+              onViewCfdi={setCfdiViewerUrl}
+              onDeleteGasto={handleDeleteGasto}
+              onEditGasto={setEditingGasto}
+              onRefresh={fetchData}
+              onViewConciliacion={(gasto) => {
+                setSelectedGastoConciliacion(gasto);
+                setIsConciliacionDrawerOpen(true);
+              }}
+            />
           </div>
 
           {/* MODAL: REGISTRAR / EDITAR PROVEEDOR */}
@@ -2824,6 +2727,18 @@ export default function AdvancedBillingModule() {
           onSuccess={() => { setEditingMovimiento(null); fetchData(); }} 
         />
       )}
+      {/* DRAWER DE CONCILIACIÓN */}
+      <GastoConciliacionDrawer
+        open={isConciliacionDrawerOpen}
+        onClose={() => {
+          setIsConciliacionDrawerOpen(false);
+          setSelectedGastoConciliacion(null);
+        }}
+        gasto={selectedGastoConciliacion}
+        onRefresh={fetchData}
+        onDownloadFile={handleDownloadFile}
+        onViewCfdi={setCfdiViewerUrl}
+      />
     </div>
   );
 }

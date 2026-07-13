@@ -100,7 +100,17 @@ export default function IngresosTab({
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(PAGE_SIZE_OPTIONS[0]);
   const [search, setSearch] = useState('');
-  const [filtroEstatus, setFiltroEstatus] = useState('');
+  const [filtrosEstatus, setFiltrosEstatus] = useState({
+    conciliado: true,
+    sin_conciliar: true,
+    facturado: true,
+    pendiente_facturar: true,
+    no_liquidado: true,
+    con_xml: true,
+    sin_xml: true,
+    con_ticket: true,
+    sin_ticket: true
+  });
 
   const filtrados = useMemo(() => {
     const q = search.toLowerCase();
@@ -119,14 +129,33 @@ export default function IngresosTab({
         v.cliente_nombre?.toLowerCase().includes(q) ||
         totalAmount.toString().includes(q)
       );
+
+      // Estatus Conciliación
+      const esConciliado = !!v.movimiento_bancario_id;
+      if (!filtrosEstatus.conciliado && esConciliado) return false;
+      if (!filtrosEstatus.sin_conciliar && !esConciliado) return false;
+
+      // Estatus Factura
       const hasInvoice = !!(v.facturas_clientes && v.facturas_clientes.length > 0);
-      const matchEstatus = !filtroEstatus ||
-        (filtroEstatus === 'facturado' && hasInvoice) ||
-        (filtroEstatus === 'pendiente' && !hasInvoice && v.estatus_pago === 'Liquidado') ||
-        (filtroEstatus === 'sin_liquidar' && v.estatus_pago !== 'Liquidado' && !hasInvoice);
-      return matchSearch && matchEstatus;
+      const esPendienteFacturar = !hasInvoice && v.estatus_pago === 'Liquidado';
+      const esNoLiquidado = !hasInvoice && v.estatus_pago !== 'Liquidado';
+
+      if (!filtrosEstatus.facturado && hasInvoice) return false;
+      if (!filtrosEstatus.pendiente_facturar && esPendienteFacturar) return false;
+      if (!filtrosEstatus.no_liquidado && esNoLiquidado) return false;
+
+      // Estatus Documentación
+      const tieneXml = invoice && !!invoice.xml_url;
+      const tieneTicket = invoice && !!invoice.ticket_url && invoice.ticket_url !== 'no_lleva';
+
+      if (!filtrosEstatus.con_xml && tieneXml) return false;
+      if (!filtrosEstatus.sin_xml && !tieneXml) return false;
+      if (!filtrosEstatus.con_ticket && tieneTicket) return false;
+      if (!filtrosEstatus.sin_ticket && !tieneTicket) return false;
+
+      return matchSearch;
     });
-  }, [ventasFacturadas, search, filtroEstatus]);
+  }, [ventasFacturadas, search, filtrosEstatus]);
 
   const totalPages = Math.max(1, Math.ceil(filtrados.length / pageSize));
   const pagina = Math.min(page, totalPages - 1);
@@ -227,16 +256,132 @@ export default function IngresosTab({
               className="w-full pl-8 pr-3 py-2 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-xl text-xs outline-none focus:ring-1 focus:ring-emerald-500 text-gray-900 dark:text-white"
             />
           </div>
-          <select
-            value={filtroEstatus}
-            onChange={(e) => { setFiltroEstatus(e.target.value); resetPage(); }}
-            className="bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-xl text-xs px-2.5 py-2 outline-none focus:ring-1 focus:ring-emerald-500 text-gray-700 dark:text-gray-200"
+          <button
+            onClick={() => {
+              setSearch('');
+              setFiltrosEstatus({
+                conciliado: true,
+                sin_conciliar: true,
+                facturado: true,
+                pendiente_facturar: true,
+                no_liquidado: true,
+                con_xml: true,
+                sin_xml: true,
+                con_ticket: true,
+                sin_ticket: true
+              });
+              resetPage();
+            }}
+            className="px-3.5 py-2 bg-gray-200 dark:bg-gray-800 text-gray-700 dark:text-gray-300 rounded-xl text-xs font-bold hover:bg-gray-300 dark:hover:bg-gray-700 transition-all shrink-0 shadow-sm"
           >
-            <option value="">Todos los estatus</option>
-            <option value="facturado">Facturados</option>
-            <option value="pendiente">Pendientes de Facturar</option>
-            <option value="sin_liquidar">Sin Liquidar</option>
-          </select>
+            Restablecer Filtros
+          </button>
+        </div>
+
+        {/* Grid de Checklists de Filtro */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs font-sans mt-2 pt-2 border-t border-gray-200 dark:border-gray-800">
+          
+          {/* Estatus Conciliación */}
+          <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 p-3 rounded-xl flex flex-col shadow-sm">
+            <span className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2 block">Estatus Conciliación</span>
+            <div className="space-y-1.5 flex-1">
+              <label className="flex items-center gap-2 cursor-pointer text-gray-700 dark:text-gray-300 text-[11px] font-semibold hover:text-gray-950 dark:hover:text-white">
+                <input
+                  type="checkbox"
+                  checked={filtrosEstatus.conciliado}
+                  onChange={e => { setFiltrosEstatus(prev => ({...prev, conciliado: e.target.checked})); resetPage(); }}
+                  className="w-3.5 h-3.5 rounded text-emerald-600 focus:ring-emerald-500 border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950 cursor-pointer"
+                />
+                <span>Conciliados</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer text-gray-700 dark:text-gray-300 text-[11px] font-semibold hover:text-gray-950 dark:hover:text-white">
+                <input
+                  type="checkbox"
+                  checked={filtrosEstatus.sin_conciliar}
+                  onChange={e => { setFiltrosEstatus(prev => ({...prev, sin_conciliar: e.target.checked})); resetPage(); }}
+                  className="w-3.5 h-3.5 rounded text-emerald-600 focus:ring-emerald-500 border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950 cursor-pointer"
+                />
+                <span>Sin Conciliar</span>
+              </label>
+            </div>
+          </div>
+
+          {/* Estatus Factura */}
+          <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 p-3 rounded-xl flex flex-col shadow-sm">
+            <span className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2 block">Estatus Factura</span>
+            <div className="space-y-1.5 flex-1">
+              <label className="flex items-center gap-2 cursor-pointer text-gray-700 dark:text-gray-300 text-[11px] font-semibold hover:text-gray-950 dark:hover:text-white">
+                <input
+                  type="checkbox"
+                  checked={filtrosEstatus.facturado}
+                  onChange={e => { setFiltrosEstatus(prev => ({...prev, facturado: e.target.checked})); resetPage(); }}
+                  className="w-3.5 h-3.5 rounded text-emerald-600 focus:ring-emerald-500 border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950 cursor-pointer"
+                />
+                <span>Facturados</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer text-gray-700 dark:text-gray-300 text-[11px] font-semibold hover:text-gray-950 dark:hover:text-white">
+                <input
+                  type="checkbox"
+                  checked={filtrosEstatus.pendiente_facturar}
+                  onChange={e => { setFiltrosEstatus(prev => ({...prev, pendiente_facturar: e.target.checked})); resetPage(); }}
+                  className="w-3.5 h-3.5 rounded text-emerald-600 focus:ring-emerald-500 border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950 cursor-pointer"
+                />
+                <span>Pendientes de Facturar</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer text-gray-700 dark:text-gray-300 text-[11px] font-semibold hover:text-gray-950 dark:hover:text-white">
+                <input
+                  type="checkbox"
+                  checked={filtrosEstatus.no_liquidado}
+                  onChange={e => { setFiltrosEstatus(prev => ({...prev, no_liquidado: e.target.checked})); resetPage(); }}
+                  className="w-3.5 h-3.5 rounded text-emerald-600 focus:ring-emerald-500 border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950 cursor-pointer"
+                />
+                <span>Sin Liquidar (No facturados)</span>
+              </label>
+            </div>
+          </div>
+
+          {/* Estatus Documentación */}
+          <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 p-3 rounded-xl flex flex-col shadow-sm">
+            <span className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2 block">Documentos</span>
+            <div className="space-y-1.5 flex-1 max-h-24 overflow-y-auto pr-1">
+              <label className="flex items-center gap-2 cursor-pointer text-gray-700 dark:text-gray-300 text-[11px] font-semibold hover:text-gray-950 dark:hover:text-white">
+                <input
+                  type="checkbox"
+                  checked={filtrosEstatus.con_xml}
+                  onChange={e => { setFiltrosEstatus(prev => ({...prev, con_xml: e.target.checked})); resetPage(); }}
+                  className="w-3.5 h-3.5 rounded text-emerald-600 focus:ring-emerald-500 border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950 cursor-pointer"
+                />
+                <span>Con XML</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer text-gray-700 dark:text-gray-300 text-[11px] font-semibold hover:text-gray-950 dark:hover:text-white">
+                <input
+                  type="checkbox"
+                  checked={filtrosEstatus.sin_xml}
+                  onChange={e => { setFiltrosEstatus(prev => ({...prev, sin_xml: e.target.checked})); resetPage(); }}
+                  className="w-3.5 h-3.5 rounded text-emerald-600 focus:ring-emerald-500 border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950 cursor-pointer"
+                />
+                <span>Sin XML</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer text-gray-700 dark:text-gray-300 text-[11px] font-semibold hover:text-gray-950 dark:hover:text-white">
+                <input
+                  type="checkbox"
+                  checked={filtrosEstatus.con_ticket}
+                  onChange={e => { setFiltrosEstatus(prev => ({...prev, con_ticket: e.target.checked})); resetPage(); }}
+                  className="w-3.5 h-3.5 rounded text-emerald-600 focus:ring-emerald-500 border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950 cursor-pointer"
+                />
+                <span>Con Ticket</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer text-gray-700 dark:text-gray-300 text-[11px] font-semibold hover:text-gray-950 dark:hover:text-white">
+                <input
+                  type="checkbox"
+                  checked={filtrosEstatus.sin_ticket}
+                  onChange={e => { setFiltrosEstatus(prev => ({...prev, sin_ticket: e.target.checked})); resetPage(); }}
+                  className="w-3.5 h-3.5 rounded text-emerald-600 focus:ring-emerald-500 border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950 cursor-pointer"
+                />
+                <span>Sin Ticket</span>
+              </label>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -461,7 +606,7 @@ export default function IngresosTab({
             {visible.length === 0 && (
               <tr>
                 <td colSpan={8} className="p-12 text-center text-gray-400 italic">
-                  {filtrados.length === 0 && (search || filtroEstatus)
+                  {filtrados.length === 0 && (search || Object.values(filtrosEstatus).some(val => !val))
                     ? 'No se encontraron registros con los filtros aplicados.'
                     : 'No hay ventas registradas.'}
                 </td>

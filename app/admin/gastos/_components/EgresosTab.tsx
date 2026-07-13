@@ -26,6 +26,7 @@ interface EgresosTabProps {
   onEditGasto: (gasto: GastoFacturado) => void;
   onDeleteGasto: (gastoId: string) => void;
   onRefresh?: () => void;
+  onViewConciliacion?: (gasto: GastoFacturado) => void;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -99,6 +100,7 @@ export default function EgresosTab({
   onEditGasto,
   onDeleteGasto,
   onRefresh,
+  onViewConciliacion,
 }: EgresosTabProps) {
 
   // Paginación
@@ -107,6 +109,7 @@ export default function EgresosTab({
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(PAGE_SIZE_OPTIONS[0]);
   const [sincronizando, setSincronizando] = useState(false);
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
 
   // Expansión de parcialidades (hijos)
   const [expandedParents, setExpandedParents] = useState<Record<string, boolean>>({});
@@ -242,7 +245,7 @@ export default function EgresosTab({
   // Búsqueda y filtros
   const [search, setSearch] = useState('');
   const [filtroMetodo, setFiltroMetodo] = useState('');
-  const [filtroCategoria, setFiltroCategoria] = useState('');
+  const [categoriasSelected, setCategoriasSelected] = useState<string[]>([]);
   const [verTodos, setVerTodos] = useState(false);
   const [verTodosFiltro, setVerTodosFiltro] = useState(false);
 
@@ -252,6 +255,7 @@ export default function EgresosTab({
     sin_conciliar: true,
     con_ticket: true,
     sin_documento: true,
+    no_lleva_ticket: true,
     deducible: true,
     no_deducible: true
   });
@@ -259,9 +263,14 @@ export default function EgresosTab({
   // Filtrado
   const filtrados = useMemo(() => {
     const q = search.toLowerCase();
-    return gastosFacturados.filter((g) => {
+    const result = gastosFacturados.filter((g) => {
       // Ocultar de la lista principal si es un gasto hijo (parcialidad)
       if (g.gasto_padre_id) return false;
+
+      // Generar string de fecha legible para buscar por fecha
+      const dateVal = g.fecha_timbrado || g.fecha_gasto || '';
+      const dateStr = dateVal ? new Date(dateVal).toLocaleDateString('es-MX', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '';
+      const dateStrLtr = dateVal ? new Date(dateVal).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' }).toLowerCase() : '';
 
       const matchSearch = !q || (
         g.uuid_fiscal?.toLowerCase().includes(q) ||
@@ -269,10 +278,14 @@ export default function EgresosTab({
         g.proveedores?.nombre_comercial?.toLowerCase().includes(q) ||
         g.proveedores?.rfc?.toLowerCase().includes(q) ||
         g.monto?.toString().includes(q) ||
-        g.subtotal?.toString().includes(q)
+        g.subtotal?.toString().includes(q) ||
+        dateStr.includes(q) ||
+        dateStrLtr.includes(q)
       );
       const matchMetodo = !filtroMetodo || g.metodo_pago === filtroMetodo;
-      const matchCat = !filtroCategoria || g.categoria_id === filtroCategoria || (!g.categoria_id && filtroCategoria === '__sin__');
+      const matchCat = categoriasSelected.length === 0 || 
+        (categoriasSelected.includes('sin_categoria') && !g.categoria_id) || 
+        (g.categoria_id && categoriasSelected.includes(g.categoria_id));
 
       // Filtros Checkbox Estado
       const esConciliado = !!g.movimiento_bancario_id;
@@ -281,12 +294,14 @@ export default function EgresosTab({
       
       // Con Documentos separados (XML vs Ticket vs Sin Doc)
       const tieneXml = !!g.xml_url || !!g.uuid_fiscal;
-      const tieneTicket = !!g.ticket_url;
+      const tieneTicket = !!g.ticket_url && g.ticket_url !== 'no_lleva';
+      const noLlevaTicket = g.ticket_url === 'no_lleva';
       const tienePdf = !!g.pdf_url;
-      const sinDocumento = !tieneXml && !tieneTicket && !tienePdf;
+      const sinDocumento = !tieneXml && !tieneTicket && !tienePdf && !noLlevaTicket;
       
       if (!filtrosEstatus.con_ticket && tieneTicket) return false;
       if (!filtrosEstatus.sin_documento && sinDocumento) return false;
+      if (!filtrosEstatus.no_lleva_ticket && noLlevaTicket) return false;
 
       // Filtros de Deducibilidad
       const esDeducibleGasto = g.es_deducible !== false;
@@ -295,7 +310,16 @@ export default function EgresosTab({
 
       return matchSearch && matchMetodo && matchCat;
     });
-  }, [gastosFacturados, search, filtroMetodo, filtroCategoria, filtrosEstatus]);
+
+    // Ordenar por fecha
+    result.sort((a, b) => {
+      const dateA = new Date(a.fecha_timbrado || a.fecha_gasto || 0).getTime();
+      const dateB = new Date(b.fecha_timbrado || b.fecha_gasto || 0).getTime();
+      return sortDirection === 'asc' ? dateA - dateB : dateB - dateA;
+    });
+
+    return result;
+  }, [gastosFacturados, search, filtroMetodo, categoriasSelected, filtrosEstatus, sortDirection]);
 
   // Paginado
   const totalPages = Math.max(1, Math.ceil(filtrados.length / pageSize));
@@ -442,76 +466,150 @@ export default function EgresosTab({
                 </>
               )}
             </select>
-            <select
-              value={filtroCategoria}
-              onChange={(e) => { setFiltroCategoria(e.target.value); resetPage(); }}
-              className="bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-xl text-xs px-2.5 py-2 outline-none focus:ring-1 focus:ring-blue-500 text-gray-700 dark:text-gray-200"
-            >
-              <option value="">Todas las categorías</option>
-              <option value="__sin__">Sin clasificar</option>
-              {categorias.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
-            </select>
           </div>
+          <button
+            onClick={() => {
+              setSearch('');
+              setFiltroMetodo('');
+              setCategoriasSelected([]);
+              setFiltrosEstatus({
+                conciliado: true,
+                sin_conciliar: true,
+                con_ticket: true,
+                sin_documento: true,
+                no_lleva_ticket: true,
+                deducible: true,
+                no_deducible: true
+              });
+              resetPage();
+            }}
+            className="px-3.5 py-2 bg-gray-200 dark:bg-gray-800 text-gray-700 dark:text-gray-300 rounded-xl text-xs font-bold hover:bg-gray-300 dark:hover:bg-gray-700 transition-all shrink-0 shadow-sm"
+          >
+            Restablecer Filtros
+          </button>
         </div>
 
-        {/* Fila 3: Filtros de checkboxes tipo Excel */}
-        <div className="flex flex-wrap gap-4 items-center text-xs font-semibold text-gray-600 dark:text-gray-400 mt-2">
-          <label className="flex items-center gap-1.5 cursor-pointer hover:text-gray-800 dark:hover:text-gray-200">
-            <input 
-              type="checkbox" 
-              checked={filtrosEstatus.conciliado} 
-              onChange={e => { setFiltrosEstatus(prev => ({...prev, conciliado: e.target.checked})); resetPage(); }} 
-              className="rounded text-blue-500 focus:ring-blue-500 bg-white dark:bg-gray-800 border-gray-300 dark:border-gray-600"
-            />
-            Conciliados
-          </label>
-          <label className="flex items-center gap-1.5 cursor-pointer hover:text-gray-800 dark:hover:text-gray-200">
-            <input 
-              type="checkbox" 
-              checked={filtrosEstatus.sin_conciliar} 
-              onChange={e => { setFiltrosEstatus(prev => ({...prev, sin_conciliar: e.target.checked})); resetPage(); }} 
-              className="rounded text-blue-500 focus:ring-blue-500 bg-white dark:bg-gray-800 border-gray-300 dark:border-gray-600"
-            />
-            Sin Conciliar
-          </label>
-          <div className="w-px h-4 bg-gray-300 dark:bg-gray-700 hidden sm:block"></div>
-          <label className="flex items-center gap-1.5 cursor-pointer hover:text-gray-800 dark:hover:text-gray-200">
-            <input 
-              type="checkbox" 
-              checked={filtrosEstatus.con_ticket} 
-              onChange={e => { setFiltrosEstatus(prev => ({...prev, con_ticket: e.target.checked})); resetPage(); }} 
-              className="rounded text-indigo-500 focus:ring-indigo-500 bg-white dark:bg-gray-800 border-gray-300 dark:border-gray-600"
-            />
-            Con Ticket
-          </label>
-          <label className="flex items-center gap-1.5 cursor-pointer hover:text-gray-800 dark:hover:text-gray-200">
-            <input 
-              type="checkbox" 
-              checked={filtrosEstatus.sin_documento} 
-              onChange={e => { setFiltrosEstatus(prev => ({...prev, sin_documento: e.target.checked})); resetPage(); }} 
-              className="rounded text-indigo-500 focus:ring-indigo-500 bg-white dark:bg-gray-800 border-gray-300 dark:border-gray-600"
-            />
-            Sin Documento
-          </label>
-          <div className="w-px h-4 bg-gray-300 dark:bg-gray-700 hidden sm:block"></div>
-          <label className="flex items-center gap-1.5 cursor-pointer hover:text-gray-800 dark:hover:text-gray-200">
-            <input 
-              type="checkbox" 
-              checked={filtrosEstatus.deducible} 
-              onChange={e => { setFiltrosEstatus(prev => ({...prev, deducible: e.target.checked})); resetPage(); }} 
-              className="rounded text-emerald-500 focus:ring-emerald-500 bg-white dark:bg-gray-800 border-gray-300 dark:border-gray-600"
-            />
-            Deducibles
-          </label>
-          <label className="flex items-center gap-1.5 cursor-pointer hover:text-gray-800 dark:hover:text-gray-200">
-            <input 
-              type="checkbox" 
-              checked={filtrosEstatus.no_deducible} 
-              onChange={e => { setFiltrosEstatus(prev => ({...prev, no_deducible: e.target.checked})); resetPage(); }} 
-              className="rounded text-emerald-500 focus:ring-emerald-500 bg-white dark:bg-gray-800 border-gray-300 dark:border-gray-600"
-            />
-            No Deducibles
-          </label>
+        {/* Fila 3: Grid de Checklists de Filtro (Estilo Conciliación) */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-xs font-sans mt-2 pt-2 border-t border-gray-200 dark:border-gray-800">
+          
+          {/* Estatus Conciliación */}
+          <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 p-3 rounded-xl flex flex-col shadow-sm">
+            <span className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2 block">Estatus Conciliación</span>
+            <div className="space-y-1.5 flex-1">
+              <label className="flex items-center gap-2 cursor-pointer text-gray-700 dark:text-gray-300 text-[11px] font-semibold hover:text-gray-950 dark:hover:text-white">
+                <input
+                  type="checkbox"
+                  checked={filtrosEstatus.conciliado}
+                  onChange={e => { setFiltrosEstatus(prev => ({...prev, conciliado: e.target.checked})); resetPage(); }}
+                  className="w-3.5 h-3.5 rounded text-blue-600 focus:ring-blue-500 border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950 cursor-pointer"
+                />
+                <span>Conciliados</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer text-gray-700 dark:text-gray-300 text-[11px] font-semibold hover:text-gray-950 dark:hover:text-white">
+                <input
+                  type="checkbox"
+                  checked={filtrosEstatus.sin_conciliar}
+                  onChange={e => { setFiltrosEstatus(prev => ({...prev, sin_conciliar: e.target.checked})); resetPage(); }}
+                  className="w-3.5 h-3.5 rounded text-blue-600 focus:ring-blue-500 border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950 cursor-pointer"
+                />
+                <span>Sin Conciliar</span>
+              </label>
+            </div>
+          </div>
+
+          {/* Deducibilidad */}
+          <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 p-3 rounded-xl flex flex-col shadow-sm">
+            <span className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2 block">Deducibilidad</span>
+            <div className="space-y-1.5 flex-1">
+              <label className="flex items-center gap-2 cursor-pointer text-gray-700 dark:text-gray-300 text-[11px] font-semibold hover:text-gray-950 dark:hover:text-white">
+                <input
+                  type="checkbox"
+                  checked={filtrosEstatus.deducible}
+                  onChange={e => { setFiltrosEstatus(prev => ({...prev, deducible: e.target.checked})); resetPage(); }}
+                  className="w-3.5 h-3.5 rounded text-emerald-600 focus:ring-emerald-500 border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950 cursor-pointer"
+                />
+                <span>Deducibles</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer text-gray-700 dark:text-gray-300 text-[11px] font-semibold hover:text-gray-950 dark:hover:text-white">
+                <input
+                  type="checkbox"
+                  checked={filtrosEstatus.no_deducible}
+                  onChange={e => { setFiltrosEstatus(prev => ({...prev, no_deducible: e.target.checked})); resetPage(); }}
+                  className="w-3.5 h-3.5 rounded text-emerald-650 focus:ring-emerald-500 border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950 cursor-pointer"
+                />
+                <span>No Deducibles</span>
+              </label>
+            </div>
+          </div>
+
+          {/* Documentos */}
+          <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 p-3 rounded-xl flex flex-col shadow-sm">
+            <span className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2 block">Documentos</span>
+            <div className="space-y-1.5 flex-1 max-h-24 overflow-y-auto pr-1">
+              <label className="flex items-center gap-2 cursor-pointer text-gray-700 dark:text-gray-300 text-[11px] font-semibold hover:text-gray-950 dark:hover:text-white">
+                <input
+                  type="checkbox"
+                  checked={filtrosEstatus.con_ticket}
+                  onChange={e => { setFiltrosEstatus(prev => ({...prev, con_ticket: e.target.checked})); resetPage(); }}
+                  className="w-3.5 h-3.5 rounded text-indigo-600 focus:ring-indigo-500 border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950 cursor-pointer"
+                />
+                <span>Con Ticket</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer text-gray-700 dark:text-gray-300 text-[11px] font-semibold hover:text-gray-950 dark:hover:text-white">
+                <input
+                  type="checkbox"
+                  checked={filtrosEstatus.sin_documento}
+                  onChange={e => { setFiltrosEstatus(prev => ({...prev, sin_documento: e.target.checked})); resetPage(); }}
+                  className="w-3.5 h-3.5 rounded text-indigo-650 focus:ring-indigo-500 border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950 cursor-pointer"
+                />
+                <span>Sin Documento</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer text-gray-700 dark:text-gray-300 text-[11px] font-semibold hover:text-gray-950 dark:hover:text-white">
+                <input
+                  type="checkbox"
+                  checked={filtrosEstatus.no_lleva_ticket}
+                  onChange={e => { setFiltrosEstatus(prev => ({...prev, no_lleva_ticket: e.target.checked})); resetPage(); }}
+                  className="w-3.5 h-3.5 rounded text-indigo-650 focus:ring-indigo-500 border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950 cursor-pointer"
+                />
+                <span>No Lleva Ticket</span>
+              </label>
+            </div>
+          </div>
+
+          {/* Categoría */}
+          <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 p-3 rounded-xl flex flex-col shadow-sm">
+            <span className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2 block">Categoría de Gasto</span>
+            <div className="space-y-1.5 flex-1 max-h-24 overflow-y-auto pr-1">
+              <label className="flex items-center gap-2 cursor-pointer text-gray-700 dark:text-gray-300 text-[11px] font-semibold hover:text-gray-950 dark:hover:text-white">
+                <input
+                  type="checkbox"
+                  checked={categoriasSelected.includes('sin_categoria')}
+                  onChange={(chk) => {
+                    const newCats = chk.target.checked ? [...categoriasSelected, 'sin_categoria'] : categoriasSelected.filter(c => c !== 'sin_categoria');
+                    setCategoriasSelected(newCats);
+                    resetPage();
+                  }}
+                  className="w-3.5 h-3.5 rounded text-blue-600 focus:ring-blue-500 border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950 cursor-pointer"
+                />
+                <span className="italic text-gray-400 dark:text-gray-550">Sin Categoría</span>
+              </label>
+              {categorias.map((c) => (
+                <label key={c.id} className="flex items-center gap-2 cursor-pointer text-gray-700 dark:text-gray-300 text-[11px] font-semibold hover:text-gray-950 dark:hover:text-white">
+                  <input
+                    type="checkbox"
+                    checked={categoriasSelected.includes(c.id)}
+                    onChange={(chk) => {
+                      const newCats = chk.target.checked ? [...categoriasSelected, c.id] : categoriasSelected.filter(cs => cs !== c.id);
+                      setCategoriasSelected(newCats);
+                      resetPage();
+                    }}
+                    className="w-3.5 h-3.5 rounded text-blue-600 focus:ring-blue-500 border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950 cursor-pointer"
+                  />
+                  <span>{c.nombre}</span>
+                </label>
+              ))}
+            </div>
+          </div>
         </div>
       </div>
 
@@ -567,7 +665,12 @@ export default function EgresosTab({
         <table className="w-full text-left border-collapse min-w-[900px] text-xs">
           <thead className="sticky top-0 z-10">
             <tr className="bg-gray-50 dark:bg-gray-900/70 border-b border-gray-200 dark:border-gray-800 text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
-              <th className="p-3">Fecha Emisión</th>
+              <th 
+                className="p-3 cursor-pointer select-none hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
+                onClick={() => setSortDirection(prev => prev === 'asc' ? 'desc' : 'asc')}
+              >
+                Fecha Emisión {sortDirection === 'asc' ? '▲' : '▼'}
+              </th>
               <th className="p-3">UUID Fiscal</th>
               <th className="p-3">Proveedor / RFC</th>
               <th className="p-3">Método de Pago</th>
@@ -797,6 +900,15 @@ export default function EgresosTab({
                     {/* Acciones */}
                     <td className="p-3 text-center">
                       <div className="flex gap-1 justify-center">
+                        {onViewConciliacion && (
+                          <button
+                            onClick={() => onViewConciliacion(g)}
+                            title="Ver Conciliación"
+                            className="p-1.5 rounded text-blue-500 hover:text-blue-650 hover:bg-blue-55/50 dark:hover:bg-blue-900/30 transition-colors"
+                          >
+                            <Eye size={14} />
+                          </button>
+                        )}
                         <button
                           onClick={() => setAssociationModal({
                             isOpen: true,
@@ -926,6 +1038,15 @@ export default function EgresosTab({
                       {/* Acciones */}
                       <td className="p-3 text-center">
                         <div className="flex gap-1 justify-center">
+                          {onViewConciliacion && (
+                            <button
+                              onClick={() => onViewConciliacion(h)}
+                              title="Ver Conciliación"
+                              className="p-1 rounded text-blue-500 hover:text-blue-650 hover:bg-blue-55/50 dark:hover:bg-blue-900/30 transition-colors"
+                            >
+                              <Eye size={12} />
+                            </button>
+                          )}
                           <button
                             onClick={() => setAssociationModal({
                               isOpen: true,
@@ -965,7 +1086,7 @@ export default function EgresosTab({
             {visible.length === 0 && (
               <tr>
                 <td colSpan={8} className="p-12 text-center text-gray-400 italic">
-                  {filtrados.length === 0 && (search || filtroMetodo || filtroCategoria)
+                  {filtrados.length === 0 && (search || filtroMetodo || categoriasSelected.length > 0 || Object.values(filtrosEstatus).some(val => !val))
                     ? 'No se encontraron registros con los filtros aplicados.'
                     : 'No hay gastos facturados registrados.'}
                 </td>
