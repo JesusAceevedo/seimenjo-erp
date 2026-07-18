@@ -7,6 +7,8 @@ import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../../lib/supabase';
 import { useThemeMode } from '../../../lib/useThemeMode';
+import { useSessionToken } from '../../../lib/hooks/useSessionToken';
+import { useEmpresaId } from '../../../lib/hooks/useEmpresaId';
 import {
   obtenerSignedUrl,
   enviarFacturaPorCorreo,
@@ -25,26 +27,8 @@ export default function VentasFacturadasModule() {
   const router = useRouter();
   const { isDarkMode, toggleDarkMode } = useThemeMode();
 
-  const getSessionToken = async (): Promise<string> => {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (session?.access_token) return session.access_token;
-
-    try {
-      const urlPart = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-      const projectId = urlPart.includes('//') ? (urlPart.split('//')[1]?.split('.')[0] || 'ioxfhgmeapwyfrgvtyjd') : 'ioxfhgmeapwyfrgvtyjd';
-      const supabaseSessionKey = `sb-${projectId}-auth-token`;
-      const localData = localStorage.getItem(supabaseSessionKey);
-      if (localData) {
-        const parsed = JSON.parse(localData);
-        if (parsed?.access_token) {
-          return parsed.access_token;
-        }
-      }
-    } catch (e) {
-      console.error('Error getting session token from localStorage:', e);
-    }
-    return '';
-  };
+  const getSessionToken = useSessionToken();
+  const getEmpresaId = useEmpresaId();
 
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
@@ -64,22 +48,6 @@ export default function VentasFacturadasModule() {
       return () => clearTimeout(timer);
     }
   }, [message]);
-
-  const getEmpresaId = async () => {
-    let empresaId = null;
-    const sessionData = localStorage.getItem('seimenjo_session');
-    if (sessionData) {
-      try {
-        const datosSesion = JSON.parse(sessionData);
-        empresaId = datosSesion.empresa_id;
-      } catch (e) {}
-    }
-    if (!empresaId) {
-      const { data: { user } } = await supabase.auth.getUser();
-      empresaId = user?.user_metadata?.empresa_id;
-    }
-    return empresaId;
-  };
 
   const fetchData = async () => {
     setLoading(true);

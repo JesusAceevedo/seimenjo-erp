@@ -11,7 +11,7 @@ import { Repartidor, FormaPago, EstatusFactura, RegimenFiscal, UsoCfdi, Categori
 import {
   Settings, Truck, CreditCard, FileCheck, Hash, Globe, FileText,
   FolderOpen, Users, Plus, Trash2, Save, Sun, Moon, AlertTriangle, Package, Soup, Edit,
-  Briefcase, Layers
+  Briefcase, Layers, Calendar, Lock, Unlock, RotateCcw, RefreshCw
 } from 'lucide-react';
 import ProductosTab from './ProductosTab';
 import TicketConfigTab from './TicketConfigTab';
@@ -22,7 +22,7 @@ export default function ConfigPage() {
   const router = useRouter();
   const getSessionToken = useSessionToken();
   const { isDarkMode, toggleDarkMode } = useThemeMode();
-  const [activeTab, setActiveTab] = useState<'ventas' | 'clientes' | 'facturacion' | 'productos' | 'tickets' | 'empresa' | 'superusuario' | 'rrhh'>('ventas');
+  const [activeTab, setActiveTab] = useState<'ventas' | 'clientes' | 'facturacion' | 'productos' | 'tickets' | 'empresa' | 'superusuario' | 'rrhh' | 'periodos'>('ventas');
 
   // --- ESTADO PERFIL DE EMPRESA ACTIVA ---
   const [empresaId, setEmpresaId] = useState<string | null>(null);
@@ -97,6 +97,12 @@ export default function ConfigPage() {
   const [adminEmail, setAdminEmail] = useState('');
   const [adminPassword, setAdminPassword] = useState('');
   const [creandoAdmin, setCreandoAdmin] = useState(false);
+
+  // --- ESTADOS DE CICLOS / PERIODOS ---
+  const [cierres, setCierres] = useState<any[]>([]);
+  const [loadingCierres, setLoadingCierres] = useState(false);
+  const [creandoCierre, setCreandoCierre] = useState(false);
+  const [periodoMensaje, setPeriodoMensaje] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
 
   // Consecutivo del Pedido
   const [siguientePedido, setSiguientePedido] = useState<number>(1000);
@@ -285,6 +291,13 @@ export default function ConfigPage() {
     checkAuth();
   }, [router]);
 
+  // Cargar periodos al activar la pestaña
+  useEffect(() => {
+    if (activeTab === 'periodos' && empresaId) {
+      fetchCierres();
+    }
+  }, [activeTab, empresaId]);
+
   // --- ACCIONES COMUNES ---
   const handleSaveItem = async (tableName: string, fields: any, setList: React.Dispatch<React.SetStateAction<any[]>>, orderBy = 'nombre', resetForm: () => void) => {
     try {
@@ -309,6 +322,65 @@ export default function ConfigPage() {
     } catch (err: any) {
       console.error(err);
       alert(`Error al eliminar de ${tableName}: ${err.message || err.details || 'Error desconocido'}`);
+    }
+  };
+
+  // --- CICLOS / PERIODOS ---
+  const fetchCierres = async () => {
+    if (!empresaId) return;
+    setLoadingCierres(true);
+    try {
+      const { data, error } = await supabase
+        .from('cierres_mensuales')
+        .select('*')
+        .eq('empresa_id', empresaId)
+        .order('mes', { ascending: false });
+      if (error) throw error;
+      setCierres(data || []);
+      setPeriodoMensaje(null);
+    } catch (err: any) {
+      setPeriodoMensaje({ text: `Error al cargar periodos: ${err.message}`, type: 'error' });
+    } finally {
+      setLoadingCierres(false);
+    }
+  };
+
+  const handleCrearPeriodo = async () => {
+    if (!empresaId) return;
+    const d = new Date();
+    const mes = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    if (cierres.some(c => c.mes === mes)) {
+      return setPeriodoMensaje({ text: `El periodo ${mes} ya existe.`, type: 'error' });
+    }
+    setCreandoCierre(true);
+    try {
+      const { error } = await supabase.from('cierres_mensuales').insert({
+        empresa_id: empresaId,
+        mes,
+        estatus: 'abierto'
+      });
+      if (error) throw error;
+      setPeriodoMensaje({ text: `Periodo ${mes} creado exitosamente.`, type: 'success' });
+      await fetchCierres();
+    } catch (err: any) {
+      setPeriodoMensaje({ text: `Error al crear periodo: ${err.message}`, type: 'error' });
+    } finally {
+      setCreandoCierre(false);
+    }
+  };
+
+  const handleCambiarEstatusPeriodo = async (cierreId: string, nuevoEstatus: string, mes: string) => {
+    if (!confirm(`¿Cambiar el periodo ${mes} a "${nuevoEstatus}"?`)) return;
+    try {
+      const { error } = await supabase
+        .from('cierres_mensuales')
+        .update({ estatus: nuevoEstatus, updated_at: new Date().toISOString() })
+        .eq('id', cierreId);
+      if (error) throw error;
+      setPeriodoMensaje({ text: `Periodo ${mes} actualizado a "${nuevoEstatus}".`, type: 'success' });
+      await fetchCierres();
+    } catch (err: any) {
+      setPeriodoMensaje({ text: `Error al actualizar periodo: ${err.message}`, type: 'error' });
     }
   };
 
@@ -678,6 +750,15 @@ export default function ConfigPage() {
               }`}
           >
             <Briefcase size={16} /> Catálogos RR.HH.
+          </button>
+          <button
+            onClick={() => setActiveTab('periodos')}
+            className={`px-5 py-2.5 rounded-xl text-sm font-semibold transition-all duration-300 flex items-center gap-2 ${activeTab === 'periodos'
+                ? 'bg-indigo-600 text-white shadow-md'
+                : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-200/50 dark:hover:bg-gray-800/50'
+              }`}
+          >
+            <Calendar size={16} /> Ciclos / Periodos
           </button>
           {esSuperusuario && (
             <button
@@ -2135,6 +2216,132 @@ export default function ConfigPage() {
                 </div>
               </div>
 
+            </div>
+          )}
+
+          {activeTab === 'periodos' && (
+            <div className="space-y-6 animate-in fade-in">
+              <div className="bg-white dark:bg-gray-950 p-6 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-sm space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-lg font-bold flex items-center gap-2">
+                      <Calendar className="text-indigo-500" size={20} /> Ciclos / Periodos Contables
+                    </h3>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                      Administra los periodos mensuales. Un periodo cerrado definitivamente bloquea cualquier modificación en gastos, pedidos y movimientos bancarios de ese mes.
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => { fetchCierres(); }}
+                    className="px-3 py-2 bg-gray-100 dark:bg-gray-800 rounded-xl text-xs font-bold hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors flex items-center gap-1"
+                  >
+                    <RefreshCw size={14} className={loadingCierres ? 'animate-spin' : ''} /> Refrescar
+                  </button>
+                </div>
+
+                {periodoMensaje && (
+                  <div className={`p-3 rounded-xl border text-xs font-bold ${
+                    periodoMensaje.type === 'success'
+                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/30 dark:text-emerald-400 dark:border-emerald-900/50'
+                      : 'bg-red-50 text-red-700 border-red-200 dark:bg-red-950/30 dark:text-red-400 dark:border-red-900/50'
+                  }`}>
+                    {periodoMensaje.text}
+                  </div>
+                )}
+
+                <button
+                  onClick={handleCrearPeriodo}
+                  disabled={creandoCierre}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-400 text-white rounded-xl text-xs font-bold transition-colors flex items-center gap-2 shadow-sm"
+                >
+                  <Plus size={16} /> {creandoCierre ? 'Creando...' : 'Crear Periodo Actual'}
+                </button>
+
+                <div className="overflow-hidden rounded-xl border border-gray-100 dark:border-gray-800">
+                  <table className="w-full text-left text-xs">
+                    <thead>
+                      <tr className="bg-gray-100/60 dark:bg-gray-900/40 border-b border-gray-200 dark:border-gray-800 font-semibold text-gray-500">
+                        <th className="p-3">Periodo</th>
+                        <th className="p-3">Estatus</th>
+                        <th className="p-3">Creado</th>
+                        <th className="p-3 text-right">Acciones</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100 dark:divide-gray-800/40">
+                      {cierres.map(c => (
+                        <tr key={c.id} className="hover:bg-gray-50 dark:hover:bg-gray-900/10">
+                          <td className="p-3 font-bold text-gray-800 dark:text-gray-200">
+                            {new Date(c.mes + '-02').toLocaleDateString('es-MX', { year: 'numeric', month: 'long', timeZone: 'UTC' })}
+                          </td>
+                          <td className="p-3">
+                            <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold border ${
+                              c.estatus === 'abierto'
+                                ? 'bg-emerald-50 text-emerald-600 border-emerald-200 dark:bg-emerald-900/20 dark:border-emerald-800/50'
+                                : c.estatus === 'pre_cerrado'
+                                ? 'bg-yellow-50 text-yellow-600 border-yellow-200 dark:bg-yellow-900/20 dark:border-yellow-800/50'
+                                : 'bg-red-50 text-red-600 border-red-200 dark:bg-red-900/20 dark:border-red-800/50'
+                            }`}>
+                              <div className={`w-1.5 h-1.5 rounded-full ${
+                                c.estatus === 'abierto' ? 'bg-emerald-500' :
+                                c.estatus === 'pre_cerrado' ? 'bg-yellow-500' : 'bg-red-500'
+                              }`} />
+                              {c.estatus === 'abierto' ? 'Abierto' : c.estatus === 'pre_cerrado' ? 'Pre-Cerrado' : 'Cerrado Definitivo'}
+                            </span>
+                          </td>
+                          <td className="p-3 text-gray-500 font-mono">
+                            {new Date(c.created_at).toLocaleDateString()}
+                          </td>
+                          <td className="p-3 text-right">
+                            <div className="flex justify-end gap-1.5">
+                              {c.estatus !== 'abierto' && (
+                                <button
+                                  onClick={() => handleCambiarEstatusPeriodo(c.id, 'abierto', c.mes)}
+                                  className="px-2.5 py-1.5 bg-emerald-50 text-emerald-600 hover:bg-emerald-100 dark:bg-emerald-900/20 dark:text-emerald-400 dark:hover:bg-emerald-900/40 rounded-lg text-[10px] font-bold transition-colors flex items-center gap-1"
+                                  title="Reabrir periodo"
+                                >
+                                  <Unlock size={12} /> Abrir
+                                </button>
+                              )}
+                              {c.estatus === 'abierto' && (
+                                <button
+                                  onClick={() => handleCambiarEstatusPeriodo(c.id, 'pre_cerrado', c.mes)}
+                                  className="px-2.5 py-1.5 bg-yellow-50 text-yellow-600 hover:bg-yellow-100 dark:bg-yellow-900/20 dark:text-yellow-400 dark:hover:bg-yellow-900/40 rounded-lg text-[10px] font-bold transition-colors flex items-center gap-1"
+                                  title="Pre-cerrar periodo"
+                                >
+                                  <Lock size={12} /> Pre-Cerrar
+                                </button>
+                              )}
+                              {c.estatus !== 'cerrado_definitivo' && (
+                                <button
+                                  onClick={() => handleCambiarEstatusPeriodo(c.id, 'cerrado_definitivo', c.mes)}
+                                  className="px-2.5 py-1.5 bg-red-50 text-red-600 hover:bg-red-100 dark:bg-red-900/20 dark:text-red-400 dark:hover:bg-red-900/40 rounded-lg text-[10px] font-bold transition-colors flex items-center gap-1"
+                                  title="Cerrar definitivamente"
+                                >
+                                  <Lock size={12} /> Cerrar Definitivo
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                      {cierres.length === 0 && !loadingCierres && (
+                        <tr>
+                          <td colSpan={4} className="p-6 text-center text-gray-400 italic">
+                            No hay periodos registrados. Crea el periodo actual para comenzar.
+                          </td>
+                        </tr>
+                      )}
+                      {loadingCierres && (
+                        <tr>
+                          <td colSpan={4} className="p-6 text-center text-gray-400">
+                            Cargando periodos...
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             </div>
           )}
 

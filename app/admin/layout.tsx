@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
-import { Soup, LayoutDashboard, Users, FileDown, Settings, LogOut, Package, Truck, Boxes, Clock, Landmark, DollarSign, Layers } from 'lucide-react';
+import { Soup, LayoutDashboard, Users, FileDown, Settings, LogOut, Package, Truck, Boxes, Clock, Landmark, Receipt, FileText, DollarSign, Layers, ChevronLeft, ChevronRight } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import OnboardingWizard from './components/OnboardingWizard';
 
@@ -11,6 +11,20 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const pathname = usePathname();
 
   const [logoUrl, setLogoUrl] = useState<string | null>(null);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('seimenjo_sidebar_collapsed') === 'true';
+    }
+    return false;
+  });
+
+  const toggleSidebar = () => {
+    setIsSidebarCollapsed(prev => {
+      const newVal = !prev;
+      localStorage.setItem('seimenjo_sidebar_collapsed', String(newVal));
+      return newVal;
+    });
+  };
   const [logoError, setLogoError] = useState(false);
   const [needsOnboarding, setNeedsOnboarding] = useState(false);
   const [empresaId, setEmpresaId] = useState<string | null>(null);
@@ -245,190 +259,249 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           }}
         />
       )}
-      <aside className="w-64 bg-white dark:bg-gray-950 border-r border-gray-200 dark:border-gray-800 flex flex-col shrink-0">
-        <div className="p-6 border-b border-gray-200 dark:border-gray-800 flex items-center gap-3">
-          {logoUrl && !logoError ? (
-            <img src={logoUrl} alt="Logo" onError={() => setLogoError(true)} className="w-9 h-9 rounded-lg object-contain border border-gray-200 dark:border-gray-800 bg-white" />
-          ) : (
-            <Soup className="text-amber-500 w-8 h-8" />
-          )}
-          <div className="min-w-0 flex-1">
-            <h1 className="font-bold text-lg leading-tight truncate" title={empresaNombre || 'Mi Empresa'}>
-              {empresaNombre || 'Mi Empresa'}
-            </h1>
-            {switchableCompanies.length > 1 ? (
-              <div className="mt-1 relative">
-                <select
-                  disabled={isSwitching}
-                  value={empresaId || ''}
-                  onChange={(e) => handleSwitchCompany(e.target.value)}
-                  className="w-full text-[10px] bg-amber-500/10 text-amber-600 dark:text-amber-400 px-1.5 py-0.5 rounded font-semibold uppercase tracking-wide border-none outline-none cursor-pointer focus:ring-1 focus:ring-amber-500/50 appearance-none bg-[url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22292.4%22%20height%3D%22292.4%22%3E%3Cpath%20fill%3D%22%23b45309%22%20d%3D%22M287%2069.4a17.6%2017.6%200%200%200-13-5.4H18.4c-5%200-9.3%201.8-12.9%205.4A17.6%2017.6%200%200%200%200%2082.2c0%205%201.8%209.3%205.4%2012.9l128%20127.9c3.6%203.6%207.8%205.4%2012.8%205.4s9.2-1.8%2012.8-5.4L287%2095c3.5-3.5%205.4-7.8%205.4-12.8%200-5-1.9-9.2-5.5-12.8z%22%2F%3E%3C%2Fsvg%3E')] bg-[length:8px_8px] bg-[right_8px_center] bg-no-repeat pr-6"
-                >
-                  {switchableCompanies.map(c => (
-                    <option key={c.id} value={c.id} className="text-gray-900 bg-white dark:bg-gray-950 dark:text-white text-xs">
-                      {c.nombre}
-                    </option>
-                  ))}
-                </select>
+      <aside className={`${isSidebarCollapsed ? 'w-16' : 'w-64'} bg-white dark:bg-gray-950 border-r border-gray-200 dark:border-gray-800 flex flex-col shrink-0 transition-all duration-300 ease-in-out`}>
+        <div className={`p-4 border-b border-gray-200 dark:border-gray-800 flex items-center ${isSidebarCollapsed ? 'justify-center' : 'justify-between gap-2'}`}>
+          {!isSidebarCollapsed && (
+            <div className="flex items-center gap-3 min-w-0 flex-1">
+              {logoUrl && !logoError ? (
+                <img src={logoUrl} alt="Logo" onError={() => setLogoError(true)} className="w-8 h-8 rounded-lg object-contain border border-gray-200 dark:border-gray-800 bg-white" />
+              ) : (
+                <Soup className="text-amber-500 w-7 h-7" />
+              )}
+              <div className="min-w-0 flex-1">
+                <h1 className="font-bold text-sm leading-tight truncate" title={empresaNombre || 'Mi Empresa'}>
+                  {empresaNombre || 'Mi Empresa'}
+                </h1>
+                {switchableCompanies.length > 1 ? (
+                  <div className="mt-0.5 relative">
+                    <select
+                      disabled={isSwitching}
+                      value={empresaId || ''}
+                      onChange={(e) => handleSwitchCompany(e.target.value)}
+                      className="w-full text-[9px] bg-amber-500/10 text-amber-600 dark:text-amber-400 px-1 py-0.5 rounded font-semibold uppercase tracking-wide border-none outline-none cursor-pointer focus:ring-1 focus:ring-amber-500/50 appearance-none bg-[url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22292.4%22%20height%3D%22292.4%22%3E%3Cpath%20fill%3D%22%23b45309%22%20d%3D%22M287%2069.4a17.6%2017.6%200%200%200-13-5.4H18.4c-5%200-9.3%201.8-12.9%205.4A17.6%2017.6%200%200%200%200%2082.2c0%205%201.8%209.3%205.4%2012.9l128%20127.9c3.6%203.6%207.8%205.4%2012.8%205.4s9.2-1.8%2012.8-5.4L287%2095c3.5-3.5%205.4-7.8%205.4-12.8%200-5-1.9-9.2-5.5-12.8z%22%2F%3E%3C%2Fsvg%3E')] bg-[length:6px_6px] bg-[right_4px_center] bg-no-repeat pr-4"
+                    >
+                      {switchableCompanies.map(c => (
+                        <option key={c.id} value={c.id} className="text-gray-900 bg-white dark:bg-gray-950 dark:text-white text-xs">
+                          {c.nombre}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ) : (
+                  <span className="text-[9px] bg-amber-500/10 text-amber-600 dark:text-amber-400 px-1 py-0.2 rounded font-semibold uppercase tracking-wide block w-fit mt-0.5">
+                    {empresaNombre ? 'Staff' : 'Administración'}
+                  </span>
+                )}
               </div>
-            ) : (
-              <span className="text-[10px] bg-amber-500/10 text-amber-600 dark:text-amber-400 px-1.5 py-0.5 rounded font-semibold uppercase tracking-wide block w-fit mt-0.5">
-                {empresaNombre ? 'Staff' : 'Administración'}
-              </span>
-            )}
-          </div>
+            </div>
+          )}
+          {isSidebarCollapsed && (
+            <div className="flex items-center justify-center shrink-0">
+              {logoUrl && !logoError ? (
+                <img src={logoUrl} alt="Logo" onError={() => setLogoError(true)} className="w-8 h-8 rounded-lg object-contain border border-gray-200 dark:border-gray-800 bg-white" />
+              ) : (
+                <Soup className="text-amber-500 w-7 h-7" />
+              )}
+            </div>
+          )}
+          <button
+            onClick={toggleSidebar}
+            className="p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400 hover:text-gray-600 dark:hover:text-gray-250 shrink-0 transition-colors"
+            title={isSidebarCollapsed ? "Expandir menú" : "Colapsar menú"}
+          >
+            {isSidebarCollapsed ? <ChevronRight size={15} /> : <ChevronLeft size={15} />}
+          </button>
         </div>
-
-        <nav className="p-4 space-y-2 font-sans">
+ 
+        <nav className={`flex-1 overflow-y-auto space-y-1 font-sans ${isSidebarCollapsed ? 'p-2' : 'p-3'}`}>
           {/* BOTÓN VENTAS */}
           {hasModule('ventas') && (
             <button
               onClick={() => router.push('/admin/monitor')}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${isSelected('/admin/monitor') ? 'bg-amber-600 text-white font-semibold' : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white'
-                }`}
+              title={isSidebarCollapsed ? "Pedidos" : undefined}
+              className={`w-full flex items-center rounded-lg font-medium transition-all ${
+                isSidebarCollapsed 
+                  ? 'justify-center p-2.5 hover:bg-gray-100 dark:hover:bg-gray-850' 
+                  : 'gap-3 px-3 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-800'
+              } ${isSelected('/admin/monitor') ? 'bg-amber-600 text-white font-semibold hover:bg-amber-600 dark:hover:bg-amber-600' : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'}`}
             >
-              <LayoutDashboard size={18} /> Pedidos
+              <LayoutDashboard size={isSidebarCollapsed ? 20 : 16} /> {!isSidebarCollapsed && <span>Pedidos</span>}
             </button>
           )}
-
+ 
           {/* BOTÓN CLIENTES */}
           {hasModule('clientes') && (
             <button
               onClick={() => router.push('/admin/Clientes')}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${isSelected('/admin/Clientes') ? 'bg-amber-600 text-white font-semibold' : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white'
-                }`}
+              title={isSidebarCollapsed ? "Clientes" : undefined}
+              className={`w-full flex items-center rounded-lg font-medium transition-all ${
+                isSidebarCollapsed 
+                  ? 'justify-center p-2.5 hover:bg-gray-100 dark:hover:bg-gray-850' 
+                  : 'gap-3 px-3 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-800'
+              } ${isSelected('/admin/Clientes') ? 'bg-amber-600 text-white font-semibold hover:bg-amber-600 dark:hover:bg-amber-600' : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'}`}
             >
-              <Users size={18} /> Clientes
+              <Users size={isSidebarCollapsed ? 20 : 16} /> {!isSidebarCollapsed && <span>Clientes</span>}
             </button>
           )}
           {hasModule('productos') && (
             <button
               onClick={() => router.push('/admin/productos')}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${isSelected('/admin/productos') ? 'bg-amber-600 text-white font-semibold' : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white'}`}
+              title={isSidebarCollapsed ? "Productos" : undefined}
+              className={`w-full flex items-center rounded-lg font-medium transition-all ${
+                isSidebarCollapsed 
+                  ? 'justify-center p-2.5 hover:bg-gray-100 dark:hover:bg-gray-850' 
+                  : 'gap-3 px-3 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-800'
+              } ${isSelected('/admin/productos') ? 'bg-amber-600 text-white font-semibold hover:bg-amber-600 dark:hover:bg-amber-600' : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'}`}
             >
-              <Package size={18} /> Productos
+              <Package size={isSidebarCollapsed ? 20 : 16} /> {!isSidebarCollapsed && <span>Productos</span>}
             </button>
           )}
           {hasModule('inventario') && (
             <button
               onClick={() => router.push('/admin/inventario')}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${isSelected('/admin/inventario') ? 'bg-amber-600 text-white font-semibold' : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white'}`}
+              title={isSidebarCollapsed ? "Inventario" : undefined}
+              className={`w-full flex items-center rounded-lg font-medium transition-all ${
+                isSidebarCollapsed 
+                  ? 'justify-center p-2.5 hover:bg-gray-100 dark:hover:bg-gray-850' 
+                  : 'gap-3 px-3 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-800'
+              } ${isSelected('/admin/inventario') ? 'bg-amber-600 text-white font-semibold hover:bg-amber-600 dark:hover:bg-amber-600' : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'}`}
             >
-              <Boxes size={18} /> Inventario
+              <Boxes size={isSidebarCollapsed ? 20 : 16} /> {!isSidebarCollapsed && <span>Inventario</span>}
             </button>
           )}
-          {/* BOTÓN GASTOS */}
+          {/* BOTÓN EGRESOS */}
           {hasModule('gastos') && (
             <button
               onClick={() => router.push('/admin/egresos')}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${isSelected('/admin/egresos') ? 'bg-amber-600 text-white font-semibold' : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white'
-                }`}
+              title={isSidebarCollapsed ? "Egresos" : undefined}
+              className={`w-full flex items-center rounded-lg font-medium transition-all ${
+                isSidebarCollapsed 
+                  ? 'justify-center p-2.5 hover:bg-gray-100 dark:hover:bg-gray-850' 
+                  : 'gap-3 px-3 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-800'
+              } ${isSelected('/admin/egresos') ? 'bg-amber-600 text-white font-semibold hover:bg-amber-600 dark:hover:bg-amber-600' : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'}`}
             >
-              <FileDown size={18} /> Egresos
+              <FileText size={isSidebarCollapsed ? 20 : 16} /> {!isSidebarCollapsed && <span>Egresos</span>}
             </button>
           )}
-
-          {/* BOTÓN GASTOS FACTURADOS */}
-          {hasModule('facturacion') && (
+ 
+          {/* BOTÓN CONTABILIDAD */}
+          {(hasModule('gastos') || hasModule('facturacion')) && (
             <button
-              onClick={() => router.push('/admin/gastos')}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${isSelected('/admin/gastos') ? 'bg-amber-600 text-white font-semibold' : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white'
-                }`}
+              onClick={() => router.push('/admin/contabilidad')}
+              title={isSidebarCollapsed ? "Contabilidad" : undefined}
+              className={`w-full flex items-center rounded-lg font-medium transition-all ${
+                isSidebarCollapsed 
+                  ? 'justify-center p-2.5 hover:bg-gray-100 dark:hover:bg-gray-850' 
+                  : 'gap-3 px-3 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-800'
+              } ${isSelected('/admin/contabilidad') ? 'bg-amber-600 text-white font-semibold hover:bg-amber-600 dark:hover:bg-amber-600' : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'}`}
             >
-              <DollarSign size={18} /> Gastos Facturados
+              <Receipt size={isSidebarCollapsed ? 20 : 16} /> {!isSidebarCollapsed && <span>Contabilidad</span>}
             </button>
           )}
-
-          {/* BOTÓN VENTAS FACTURADAS */}
-          {hasModule('facturacion') && (
-            <button
-              onClick={() => router.push('/admin/ventas')}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${isSelected('/admin/ventas') ? 'bg-amber-600 text-white font-semibold' : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white'
-                }`}
-            >
-              <Layers size={18} /> Ventas Facturadas
-            </button>
-          )}
-
+ 
           {/* BOTÓN CONCILIACIÓN BANCARIA */}
           {hasModule('facturacion') && (
             <button
               onClick={() => router.push('/admin/conciliacion')}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${isSelected('/admin/conciliacion') ? 'bg-amber-600 text-white font-semibold' : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white'
-                }`}
+              title={isSidebarCollapsed ? "Conciliación Bancaria" : undefined}
+              className={`w-full flex items-center rounded-lg font-medium transition-all ${
+                isSidebarCollapsed 
+                  ? 'justify-center p-2.5 hover:bg-gray-100 dark:hover:bg-gray-850' 
+                  : 'gap-3 px-3 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-800'
+              } ${isSelected('/admin/conciliacion') ? 'bg-amber-600 text-white font-semibold hover:bg-amber-600 dark:hover:bg-amber-600' : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'}`}
             >
-              <Landmark size={18} /> Conciliación Bancaria
+              <Landmark size={isSidebarCollapsed ? 20 : 16} /> {!isSidebarCollapsed && <span>Conciliación Bancaria</span>}
             </button>
           )}
-
+ 
           {/* BOTÓN EXPEDIENTE */}
           {hasModule('expediente') && (
             <button
               onClick={() => router.push('/admin/expediente')}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${isSelected('/admin/expediente') ? 'bg-amber-600 text-white font-semibold' : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white'
-                }`}
+              title={isSidebarCollapsed ? "Expediente" : undefined}
+              className={`w-full flex items-center rounded-lg font-medium transition-all ${
+                isSidebarCollapsed 
+                  ? 'justify-center p-2.5 hover:bg-gray-100 dark:hover:bg-gray-850' 
+                  : 'gap-3 px-3 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-800'
+              } ${isSelected('/admin/expediente') ? 'bg-amber-600 text-white font-semibold hover:bg-amber-600 dark:hover:bg-amber-600' : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'}`}
             >
-              <FileDown size={18} /> Expediente
+              <FileDown size={isSidebarCollapsed ? 20 : 16} /> {!isSidebarCollapsed && <span>Expediente</span>}
             </button>
           )}
-
+ 
           {/* BOTÓN PROVEEDORES */}
           {hasModule('proveedores') && (
             <button
               onClick={() => router.push('/admin/proveedores')}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${isSelected('/admin/proveedores') ? 'bg-amber-600 text-white font-semibold' : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white'
-                }`}
+              title={isSidebarCollapsed ? "Proveedores" : undefined}
+              className={`w-full flex items-center rounded-lg font-medium transition-all ${
+                isSidebarCollapsed 
+                  ? 'justify-center p-2.5 hover:bg-gray-100 dark:hover:bg-gray-850' 
+                  : 'gap-3 px-3 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-800'
+              } ${isSelected('/admin/proveedores') ? 'bg-amber-600 text-white font-semibold hover:bg-amber-600 dark:hover:bg-amber-600' : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'}`}
             >
-              <Truck size={18} /> Proveedores
+              <Truck size={isSidebarCollapsed ? 20 : 16} /> {!isSidebarCollapsed && <span>Proveedores</span>}
             </button>
           )}
-
+ 
           {/* BOTÓN STAFF & PERSONAL */}
           {hasModule('personal') && (
             <>
               <button
                 onClick={() => router.push('/admin/staff')}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${isSelected('/admin/staff') ? 'bg-amber-600 text-white font-semibold' : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white'
-                  }`}
+                title={isSidebarCollapsed ? "Personal" : undefined}
+                className={`w-full flex items-center rounded-lg font-medium transition-all ${
+                  isSidebarCollapsed 
+                    ? 'justify-center p-2.5 hover:bg-gray-100 dark:hover:bg-gray-850' 
+                    : 'gap-3 px-3 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-800'
+                } ${isSelected('/admin/staff') ? 'bg-amber-600 text-white font-semibold hover:bg-amber-600 dark:hover:bg-amber-600' : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'}`}
               >
-                <Users size={18} /> Personal
+                <Users size={isSidebarCollapsed ? 20 : 16} /> {!isSidebarCollapsed && <span>Personal</span>}
               </button>
-
+ 
               <button
                 onClick={() => router.push('/admin/asistencia')}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${isSelected('/admin/asistencia') ? 'bg-amber-600 text-white font-semibold' : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white'
-                  }`}
+                title={isSidebarCollapsed ? "Asistencia y Nóminas" : undefined}
+                className={`w-full flex items-center rounded-lg font-medium transition-all ${
+                  isSidebarCollapsed 
+                    ? 'justify-center p-2.5 hover:bg-gray-100 dark:hover:bg-gray-850' 
+                    : 'gap-3 px-3 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-800'
+                } ${isSelected('/admin/asistencia') ? 'bg-amber-600 text-white font-semibold hover:bg-amber-600 dark:hover:bg-amber-600' : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'}`}
               >
-                <Clock size={18} /> Asistencia y Nóminas
+                <Clock size={isSidebarCollapsed ? 20 : 16} /> {!isSidebarCollapsed && <span>Asistencia y Nóminas</span>}
               </button>
             </>
           )}
-
+ 
           {/* BOTÓN CONFIGURACIÓN */}
           {hasModule('configuracion') && (
             <button
               onClick={() => router.push('/admin/configuracion')}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${isSelected('/admin/configuracion') ? 'bg-amber-600 text-white font-semibold' : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white'
-                }`}
+              title={isSidebarCollapsed ? "Configuración" : undefined}
+              className={`w-full flex items-center rounded-lg font-medium transition-all ${
+                isSidebarCollapsed 
+                  ? 'justify-center p-2.5 hover:bg-gray-100 dark:hover:bg-gray-850' 
+                  : 'gap-3 px-3 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-800'
+              } ${isSelected('/admin/configuracion') ? 'bg-amber-600 text-white font-semibold hover:bg-amber-600 dark:hover:bg-amber-600' : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'}`}
             >
-              <Settings size={18} /> Configuración
+              <Settings size={isSidebarCollapsed ? 20 : 16} /> {!isSidebarCollapsed && <span>Configuración</span>}
             </button>
           )}
-
         </nav>
-
-
+ 
         {/* SECCIÓN USUARIO Y LOGOUT AL INFERIOR */}
         {usuarioEmail && (
-          <div className="mt-auto p-4 border-t border-gray-200 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-900/30 flex items-center justify-between gap-3 font-sans">
-            <div className="min-w-0">
-              <p className="text-xs font-bold text-gray-800 dark:text-gray-200 truncate" title={usuarioEmail}>
-                {usuarioEmail}
-              </p>
-              <p className="text-[10px] text-gray-400 uppercase tracking-wider font-semibold">
-                {esSuperusuario ? 'Superusuario' : 'Staff Operador'}
-              </p>
-            </div>
+          <div className={`mt-auto border-t border-gray-200 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-900/30 flex items-center font-sans ${isSidebarCollapsed ? 'justify-center p-3' : 'justify-between p-4 gap-3'}`}>
+            {!isSidebarCollapsed && (
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-bold text-gray-800 dark:text-gray-200 truncate" title={usuarioEmail}>
+                  {usuarioEmail}
+                </p>
+                <p className="text-[10px] text-gray-400 uppercase tracking-wider font-semibold">
+                  {esSuperusuario ? 'Superusuario' : 'Staff Operador'}
+                </p>
+              </div>
+            )}
             <button
               onClick={async () => {
                 if (confirm('¿Deseas cerrar sesión?')) {

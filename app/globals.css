@@ -14,6 +14,14 @@
   --bg-white: #ffffff;
 }
 
+.dark {
+  --text-primary: #f3f4f6;
+  --text-secondary: #9ca3af;
+  --border: #374151;
+  --bg-light: #1f2937;
+  --bg-white: #0f172a;
+}
+
 * {
   @apply box-border;
 }
@@ -23,7 +31,7 @@ html {
 }
 
 body {
-  @apply bg-white text-[--text-primary] font-sans;
+  @apply bg-[--bg-white] text-[--text-primary] font-sans;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
     'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
     sans-serif;
@@ -34,6 +42,7 @@ input, textarea, select {
   @apply bg-[--bg-light] border border-[--border] rounded-lg px-4 py-2.5 text-[--text-primary] placeholder-[--text-secondary] transition-all;
   @apply focus:outline-none focus:ring-2 focus:ring-[--primary] focus:ring-opacity-20 focus:border-[--primary];
 }
+
 
 /* Botones elegantes */
 button {
@@ -56,3 +65,46 @@ button {
 .title-h1 { @apply text-2xl font-bold; }
 .title-h2 { @apply text-2xl font-bold flex items-center gap-2; }
 .title-h3 { @apply text-xl font-semibold; }
+
+/* Estilos responsivos compactos para laptops de 14" (max-height: 800px y max-width: 1400px) */
+@media (max-height: 800px), (max-width: 1400px) {
+  .compact-container {
+    padding: 1.25rem !important; /* de p-8 a p-5 */
+  }
+  .compact-title {
+    font-size: 1.25rem !important; /* de text-2xl/3xl a text-xl */
+  }
+  .compact-kpi-grid {
+    gap: 0.75rem !important; /* de gap-6 a gap-3 */
+    margin-bottom: 0.75rem !important; /* de mb-6 a mb-3 */
+  }
+  .compact-kpi-card {
+    padding: 0.75rem 1rem !important; /* de p-5 a p-3/4 */
+    gap: 0.75rem !important;
+  }
+  .compact-kpi-icon {
+    padding: 0.5rem !important;
+  }
+  .compact-kpi-icon svg {
+    width: 1.125rem !important; /* size 18 */
+    height: 1.125rem !important;
+  }
+  .compact-kpi-value {
+    font-size: 1.125rem !important; /* de text-2xl a text-lg */
+  }
+  .compact-filter-bar {
+    padding: 0.75rem !important; /* de p-4 a p-3 */
+    margin-bottom: 0.75rem !important; /* de mb-6 a mb-3 */
+    gap: 0.75rem !important;
+  }
+  .compact-table-container {
+    margin-bottom: 0.75rem !important;
+  }
+  .compact-table-th-td {
+    padding: 0.5rem 0.75rem !important; /* celdas más compactas */
+  }
+  .compact-container table th,
+  .compact-container table td {
+    padding: 0.5rem 0.75rem !important;
+  }
+}

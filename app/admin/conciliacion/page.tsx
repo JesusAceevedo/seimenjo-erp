@@ -7,6 +7,9 @@ import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../../lib/supabase';
 import { useThemeMode } from '../../../lib/useThemeMode';
+import { usePeriod } from '../../../lib/hooks/usePeriod';
+import { useEmpresaId } from '../../../lib/hooks/useEmpresaId';
+import { useSessionToken } from '../../../lib/hooks/useSessionToken';
 import {
   obtenerSignedUrl,
 } from '../gastos/actions';
@@ -35,6 +38,7 @@ import {
   Calendar, ArrowRightLeft, Landmark
 } from 'lucide-react';
 import BancoTab from '../gastos/_components/BancoTab';
+import PeriodSelector from '../_components/PeriodSelector';
 
 export const dynamic = 'force-dynamic';
 
@@ -51,63 +55,9 @@ export default function BankReconciliationModule() {
     }).format(num);
   };
 
-  const getSessionToken = async (): Promise<string> => {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (session?.access_token) return session.access_token;
-
-    try {
-      const urlPart = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-      const projectId = urlPart.includes('//') ? (urlPart.split('//')[1]?.split('.')[0] || 'ioxfhgmeapwyfrgvtyjd') : 'ioxfhgmeapwyfrgvtyjd';
-      const supabaseSessionKey = `sb-${projectId}-auth-token`;
-      const localData = localStorage.getItem(supabaseSessionKey);
-      if (localData) {
-        const parsed = JSON.parse(localData);
-        if (parsed?.access_token) {
-          return parsed.access_token;
-        }
-      }
-    } catch (e) {
-      console.error('Error getting session token from localStorage:', e);
-    }
-    return '';
-  };
-
-  const getEmpresaId = async () => {
-    let empresaId = null;
-    const sessionData = localStorage.getItem('seimenjo_session');
-    if (sessionData) {
-      try {
-        const datosSesion = JSON.parse(sessionData);
-        empresaId = datosSesion.empresa_id;
-      } catch (e) {}
-    }
-    if (!empresaId) {
-      const { data: { user } } = await supabase.auth.getUser();
-      empresaId = user?.user_metadata?.empresa_id;
-    }
-    return empresaId;
-  };
-
-  // --- FILTRO MENSUAL ---
-  const [selectedMonth, setSelectedMonth] = useState<string>(() => {
-    const d = new Date();
-    const yr = d.getFullYear();
-    const mo = String(d.getMonth() + 1).padStart(2, '0');
-    return `${yr}-${mo}`;
-  });
-
-  const getMonthOptionsList = () => {
-    const options = [];
-    const d = new Date();
-    d.setMonth(d.getMonth() - 18);
-    for (let i = 0; i < 25; i++) {
-      const yr = d.getFullYear();
-      const mo = String(d.getMonth() + 1).padStart(2, '0');
-      options.push(`${yr}-${mo}`);
-      d.setMonth(d.getMonth() + 1);
-    }
-    return options.reverse(); // Newest first
-  };
+  const getSessionToken = useSessionToken();
+  const getEmpresaId = useEmpresaId();
+  const { selectedMonth, periodStatus, refreshPeriodStatus } = usePeriod();
 
   // --- ESTADOS DE CONCILIACIÓN BANCARIA ---
   const [movimientos, setMovimientos] = useState<any[]>([]);
@@ -992,27 +942,18 @@ export default function BankReconciliationModule() {
             <p className="text-sm text-gray-500 dark:text-gray-400 mt-1 font-sans">
               Asocia tus movimientos bancarios del estado de cuenta con facturas de gastos y ventas.
             </p>
+            {periodStatus !== 'abierto' && (
+              <div className={`mt-3 inline-block px-3 py-1.5 rounded-lg text-[10px] font-bold border ${
+                periodStatus === 'cerrado_definitivo'
+                  ? 'bg-red-50 text-red-700 border-red-200 dark:bg-red-950/30 dark:text-red-400 dark:border-red-900/50'
+                  : 'bg-yellow-50 text-yellow-700 border-yellow-200 dark:bg-yellow-950/30 dark:text-yellow-400 dark:border-yellow-900/50'
+              }`}>
+                Período {selectedMonth} — {periodStatus === 'cerrado_definitivo' ? 'Cerrado Definitivamente' : 'Cerrado'}
+              </div>
+            )}
           </div>
           <div className="flex items-center gap-3">
-            {/* MONTH SELECTOR */}
-            <div className="flex items-center gap-2 bg-white dark:bg-gray-950 px-3.5 py-2 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm">
-              <Calendar className="text-amber-500 w-4 h-4" />
-              <span className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider font-sans">Periodo:</span>
-              <select
-                value={selectedMonth}
-                onChange={(e) => {
-                  setSelectedMonth(e.target.value);
-                  setBancoPage(0);
-                }}
-                className="bg-transparent border-none text-xs font-bold text-gray-900 dark:text-white cursor-pointer outline-none focus:ring-0 p-0 font-sans"
-              >
-                {getMonthOptionsList().map(m => (
-                  <option key={m} value={m} className="bg-white dark:bg-gray-950 text-gray-900 dark:text-white">
-                    {new Date(m + '-02').toLocaleDateString('es-MX', { year: 'numeric', month: 'long', timeZone: 'UTC' })}
-                  </option>
-                ))}
-              </select>
-            </div>
+            <PeriodSelector onPeriodChange={() => { setBancoPage(0); refreshPeriodStatus(); }} />
 
             <button
               onClick={fetchData}

@@ -12,40 +12,9 @@ import {
   TrendingUp, TrendingDown, Scale, CreditCard, Calendar, Filter, Trash2, Pencil, Link as LinkIcon
 } from 'lucide-react';
 import { toggleMovimientoVisibilidad, conciliarGastoEfectivoAutomatico } from '../gastos/reconciliationActions';
+import { SAT_FORMAS_PAGO, getMetodoPagoLabel } from '../../../lib/constants/sat';
 
 export const dynamic = 'force-dynamic';
-
-const SAT_FORMAS_PAGO = [
-  { codigo: '01', nombre: 'Efectivo' },
-  { codigo: '02', nombre: 'Cheque nominativo' },
-  { codigo: '03', nombre: 'Transferencia electrónica' },
-  { codigo: '04', nombre: 'Tarjeta de crédito' },
-  { codigo: '05', nombre: 'Monedero electrónico' },
-  { codigo: '06', nombre: 'Dinero electrónico' },
-  { codigo: '08', nombre: 'Vales de despensa' },
-  { codigo: '12', nombre: 'Dación en pago' },
-  { codigo: '13', nombre: 'Pago por subrogación' },
-  { codigo: '14', nombre: 'Pago por consignación' },
-  { codigo: '15', nombre: 'Condonación' },
-  { codigo: '17', nombre: 'Compensación' },
-  { codigo: '23', nombre: 'Novación' },
-  { codigo: '24', nombre: 'Confusión' },
-  { codigo: '25', nombre: 'Remisión de deuda' },
-  { codigo: '26', nombre: 'Prescripción o caducidad' },
-  { codigo: '27', nombre: 'A satisfacción del acreedor' },
-  { codigo: '28', nombre: 'Tarjeta de débito' },
-  { codigo: '29', nombre: 'Tarjeta de servicios' },
-  { codigo: '30', nombre: 'Aplicación de anticipos' },
-  { codigo: '31', nombre: 'Intermediario pagos' },
-  { codigo: '99', nombre: 'Por definir' }
-];
-
-function getMetodoPagoLabel(codigo?: string | null): string {
-  if (!codigo) return 'Desconocido';
-  const cleanCode = codigo.trim().padStart(2, '0');
-  const found = SAT_FORMAS_PAGO.find(fp => fp.codigo === cleanCode);
-  return found ? `${found.codigo} - ${found.nombre}` : `${cleanCode} - Otro`;
-}
 
 interface Proveedor {
   id: string;
@@ -618,11 +587,11 @@ export default function AdminGastos() {
       <div className="bg-gray-50 dark:bg-gray-900 h-full text-gray-900 dark:text-gray-100 transition-colors flex overflow-hidden">
 
         {/* ÁREA PRINCIPAL */}
-        <main className="flex-1 flex flex-col p-8 w-full max-w-[100vw] md:max-w-[calc(100vw-16rem)] mx-auto overflow-hidden h-full">
+        <main className="flex-1 flex flex-col p-8 w-full min-w-0 mx-auto overflow-hidden h-full compact-container">
 
           {/* HEADER */}
-          <div className="mb-6 flex justify-between items-start md:items-center flex-col md:flex-row gap-4">
-            <h2 className="text-2xl font-bold flex items-center gap-2">
+          <div className="mb-6 flex justify-between items-start md:items-center flex-col md:flex-row gap-4 compact-margin">
+            <h2 className="text-2xl font-bold flex items-center gap-2 compact-title">
               <Receipt className="text-blue-500" /> Registro de Egresos
             </h2>
             <div className="flex items-center gap-3">
@@ -646,48 +615,48 @@ export default function AdminGastos() {
           </div>
 
           {/* DASHBOARD KPIS */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-6 font-sans">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-6 font-sans compact-kpi-grid">
             {/* Ventas */}
-            <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-5 rounded-2xl shadow-lg flex items-center gap-4 hover:border-blue-500/30 transition-all">
-              <div className="p-3 bg-emerald-500/10 text-emerald-500 rounded-xl animate-pulse">
+            <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-5 rounded-2xl shadow-lg flex items-center gap-4 hover:border-blue-500/30 transition-all compact-kpi-card">
+              <div className="p-3 bg-emerald-500/10 text-emerald-500 rounded-xl animate-pulse compact-kpi-icon">
                 <TrendingUp size={24} />
               </div>
               <div className="flex-1 min-w-0">
                 <span className="text-xs text-gray-500 dark:text-gray-400 font-semibold uppercase tracking-wider block">Total Ventas (Ingresos)</span>
-                <span className="text-2xl font-black text-gray-900 dark:text-white block truncate">
+                <span className="text-2xl font-black text-gray-900 dark:text-white block truncate compact-kpi-value">
                   {isLoading ? '...' : formatCurrency(totalVentasPeriodo)}
                 </span>
               </div>
             </div>
 
             {/* Gastos */}
-            <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-5 rounded-2xl shadow-lg flex items-center gap-4 hover:border-blue-500/30 transition-all">
-              <div className="p-3 bg-red-500/10 text-red-500 rounded-xl">
+            <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-5 rounded-2xl shadow-lg flex items-center gap-4 hover:border-blue-500/30 transition-all compact-kpi-card">
+              <div className="p-3 bg-red-500/10 text-red-500 rounded-xl compact-kpi-icon">
                 <TrendingDown size={24} />
               </div>
               <div className="flex-1 min-w-0">
                 <span className="text-xs text-gray-500 dark:text-gray-400 font-semibold uppercase tracking-wider block">Total Gastos (Egresos)</span>
-                <span className="text-2xl font-black text-gray-900 dark:text-white block truncate">
+                <span className="text-2xl font-black text-gray-900 dark:text-white block truncate compact-kpi-value">
                   {isLoading ? '...' : formatCurrency(kpiGastos.total)}
                 </span>
               </div>
             </div>
 
             {/* Balance Neto */}
-            <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-5 rounded-2xl shadow-lg flex items-center gap-4 hover:border-blue-500/30 transition-all">
-              <div className={`p-3 rounded-xl ${kpiGastos.balance >= 0 ? 'bg-emerald-500/10 text-emerald-500' : 'bg-red-500/10 text-red-500'}`}>
+            <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-5 rounded-2xl shadow-lg flex items-center gap-4 hover:border-blue-500/30 transition-all compact-kpi-card">
+              <div className={`p-3 rounded-xl compact-kpi-icon ${kpiGastos.balance >= 0 ? 'bg-emerald-500/10 text-emerald-500' : 'bg-red-500/10 text-red-500'}`}>
                 <Scale size={24} />
               </div>
               <div className="flex-1 min-w-0">
                 <span className="text-xs text-gray-500 dark:text-gray-400 font-semibold uppercase tracking-wider block">Balance Neto</span>
-                <span className={`text-2xl font-black block truncate ${kpiGastos.balance >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
+                <span className={`text-2xl font-black block truncate compact-kpi-value ${kpiGastos.balance >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
                   {isLoading ? '...' : formatCurrency(kpiGastos.balance)}
                 </span>
               </div>
             </div>
 
             {/* Desglose por Método de Pago */}
-            <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-5 rounded-2xl shadow-lg flex flex-col justify-between hover:border-blue-500/30 transition-all min-h-[110px]">
+            <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-5 rounded-2xl shadow-lg flex flex-col justify-between hover:border-blue-500/30 transition-all min-h-[110px] compact-kpi-card">
               <div className="flex items-center gap-2 border-b border-gray-150 dark:border-gray-850 pb-1.5 mb-1.5">
                 <CreditCard size={16} className="text-blue-500" />
                 <span className="text-xs text-gray-500 dark:text-gray-400 font-bold uppercase tracking-wider">Egresos por Método</span>
@@ -710,7 +679,7 @@ export default function AdminGastos() {
           </div>
 
           {/* BUSCADOR Y FILTROS DE EGRESOS */}
-          <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-4 rounded-xl shadow-md mb-6 flex gap-4 items-center flex-wrap font-sans">
+          <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-4 rounded-xl shadow-md mb-6 flex gap-4 items-center flex-wrap font-sans compact-filter-bar">
             {/* Filtro Rango de Fechas */}
             <div className="flex items-center gap-2">
               <Calendar size={18} className="text-gray-400" />
@@ -802,12 +771,12 @@ export default function AdminGastos() {
               <table className="w-full text-left border-collapse min-w-[800px]">
                 <thead>
                   <tr className="bg-gray-50 dark:bg-gray-900/50 border-b border-gray-200 dark:border-gray-800 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase">
-                    <th className="p-4">Fecha</th>
-                    <th className="p-4">Proveedor / Local</th>
-                    <th className="p-4">Concepto / Categoría</th>
-                    <th className="p-4 text-center">Método</th>
-                    <th className="p-4 text-right">Monto</th>
-                    <th className="p-4 text-center">Acciones</th>
+                    <th className="p-4 compact-table-th-td">Fecha</th>
+                    <th className="p-4 compact-table-th-td">Proveedor / Local</th>
+                    <th className="p-4 compact-table-th-td">Concepto / Categoría</th>
+                    <th className="p-4 compact-table-th-td text-center">Método</th>
+                    <th className="p-4 compact-table-th-td text-right">Monto</th>
+                    <th className="p-4 compact-table-th-td text-center">Acciones</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100 dark:divide-gray-800/50 text-xs">
@@ -819,7 +788,7 @@ export default function AdminGastos() {
                     return (
                       <React.Fragment key={g.id}>
                         <tr className="hover:bg-gray-50 dark:hover:bg-gray-800/20 transition-colors">
-                          <td className="p-4 font-mono text-gray-600 dark:text-gray-300">
+                          <td className="p-4 compact-table-th-td font-mono text-gray-600 dark:text-gray-300">
                             <div className="flex items-center gap-1.5">
                               {hasHijos && (
                                 <button
@@ -838,11 +807,11 @@ export default function AdminGastos() {
                               </span>
                             </div>
                           </td>
-                          <td className="p-4">
+                          <td className="p-4 compact-table-th-td">
                             <div className="font-bold text-sm text-gray-800 dark:text-gray-200">{g.proveedores?.nombre_comercial || 'Gasto Sin Proveedor'}</div>
                             <div className="font-mono text-[10px] text-gray-500">{g.proveedores?.rfc || 'Sin RFC'}</div>
                           </td>
-                          <td className="p-4 space-y-1">
+                          <td className="p-4 compact-table-th-td space-y-1">
                             <div className="font-medium text-sm">{g.concepto || 'Sin descripción'}</div>
                             <div className="flex gap-1.5 flex-wrap items-center mt-1">
                               <select
@@ -865,16 +834,16 @@ export default function AdminGastos() {
                               )}
                             </div>
                           </td>
-                          <td className="p-4 text-center">
+                          <td className="p-4 compact-table-th-td text-center">
                             <select
                               value={g.metodo_pago || ''}
                               onChange={(e) => {
-                                if (e.target.value === 'VER_TODOS') {
-                                  setVerTodos(true);
-                                  return;
-                                }
-                                handleUpdateMetodoPago(g.id, e.target.value || null);
-                              }}
+                                  if (e.target.value === 'VER_TODOS') {
+                                    setVerTodos(true);
+                                    return;
+                                  }
+                                  handleUpdateMetodoPago(g.id, e.target.value || null);
+                                }}
                               className="px-2 py-1 bg-gray-50 dark:bg-gray-800 rounded-md text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-700 text-xs outline-none cursor-pointer text-center"
                             >
                               <option value="">Desconocido</option>
@@ -898,10 +867,10 @@ export default function AdminGastos() {
                               )}
                             </select>
                           </td>
-                          <td className="p-4 text-right font-bold text-sm text-red-600 dark:text-red-400">
+                          <td className="p-4 compact-table-th-td text-right font-bold text-sm text-red-600 dark:text-red-400">
                             - {formatCurrency(g.monto)}
                           </td>
-                          <td className="p-4 text-center">
+                          <td className="p-4 compact-table-th-td text-center">
                             <div className="flex justify-center items-center gap-2">
                               <button
                                 onClick={() => setAssociationModal({
@@ -949,17 +918,17 @@ export default function AdminGastos() {
                         {hasHijos && isExpanded && hijos.map(h => (
                           <tr key={h.id} className="bg-indigo-50/10 dark:bg-indigo-950/5 border-l-4 border-indigo-400 dark:border-indigo-600 transition-colors">
                             {/* Fecha */}
-                            <td className="p-4 pl-8 font-mono text-gray-500 dark:text-gray-400 whitespace-nowrap">
+                            <td className="p-4 compact-table-th-td pl-8 font-mono text-gray-500 dark:text-gray-400 whitespace-nowrap">
                               {new Date(h.fecha_gasto).toLocaleDateString('es-MX', { timeZone: 'UTC' })}
                             </td>
 
                             {/* Proveedor */}
-                            <td className="p-4 text-gray-550 dark:text-gray-450 font-bold">
+                            <td className="p-4 compact-table-th-td text-gray-550 dark:text-gray-455 font-bold">
                               {h.proveedores?.nombre_comercial || 'Gasto Sin Proveedor'}
                             </td>
 
                             {/* Concepto / Categoría */}
-                            <td className="p-4 space-y-1">
+                            <td className="p-4 compact-table-th-td space-y-1">
                               <div className="font-medium text-gray-800 dark:text-gray-200">{h.concepto || 'Sin descripción'}</div>
                               <div className="flex gap-1.5 items-center mt-1">
                                 <span className="inline-block px-1.5 py-0.5 rounded text-[9px] font-semibold bg-indigo-100/60 dark:bg-indigo-900/30 text-indigo-750 dark:text-indigo-400">
@@ -972,17 +941,17 @@ export default function AdminGastos() {
                             </td>
 
                             {/* Método de pago */}
-                            <td className="p-4 text-center text-gray-600 dark:text-gray-400">
+                            <td className="p-4 compact-table-th-td text-center text-gray-600 dark:text-gray-400">
                               {getMetodoPagoLabel(h.metodo_pago)}
                             </td>
 
                             {/* Monto */}
-                            <td className="p-4 text-right font-semibold text-gray-600 dark:text-gray-400 text-xs">
+                            <td className="p-4 compact-table-th-td text-right font-semibold text-gray-600 dark:text-gray-400 text-xs">
                               - {formatCurrency(h.monto)}
                             </td>
 
                             {/* Acciones del hijo */}
-                            <td className="p-4 text-center">
+                            <td className="p-4 compact-table-th-td text-center">
                               <div className="flex justify-center items-center gap-2">
                                 <button
                                   onClick={() => setAssociationModal({

@@ -6,41 +6,10 @@
 import React, { useState, useMemo } from 'react';
 import { UploadCloud, Plus, FileCode, FileText, CreditCard, Mail, Search, ChevronLeft, ChevronRight, CheckCircle, Clock, Eye, Edit3, Trash2 } from 'lucide-react';
 import { formatCurrency } from '../../../../lib/formatters';
+import { getMetodoPagoLabel } from '../../../../lib/constants/sat';
 import CargaXmlMasivaModal from './CargaXmlMasivaModal';
 import CargaManualModal from './CargaManualModal';
 import type { VentaFacturada } from '../../types';
-
-const SAT_FORMAS_PAGO_DESC: Record<string, string> = {
-  '01': 'Efectivo',
-  '02': 'Cheque nominativo',
-  '03': 'Transferencia electrónica',
-  '04': 'Tarjeta de crédito',
-  '05': 'Monedero electrónico',
-  '06': 'Dinero electrónico',
-  '08': 'Vales de despensa',
-  '12': 'Dación en pago',
-  '13': 'Pago por subrogación',
-  '14': 'Pago por consignación',
-  '15': 'Condonación',
-  '17': 'Compensación',
-  '23': 'Novación',
-  '24': 'Confusión',
-  '25': 'Remisión de deuda',
-  '26': 'Prescripción o caducidad',
-  '27': 'A satisfacción del acreedor',
-  '28': 'Tarjeta de débito',
-  '29': 'Tarjeta de servicios',
-  '30': 'Aplicación de anticipos',
-  '31': 'Intermediario pagos',
-  '99': 'Por definir'
-};
-
-function getMetodoPagoDisplay(codigo?: string): string {
-  if (!codigo) return 'Desconocido';
-  const cleanCode = codigo.trim().padStart(2, '0');
-  const desc = SAT_FORMAS_PAGO_DESC[cleanCode];
-  return desc ? `${cleanCode} - ${desc}` : `${cleanCode} - Otro`;
-}
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 
@@ -501,7 +470,7 @@ export default function IngresosTab({
                   <td className="p-3">
                     {(v as any).metodo_pago ? (
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400">
-                        <CreditCard size={9} /> {getMetodoPagoDisplay((v as any).metodo_pago)}
+                        <CreditCard size={9} /> {getMetodoPagoLabel((v as any).metodo_pago)}
                       </span>
                     ) : (
                       <span className="text-[10px] text-gray-400 italic">—</span>

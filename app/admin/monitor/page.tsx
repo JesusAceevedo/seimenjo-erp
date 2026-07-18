@@ -10,38 +10,7 @@ import { useThemeMode } from '../../../lib/useThemeMode';
 import { enviarFacturaPorCorreo } from '../gastos/actions';
 import { eliminarDetallesPedido } from './actions';
 import { Pedido, Cliente, ProductoVariante, Repartidor, FormaPago, PrecioEspecialMap, DetallePedido } from '../types';
-
-const SAT_FORMAS_PAGO = [
-  { codigo: '01', nombre: 'Efectivo' },
-  { codigo: '02', nombre: 'Cheque nominativo' },
-  { codigo: '03', nombre: 'Transferencia electrónica' },
-  { codigo: '04', nombre: 'Tarjeta de crédito' },
-  { codigo: '05', nombre: 'Monedero electrónico' },
-  { codigo: '06', nombre: 'Dinero electrónico' },
-  { codigo: '08', nombre: 'Vales de despensa' },
-  { codigo: '12', nombre: 'Dación en pago' },
-  { codigo: '13', nombre: 'Pago por subrogación' },
-  { codigo: '14', nombre: 'Pago por consignación' },
-  { codigo: '15', nombre: 'Condonación' },
-  { codigo: '17', nombre: 'Compensación' },
-  { codigo: '23', nombre: 'Novación' },
-  { codigo: '24', nombre: 'Confusión' },
-  { codigo: '25', nombre: 'Remisión de deuda' },
-  { codigo: '26', nombre: 'Prescripción o caducidad' },
-  { codigo: '27', nombre: 'A satisfacción del acreedor' },
-  { codigo: '28', nombre: 'Tarjeta de débito' },
-  { codigo: '29', nombre: 'Tarjeta de servicios' },
-  { codigo: '30', nombre: 'Aplicación de anticipos' },
-  { codigo: '31', nombre: 'Intermediario pagos' },
-  { codigo: '99', nombre: 'Por definir' }
-];
-
-function getMetodoPagoLabel(codigo?: string): string {
-  if (!codigo) return '—';
-  const cleanCode = codigo.trim().padStart(2, '0');
-  const found = SAT_FORMAS_PAGO.find(fp => fp.codigo === cleanCode);
-  return found ? `${found.codigo} - ${found.nombre}` : `${cleanCode} - Otro`;
-}
+import { SAT_FORMAS_PAGO, getMetodoPagoLabel } from '../../../lib/constants/sat';
 
 // --- ESTADOS INICIALES (Optimizados fuera del componente para no recrearlos en cada render) ---
 const getPedidoInicial = () => ({
@@ -709,11 +678,11 @@ export default function AdminMonitor() {
       <div className="bg-gray-50 dark:bg-gray-900 h-full text-gray-900 dark:text-gray-100 transition-colors flex overflow-hidden">
 
         {/* ÁREA PRINCIPAL */}
-        <main className="flex-1 flex flex-col p-8 w-full max-w-[100vw] md:max-w-[calc(100vw-16rem)] overflow-hidden h-full">
+        <main className="flex-1 flex flex-col p-8 w-full min-w-0 overflow-hidden h-full compact-container">
 
           {/* HEADER */}
-          <div className="mb-6 flex justify-between items-start md:items-center flex-col md:flex-row gap-4">
-            <h2 className="text-2xl font-bold flex items-center gap-2">Gestión Pedidos</h2>
+          <div className="mb-6 flex justify-between items-start md:items-center flex-col md:flex-row gap-4 compact-margin">
+            <h2 className="text-2xl font-bold flex items-center gap-2 compact-title">Gestión Pedidos</h2>
             <div className="flex items-center gap-3">
               <button onClick={toggleDarkMode} className="p-2 rounded-lg bg-gray-200 dark:bg-gray-800 text-gray-600 dark:text-amber-400 hover:bg-gray-300 dark:hover:bg-gray-700 transition-colors">
                 {isDarkMode ? <Sun size={20} /> : <Moon size={20} />}
@@ -725,38 +694,38 @@ export default function AdminMonitor() {
           </div>
 
           {/* DASHBOARD KPIS */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6 font-sans">
-            <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-5 rounded-2xl shadow-lg flex items-center gap-4 hover:border-amber-500/30 transition-all">
-              <div className="p-3 bg-emerald-500/10 text-emerald-500 rounded-xl">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6 font-sans compact-kpi-grid">
+            <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-5 rounded-2xl shadow-lg flex items-center gap-4 hover:border-amber-500/30 transition-all compact-kpi-card">
+              <div className="p-3 bg-emerald-500/10 text-emerald-500 rounded-xl compact-kpi-icon">
                 <DollarSign size={24} />
               </div>
               <div>
                 <span className="text-xs text-gray-500 dark:text-gray-400 font-semibold uppercase tracking-wider block">Total Ingresos</span>
-                <span className="text-2xl font-black text-gray-900 dark:text-white">
+                <span className="text-2xl font-black text-gray-900 dark:text-white compact-kpi-value">
                   ${kpiMetricas.totalIngresos.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                 </span>
               </div>
             </div>
 
-            <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-5 rounded-2xl shadow-lg flex items-center gap-4 hover:border-amber-500/30 transition-all">
-              <div className="p-3 bg-amber-500/10 text-amber-500 rounded-xl">
+            <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-5 rounded-2xl shadow-lg flex items-center gap-4 hover:border-amber-500/30 transition-all compact-kpi-card">
+              <div className="p-3 bg-amber-500/10 text-amber-500 rounded-xl compact-kpi-icon">
                 <Truck size={24} />
               </div>
               <div>
                 <span className="text-xs text-gray-500 dark:text-gray-400 font-semibold uppercase tracking-wider block">Órdenes Entregadas</span>
-                <span className="text-2xl font-black text-gray-900 dark:text-white">
+                <span className="text-2xl font-black text-gray-900 dark:text-white compact-kpi-value">
                   {kpiMetricas.entregadosCount} <span className="text-xs font-normal text-gray-400">pedidos</span>
                 </span>
               </div>
             </div>
 
-            <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-5 rounded-2xl shadow-lg flex items-center gap-4 hover:border-amber-500/30 transition-all">
-              <div className="p-3 bg-red-500/10 text-red-500 rounded-xl">
+            <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-5 rounded-2xl shadow-lg flex items-center gap-4 hover:border-amber-500/30 transition-all compact-kpi-card">
+              <div className="p-3 bg-red-500/10 text-red-500 rounded-xl compact-kpi-icon">
                 <ShoppingCart size={24} />
               </div>
               <div>
                 <span className="text-xs text-gray-500 dark:text-gray-400 font-semibold uppercase tracking-wider block">Cobros Pendientes</span>
-                <span className="text-2xl font-black text-gray-900 dark:text-white">
+                <span className="text-2xl font-black text-gray-900 dark:text-white compact-kpi-value">
                   {kpiMetricas.pendientesPagoCount} <span className="text-xs font-normal text-gray-400">pedidos</span>
                 </span>
               </div>
@@ -764,17 +733,17 @@ export default function AdminMonitor() {
           </div>
 
           {popupBlockerWarning && (
-            <div className="mb-6 p-4 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/50 rounded-xl text-amber-800 dark:text-amber-400 text-xs flex items-center justify-between gap-3 animate-in fade-in duration-300 font-sans">
+            <div className="mb-6 p-4 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/50 rounded-xl text-amber-800 dark:text-amber-400 text-xs flex items-center justify-between gap-3 animate-in fade-in duration-300 font-sans compact-margin">
               <div className="flex items-center gap-2">
                 <AlertTriangle size={16} />
                 <span><strong>Aviso de Impresión:</strong> Las ventanas emergentes están bloqueadas en tu navegador. Por favor habilítalas para esta página para poder imprimir tickets.</span>
               </div>
-              <button onClick={() => setPopupBlockerWarning(false)} className="text-amber-500 hover:text-amber-600 font-bold">Entendido</button>
+              <button onClick={() => setPopupBlockerWarning(false)} className="text-amber-500 hover:text-amber-600 font-bold font-sans">Entendido</button>
             </div>
           )}
 
           {/* FILTROS */}
-          <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-4 rounded-xl shadow-md mb-6 flex gap-4 items-center flex-wrap">
+          <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-4 rounded-xl shadow-md mb-6 flex gap-4 items-center flex-wrap compact-filter-bar">
             <Filter size={18} className="text-gray-400" />
             <select className="border border-gray-200 dark:border-gray-800 p-2 rounded-lg text-sm bg-gray-50 dark:bg-gray-900 outline-none text-gray-900 dark:text-white" onChange={(e) => setFiltroRango(e.target.value)}>
               <option value="todo">Todos los pedidos</option>

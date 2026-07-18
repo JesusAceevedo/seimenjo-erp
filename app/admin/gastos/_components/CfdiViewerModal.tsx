@@ -5,7 +5,7 @@ import { X, FileText, Download, Loader2 } from 'lucide-react';
 import { obtenerSignedUrl } from '../actions';
 import { supabase } from '../../../../lib/supabase';
 import { XMLParser } from 'fast-xml-parser';
-import { QRCodeSVG } from 'qrcode.react';
+import CfdiRepresentation from '../../_components/CfdiRepresentation';
 
 interface CfdiViewerModalProps {
   xmlUrl: string | null;
@@ -47,9 +47,17 @@ export default function CfdiViewerModal({ xmlUrl, onClose }: CfdiViewerModalProp
         const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: "" });
         const json = parser.parse(xmlText);
 
-        const comprobante = json["cfdi:Comprobante"];
+        let comprobante = null;
+        for (const key of Object.keys(json)) {
+          const cleanKey = key.includes(':') ? key.split(':')[1] : key;
+          if (cleanKey.toLowerCase() === 'comprobante') {
+            comprobante = json[key];
+            break;
+          }
+        }
+
         if (!comprobante) {
-          throw new Error('Estructura XML inválida (no es un comprobante CFDI válido).');
+          throw new Error('Estructura XML inválida (no es un comprobante CFDI válido o falta el nodo Comprobante).');
         }
 
         setCfdiData(comprobante);
@@ -90,120 +98,7 @@ export default function CfdiViewerModal({ xmlUrl, onClose }: CfdiViewerModalProp
 
     if (!cfdiData) return null;
 
-    const emisor = cfdiData["cfdi:Emisor"] || {};
-    const receptor = cfdiData["cfdi:Receptor"] || {};
-    const conceptosRaw = cfdiData["cfdi:Conceptos"]?.["cfdi:Concepto"];
-    const conceptos = Array.isArray(conceptosRaw) ? conceptosRaw : conceptosRaw ? [conceptosRaw] : [];
-    const timbre = cfdiData["cfdi:Complemento"]?.["tfd:TimbreFiscalDigital"] || {};
-
-    return (
-      <div id="cfdi-print-area" className="bg-white text-black p-8 border rounded-xl shadow-inner font-sans text-sm mx-auto max-w-3xl">
-        {/* HEADER */}
-        <div className="flex justify-between items-start border-b-2 border-gray-800 pb-4 mb-6">
-          <div>
-            <h1 className="text-2xl font-black uppercase tracking-wider">{emisor.Nombre || 'Emisor Desconocido'}</h1>
-            <p className="font-bold text-gray-600">RFC: {emisor.Rfc}</p>
-            <p className="text-gray-500 text-xs">Régimen Fiscal: {emisor.RegimenFiscal}</p>
-          </div>
-          <div className="text-right">
-            <h2 className="text-xl font-bold text-blue-800">FACTURA</h2>
-            <p className="text-gray-600 font-bold">Serie/Folio: <span className="text-black">{cfdiData.Serie || ''} {cfdiData.Folio || ''}</span></p>
-            <p className="text-gray-600 text-xs mt-1">Fecha: {cfdiData.Fecha}</p>
-            <p className="text-gray-600 text-xs mt-1">UUID: {timbre.UUID || 'N/A'}</p>
-          </div>
-        </div>
-
-        {/* CLIENTE INFO */}
-        <div className="bg-gray-50 p-4 rounded-lg border mb-6">
-          <h3 className="font-bold border-b pb-2 mb-2 uppercase text-xs text-gray-500">Receptor</h3>
-          <p className="font-bold text-lg">{receptor.Nombre || 'Receptor Desconocido'}</p>
-          <p className="text-gray-600">RFC: {receptor.Rfc}</p>
-          <p className="text-gray-600 text-xs">Uso CFDI: {receptor.UsoCFDI} | Domicilio Fiscal: {receptor.DomicilioFiscalReceptor}</p>
-        </div>
-
-        {/* CONCEPTOS */}
-        <table className="w-full text-left mb-6 text-sm border-collapse">
-          <thead>
-            <tr className="bg-gray-100 border-b-2 border-gray-300">
-              <th className="py-2 px-2 font-bold w-16">Cant</th>
-              <th className="py-2 px-2 font-bold w-20">Clave</th>
-              <th className="py-2 px-2 font-bold">Descripción</th>
-              <th className="py-2 px-2 font-bold text-right w-24">V. Unitario</th>
-              <th className="py-2 px-2 font-bold text-right w-24">Importe</th>
-            </tr>
-          </thead>
-          <tbody>
-            {conceptos.map((c: any, i: number) => (
-              <tr key={i} className="border-b border-gray-100">
-                <td className="py-2 px-2">{c.Cantidad}</td>
-                <td className="py-2 px-2 text-xs text-gray-500">{c.ClaveProdServ}</td>
-                <td className="py-2 px-2">{c.Descripcion}</td>
-                <td className="py-2 px-2 text-right">{formatCurrency(c.ValorUnitario)}</td>
-                <td className="py-2 px-2 text-right font-medium">{formatCurrency(c.Importe)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-
-        {/* TOTALES */}
-        <div className="flex justify-end mb-8">
-          <div className="w-64">
-            <div className="flex justify-between py-1 border-b">
-              <span className="font-bold text-gray-600">Subtotal:</span>
-              <span>{formatCurrency(cfdiData.SubTotal)}</span>
-            </div>
-            {/* Impuestos (Simplificado) */}
-            <div className="flex justify-between py-1 border-b">
-              <span className="font-bold text-gray-600">Impuestos:</span>
-              <span>{formatCurrency(Number(cfdiData.Total) - Number(cfdiData.SubTotal))}</span>
-            </div>
-            <div className="flex justify-between py-2 text-lg font-black text-blue-800">
-              <span>Total:</span>
-              <span>{formatCurrency(cfdiData.Total)}</span>
-            </div>
-          </div>
-        </div>
-
-        {/* METADATOS EXTRA Y TIMBRE FISCAL */}
-        <div className="bg-gray-50 p-3 rounded-lg border mb-6 text-xs text-gray-700">
-          <p><strong>Forma de Pago:</strong> {cfdiData.FormaPago || 'N/A'} | <strong>Método de Pago:</strong> {cfdiData.MetodoPago || 'N/A'} | <strong>Moneda:</strong> {cfdiData.Moneda || 'N/A'}</p>
-        </div>
-
-        <div className="border-t-2 border-gray-800 pt-4 mt-4">
-          <div className="grid grid-cols-1 sm:grid-cols-4 gap-6">
-            <div className="sm:col-span-1 flex justify-center items-start">
-              <QRCodeSVG 
-                value={`https://verificacfdi.facturaelectronica.sat.gob.mx/default.aspx?id=${timbre.UUID || ''}&re=${emisor.Rfc || ''}&rr=${receptor.Rfc || ''}&tt=${cfdiData.Total || ''}&fe=${cfdiData.Sello ? cfdiData.Sello.slice(-8) : ''}`} 
-                size={140} 
-                level={"M"} 
-              />
-            </div>
-            <div className="sm:col-span-3 text-[9px] text-gray-600 flex flex-col gap-2 break-all font-mono">
-              <div>
-                <p className="font-bold text-gray-900 mb-0.5">Sello Digital del Emisor (CFDI):</p>
-                <p>{cfdiData.Sello || 'No disponible'}</p>
-              </div>
-              <div>
-                <p className="font-bold text-gray-900 mb-0.5">Sello Digital del SAT:</p>
-                <p>{timbre.SelloSAT || 'No disponible'}</p>
-              </div>
-              <div>
-                <p className="font-bold text-gray-900 mb-0.5">Cadena Original del complemento de certificación digital del SAT:</p>
-                <p>{`||1.1|${timbre.UUID || ''}|${timbre.FechaTimbrado || ''}|${timbre.RfcProvCertif || ''}|${cfdiData.Sello || ''}|${timbre.NoCertificadoSAT || ''}||`}</p>
-              </div>
-              <div className="mt-2 text-gray-500 font-sans text-[10px]">
-                <p><strong>Folio Fiscal (UUID):</strong> {timbre.UUID}</p>
-                <p><strong>Fecha y Hora de Certificación:</strong> {timbre.FechaTimbrado}</p>
-                <p><strong>No. de Serie del Certificado del SAT:</strong> {timbre.NoCertificadoSAT}</p>
-                <p><strong>No. de Serie del Certificado del Emisor:</strong> {cfdiData.NoCertificado}</p>
-                <p><strong>RfcProvCertif:</strong> {timbre.RfcProvCertif || 'N/A'}</p>
-              </div>
-            </div>
-          </div>
-          <p className="text-center text-gray-400 text-xs mt-6 font-sans">Este documento es una representación impresa de un CFDI.</p>
-        </div>
-      </div>
-    );
+    return <CfdiRepresentation cfdiData={cfdiData} />;
   };
 
   return (

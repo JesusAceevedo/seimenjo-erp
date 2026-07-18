@@ -3,36 +3,31 @@ import { useEffect, useState } from 'react';
 const THEME_STORAGE_KEY = 'seimenjo-theme';
 
 export function useThemeMode(defaultMode = true) {
-  // Initializar el modo oscuro leyendo del almacenamiento o usando el valor por defecto
-  const initialMode = (() => {
-    if (typeof window !== 'undefined') {
-      const saved = window.localStorage.getItem(THEME_STORAGE_KEY);
-      if (saved === 'dark' || saved === 'light') {
-        return saved === 'dark';
-      }
-    }
-    return defaultMode;
-  })();
-  const [isDarkMode, setIsDarkMode] = useState(initialMode);
+  // Initialize with a default value to prevent hydration mismatches
+  const [isDarkMode, setIsDarkMode] = useState(defaultMode);
+  const [hasLoaded, setHasLoaded] = useState(false);
 
-  // Efecto solo para sincronizar la clase y el atributo de colorScheme con el estado
+  // Sync state with localStorage once mounted on client
   useEffect(() => {
-    if (typeof window === 'undefined') return;
+    const saved = window.localStorage.getItem(THEME_STORAGE_KEY);
+    if (saved === 'dark' || saved === 'light') {
+      setIsDarkMode(saved === 'dark');
+    }
+    setHasLoaded(true);
+  }, []);
+
+  // Sync className and style on documentElement when state changes
+  useEffect(() => {
+    if (!hasLoaded) return;
     document.documentElement.classList.toggle('dark', isDarkMode);
     document.documentElement.style.colorScheme = isDarkMode ? 'dark' : 'light';
-    // Guardamos la preferencia para futuras visitas
     window.localStorage.setItem(THEME_STORAGE_KEY, isDarkMode ? 'dark' : 'light');
-  }, [isDarkMode]);
+  }, [isDarkMode, hasLoaded]);
 
   const toggleDarkMode = () => {
-    const nextMode = !isDarkMode;
-    setIsDarkMode(nextMode);
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem(THEME_STORAGE_KEY, nextMode ? 'dark' : 'light');
-      document.documentElement.classList.toggle('dark', nextMode);
-      document.documentElement.style.colorScheme = nextMode ? 'dark' : 'light';
-    }
+    setIsDarkMode(prev => !prev);
   };
 
   return { isDarkMode, setIsDarkMode, toggleDarkMode };
 }
+

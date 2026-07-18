@@ -9,6 +9,9 @@ import {
 } from 'lucide-react';
 import DocumentViewer from '../_components/DocumentViewer';
 import Pagination from '../_components/Pagination';
+import PeriodSelector from '../_components/PeriodSelector';
+import { usePeriod } from '../../../lib/hooks/usePeriod';
+import { useEmpresaId } from '../../../lib/hooks/useEmpresaId';
 
 interface ExpedienteItem {
   id: string;
@@ -27,6 +30,9 @@ interface ExpedienteItem {
 }
 
 export default function ExpedienteDigital() {
+  const getEmpresaId = useEmpresaId();
+  const { selectedMonth, periodStatus, refreshPeriodStatus } = usePeriod();
+
   const [items, setItems] = useState<ExpedienteItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -64,26 +70,41 @@ export default function ExpedienteDigital() {
   const fetchData = async () => {
     setLoading(true);
     try {
+      const empresaId = await getEmpresaId();
+      if (!empresaId) return;
+
+      const periodStart = selectedMonth + '-01';
+      const year = parseInt(selectedMonth.substring(0, 4));
+      const month = parseInt(selectedMonth.substring(5, 7));
+      const lastDay = new Date(year, month, 0).getDate();
+      const periodEnd = selectedMonth + '-' + String(lastDay).padStart(2, '0');
+
       // 1. Fetch Gastos
       const { data: gastos } = await supabase
         .from('gastos')
         .select('id, fecha_gasto, concepto, monto, xml_url, pdf_url, ticket_url, uuid_fiscal, gasto_padre_id, soporte_reembolso_url, es_deducible, movimiento_bancario_id, proveedor_id, proveedores(nombre_comercial)')
-        .order('fecha_gasto', { ascending: false })
-        .limit(5000);
+        .eq('empresa_id', empresaId)
+        .gte('fecha_gasto', periodStart)
+        .lte('fecha_gasto', periodEnd)
+        .order('fecha_gasto', { ascending: false });
 
       // 2. Fetch Ingresos (Facturas)
       const { data: ingresos } = await supabase
         .from('facturas_clientes')
         .select('id, fecha_emision, serie_folio, total, xml_url, pdf_url, ticket_url, pedido_id, pedidos(movimiento_bancario_id), cliente_id, clientes(nombre_local)')
-        .order('fecha_emision', { ascending: false })
-        .limit(5000);
+        .eq('empresa_id', empresaId)
+        .gte('fecha_emision', periodStart)
+        .lte('fecha_emision', periodEnd)
+        .order('fecha_emision', { ascending: false });
 
       // 3. Fetch Movimientos Bancarios
       const { data: movimientos } = await supabase
         .from('movimientos_bancarios')
         .select('id, fecha, concepto, monto, xml_url, pdf_factura_url, pdf_ticket_url, soporte_reembolso_url, estatus_conciliacion_bancaria(clave), categorias_movimiento_bancario(requiere_comprobante)')
-        .order('fecha', { ascending: false })
-        .limit(5000);
+        .eq('empresa_id', empresaId)
+        .gte('fecha', periodStart)
+        .lte('fecha', periodEnd)
+        .order('fecha', { ascending: false });
 
       const allItems: ExpedienteItem[] = [];
 
@@ -264,7 +285,7 @@ export default function ExpedienteDigital() {
 
   useEffect(() => {
     fetchData();
-  }, []);
+  }, [selectedMonth]);
 
   const filteredItems = items.filter(item => {
     if (filterTipo !== 'todos' && item.tipo !== filterTipo) return false;
@@ -405,6 +426,16 @@ export default function ExpedienteDigital() {
           Auditoría de integridad documental para Gastos, Ingresos y Movimientos Bancarios.
         </p>
 
+        {periodStatus !== 'abierto' && (
+          <div className={`mt-4 p-3 rounded-xl border text-xs font-bold ${
+            periodStatus === 'cerrado_definitivo'
+              ? 'bg-red-50 text-red-700 border-red-200 dark:bg-red-950/30 dark:text-red-400 dark:border-red-900/50'
+              : 'bg-yellow-50 text-yellow-700 border-yellow-200 dark:bg-yellow-950/30 dark:text-yellow-400 dark:border-yellow-900/50'
+          }`}>
+            Período {selectedMonth} — {periodStatus === 'cerrado_definitivo' ? 'Cerrado Definitivamente (Solo Lectura)' : 'Cerrado (Periodo Bloqueado)'}
+          </div>
+        )}
+
         {/* Resumen de Semáforo */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-6">
           <div className="bg-white dark:bg-gray-950 p-4 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm flex items-center gap-4">
@@ -463,6 +494,7 @@ export default function ExpedienteDigital() {
             <option value="conciliados">Conciliados</option>
             <option value="sin_conciliar">Sin Conciliar</option>
           </select>
+          <PeriodSelector onPeriodChange={() => refreshPeriodStatus()} />
           <button onClick={fetchData} className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-bold transition-all flex items-center gap-2 shadow-md">
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> Actualizar
           </button>

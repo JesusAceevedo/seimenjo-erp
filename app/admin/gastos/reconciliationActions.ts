@@ -589,6 +589,11 @@ export async function autoConciliarMovimientos(token: string): Promise<{ success
           const disc = detectarDiscrepanciaPago(mov.concepto, bestMatch.metodo_pago);
           let targetStatusId = statusConciliado;
           
+          // Consolidar URLs para sincronización bidireccional
+          const xmlToSet = mov.xml_url || bestMatch.xml_url || null;
+          const pdfToSet = mov.pdf_factura_url || bestMatch.pdf_url || null;
+          const ticketToSet = mov.pdf_ticket_url || bestMatch.ticket_url || null;
+
           if (disc.tieneDiscrepancia) {
             targetStatusId = statusNoDeducible || statusConciliado;
             await supabaseAdmin
@@ -597,14 +602,23 @@ export async function autoConciliarMovimientos(token: string): Promise<{ success
                 movimiento_bancario_id: mov.id, 
                 estatus_facturado: true,
                 es_deducible: false,
-                comentarios: `[DISCREPANCIA FISCAL: ${disc.detalle}]${bestMatch.comentarios ? ' | ' + bestMatch.comentarios : ''}`.substring(0, 1000)
+                comentarios: `[DISCREPANCIA FISCAL: ${disc.detalle}]${bestMatch.comentarios ? ' | ' + bestMatch.comentarios : ''}`.substring(0, 1000),
+                ...(xmlToSet ? { xml_url: xmlToSet } : {}),
+                ...(pdfToSet ? { pdf_url: pdfToSet } : {}),
+                ...(ticketToSet ? { ticket_url: ticketToSet } : {})
               })
               .eq('id', bestMatch.id)
               .eq('empresa_id', empresaId);
           } else {
             await supabaseAdmin
               .from('gastos')
-              .update({ movimiento_bancario_id: mov.id, estatus_facturado: true })
+              .update({ 
+                movimiento_bancario_id: mov.id, 
+                estatus_facturado: true,
+                ...(xmlToSet ? { xml_url: xmlToSet } : {}),
+                ...(pdfToSet ? { pdf_url: pdfToSet } : {}),
+                ...(ticketToSet ? { ticket_url: ticketToSet } : {})
+              })
               .eq('id', bestMatch.id)
               .eq('empresa_id', empresaId);
           }
@@ -955,12 +969,20 @@ export async function guardarConciliacionManual(
 
     if (mov.tipo_movimiento === 'Retiro' && payload.gastosIds.length > 0) {
       const isNoDeducible = payload.estatusClave === 'no_deducible';
+
+      const xmlToSet = payload.xmlUrl || associatedXml || mov.xml_url || null;
+      const pdfToSet = payload.pdfFacturaUrl || associatedPdf || mov.pdf_factura_url || null;
+      const ticketToSet = payload.pdfTicketUrl || associatedTicket || mov.pdf_ticket_url || null;
+
       const { error: linkErr } = await supabaseAdmin
         .from('gastos')
         .update({ 
           movimiento_bancario_id: movimientoId, 
           estatus_facturado: true,
-          ...(isNoDeducible ? { es_deducible: false } : {})
+          ...(isNoDeducible ? { es_deducible: false } : {}),
+          ...(xmlToSet ? { xml_url: xmlToSet } : {}),
+          ...(pdfToSet ? { pdf_url: pdfToSet } : {}),
+          ...(ticketToSet ? { ticket_url: ticketToSet } : {})
         })
         .in('id', payload.gastosIds)
         .eq('empresa_id', empresaId);

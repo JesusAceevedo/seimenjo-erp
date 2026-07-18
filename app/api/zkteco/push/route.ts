@@ -38,7 +38,8 @@ export async function GET(request: NextRequest) {
   }
 
   // 2. Solicitud de Comandos pendientes del servidor al reloj
-  if (cmd === 'getrequest') {
+  const sourcePath = searchParams.get('source_path');
+  if (cmd === 'getrequest' || sourcePath === 'getrequest') {
     // Consultar comandos que no hayan sido procesados para esta empresa y este dispositivo (o genéricos)
     const { data: comandos, error } = await supabaseAdmin
       .from('zkteco_comandos')
@@ -77,9 +78,10 @@ export async function POST(request: NextRequest) {
   const { searchParams } = url;
   const sn = searchParams.get('SN');
   const table = searchParams.get('table');
+  const sourcePath = searchParams.get('source_path');
 
   // Si es confirmación de ejecución de comando (devicecmd)
-  if (url.pathname.includes('devicecmd')) {
+  if (url.pathname.includes('devicecmd') || sourcePath === 'devicecmd') {
     const rawBody = await request.text();
     console.log(`[ZKTeco ADMS] Recibida respuesta de comandos - SN: ${sn || 'N/A'}:\n${rawBody}`);
 
@@ -125,7 +127,15 @@ export async function POST(request: NextRequest) {
     // Formato típico de línea de ADMS:
     // USERID\tCHECKTIME\tVERIFYTYPE\tSTATUS\tWORKCODE\tRESERVED
     const lines = rawBody.split('\n');
-    const records = [];
+    const records: {
+      empresa_id: string;
+      zkteco_user_id: string;
+      dispositivo_sn: string;
+      timestamp: string;
+      tipo_evento: string;
+      metodo_verificacion: string;
+      procesado: boolean;
+    }[] = [];
 
     // Buscamos una empresa por defecto si es que no está especificado el SN en configuración.
     // En un sistema multiempresa real, se vincularía el SN del dispositivo a su empresa_id.
@@ -167,6 +177,9 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Mapa para llevar el conteo local de checadas en el mismo lote (para checadas en diferido)
+    const localPunchesTracker = new Map<string, number>();
+
     for (const line of lines) {
       const trimmed = line.trim();
       if (!trimmed) continue;
@@ -175,13 +188,7 @@ export async function POST(request: NextRequest) {
       if (parts.length >= 2) {
         const zkteco_user_id = parts[0];
         const timestampStr = parts[1]; // Formato: YYYY-MM-DD HH:mm:ss
-        const statusType = parts[3]; // Status de checada (0=entrada, 1=salida)
         
-        let tipo_evento = 'CHECKIN';
-        if (statusType === '1') tipo_evento = 'CHECKOUT';
-        else if (statusType === '2') tipo_evento = 'BREAK_OUT';
-        else if (statusType === '3') tipo_evento = 'BREAK_IN';
-
         let metodo_verificacion = 'OTHER';
         if (parts[2] === '15') metodo_verificacion = 'FACE';
         else if (parts[2] === '1') metodo_verificacion = 'FINGER';
@@ -198,6 +205,69 @@ export async function POST(request: NextRequest) {
             ? `${timestampStr.replace(' ', 'T')}${offset}` 
             : timestampStr;
           const timestamp = new Date(formattedStr).toISOString();
+
+          // 1. Evitar duplicados en un rango de 5 minutos (evita lecturas accidentales al pasar)
+          const checkTime = new Date(timestamp);
+          const fiveMinutesAgo = new Date(checkTime.getTime() - 5 * 60 * 1000).toISOString();
+          const fiveMinutesLater = new Date(checkTime.getTime() + 5 * 60 * 1000).toISOString();
+          
+          const { data: duplicatePunches } = await supabaseAdmin
+            .from('asistencia_checadas_raw')
+            .select('id')
+            .eq('zkteco_user_id', zkteco_user_id)
+            .gte('timestamp', fiveMinutesAgo)
+            .lte('timestamp', fiveMinutesLater)
+            .limit(1);
+
+          // También revisar si ya agregamos una checada duplicada en este lote en memoria
+          const hasLocalDuplicate = records.some(r => 
+            r.zkteco_user_id === zkteco_user_id && 
+            Math.abs(new Date(r.timestamp).getTime() - checkTime.getTime()) < 5 * 60 * 1000
+          );
+
+          if ((duplicatePunches && duplicatePunches.length > 0) || hasLocalDuplicate) {
+            console.log(`[ZKTeco ADMS] Checada duplicada omitida para PIN ${zkteco_user_id} a las ${timestamp}`);
+            continue;
+          }
+
+          // 2. Determinar tipo de evento usando el estatus enviado por el reloj si existe, o alternancia como fallback
+          let tipo_evento = 'CHECKIN';
+          const clockStatus = parts.length >= 4 ? parts[3].trim() : null;
+
+          if (clockStatus === '0' || clockStatus === '3' || clockStatus === '4') {
+            tipo_evento = 'CHECKIN';
+          } else if (clockStatus === '1' || clockStatus === '2' || clockStatus === '5') {
+            tipo_evento = 'CHECKOUT';
+          } else {
+            // Fallback a alternancia (primera checada del día = CHECKIN, segunda = CHECKOUT, etc.)
+            const dateStr = timestampStr.split(' ')[0]; // 'YYYY-MM-DD'
+            const trackerKey = `${zkteco_user_id}_${dateStr}`;
+            
+            let punchesCount = 0;
+            if (localPunchesTracker.has(trackerKey)) {
+              punchesCount = localPunchesTracker.get(trackerKey)!;
+            } else {
+              const startOfDay = `${dateStr}T00:00:00${offset}`;
+              const endOfDay = `${dateStr}T23:59:59${offset}`;
+
+              // Contar cuántas checadas ya tiene este usuario en el mismo día local en la BD
+              const { count } = await supabaseAdmin
+                .from('asistencia_checadas_raw')
+                .select('*', { count: 'exact', head: true })
+                .eq('zkteco_user_id', zkteco_user_id)
+                .gte('timestamp', new Date(startOfDay).toISOString())
+                .lte('timestamp', new Date(endOfDay).toISOString());
+
+              punchesCount = count || 0;
+            }
+
+            // Alternancia: Par es entrada (CHECKIN), impar es salida (CHECKOUT)
+            tipo_evento = punchesCount % 2 === 0 ? 'CHECKIN' : 'CHECKOUT';
+
+            // Incrementar el tracker para la siguiente checada de este usuario en el mismo día
+            localPunchesTracker.set(trackerKey, punchesCount + 1);
+          }
+
           records.push({
             empresa_id: recordEmpresaId,
             zkteco_user_id,

@@ -9,6 +9,7 @@ import { supabase } from '../../../lib/supabase';
 import { obtenerSignedUrl } from '../gastos/actions';
 import ProveedoresTab from '../_components/ProveedoresTab';
 import { useThemeMode } from '../../../lib/useThemeMode';
+import { useSessionToken } from '../../../lib/hooks/useSessionToken';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -35,26 +36,7 @@ export default function ProveedoresPage() {
     open: false, proveedor: null, loading: false, error: ''
   });
 
-  const getSessionToken = async (): Promise<string> => {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (session?.access_token) return session.access_token;
-
-    try {
-      const urlPart = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-      const projectId = urlPart.includes('//') ? (urlPart.split('//')[1]?.split('.')[0] || 'ioxfhgmeapwyfrgvtyjd') : 'ioxfhgmeapwyfrgvtyjd';
-      const supabaseSessionKey = `sb-${projectId}-auth-token`;
-      const localData = localStorage.getItem(supabaseSessionKey);
-      if (localData) {
-        const parsed = JSON.parse(localData);
-        if (parsed?.access_token) {
-          return parsed.access_token;
-        }
-      }
-    } catch (e) {
-      console.error('Error getting session token from localStorage:', e);
-    }
-    return '';
-  };
+  const getSessionToken = useSessionToken();
 
   // ── Fetch ──────────────────────────────────────────────────────────────────
 
