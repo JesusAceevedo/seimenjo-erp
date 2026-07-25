@@ -119,7 +119,7 @@ export default function BitacoraModal({ data, onClose, onSaved }: Props) {
                             if (hasLate) defaultType = 'justificacion_retardo';
                             else if (isIncomplete) defaultType = 'omision_salida';
                             
-                            setForm({ tipo_incidencia: defaultType, motivo: '', soporte: '' });
+                            setForm({ tipo_incidencia: defaultType, motivo: '', soporte: '', hora: '' });
                             setJustifyingDay(day);
                           }}
                           className="text-[9px] font-bold text-amber-600 hover:text-amber-500 bg-amber-500/10 px-2 py-1 rounded transition-colors"
