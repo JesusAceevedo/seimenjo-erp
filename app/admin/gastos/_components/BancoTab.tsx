@@ -2097,7 +2097,11 @@ export default function BancoTab({
                                       <Edit3 size={11} /> Editar
                                     </button>
                                     <button
-                                      onClick={() => handleRemoveComprobante(c.id)}
+                                      onClick={() => {
+                                        if (confirm('¿Estás seguro de eliminar este comprobante?')) {
+                                          onEliminarComprobante?.(c.id);
+                                        }
+                                      }}
                                       className="p-1 text-red-500 hover:bg-red-50 dark:hover:bg-red-955/20 rounded font-bold text-[10px]"
                                     >
                                       <Trash2 size={11} />
