@@ -2039,9 +2039,9 @@ export default function BancoTab({
                                   </div>
                                   {!isVentanilla && (
                                     <div className="mt-1 text-[9px] text-gray-400 font-mono space-y-0.5">
-                                      {c.monto_debito > 0 && <div>D: {formatCurrency(c.monto_debito)}</div>}
-                                      {c.monto_credito > 0 && <div>C: {formatCurrency(c.monto_credito)}</div>}
-                                      {c.monto_amex > 0 && <div>A: {formatCurrency(c.monto_amex)}</div>}
+                                      {(c.monto_debito ?? 0) > 0 && <div>D: {formatCurrency(c.monto_debito!)}</div>}
+                                      {(c.monto_credito ?? 0) > 0 && <div>C: {formatCurrency(c.monto_credito!)}</div>}
+                                      {(c.monto_amex ?? 0) > 0 && <div>A: {formatCurrency(c.monto_amex!)}</div>}
                                     </div>
                                   )}
                                 </td>
