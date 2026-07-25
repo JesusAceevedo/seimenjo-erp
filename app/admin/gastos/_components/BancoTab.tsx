@@ -2078,11 +2078,18 @@ export default function BancoTab({
                                           tipo: c.tipo,
                                           fecha: c.fecha,
                                           monto: String(c.monto || ''),
+                                          archivoUrl: c.archivo_url || '',
+                                          storageProvider: c.storage_provider || 'Supabase',
+                                          cuentaBancariaId: c.cuenta_bancaria_id || '',
+                                          descripcion: c.descripcion || '',
+                                          loading: false,
+                                          error: '',
                                           montoDebito: String(c.monto_debito || ''),
                                           montoCredito: String(c.monto_credito || ''),
+                                          propinaDebito: String(c.propina_debito || ''),
+                                          propinaCredito: String(c.propina_credito || ''),
                                           montoAmex: String(c.monto_amex || ''),
-                                          cuentaBancariaId: c.cuenta_bancaria_id || '',
-                                          descripcion: c.descripcion || ''
+                                          propinaAmex: String(c.propina_amex || '')
                                         });
                                       }}
                                       className="p-1 text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-955/20 rounded font-bold text-[10px] flex items-center gap-0.5"
