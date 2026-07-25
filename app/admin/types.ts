@@ -204,6 +204,7 @@ export interface GastoPendiente {
 
 export interface GastoReconciliable {
   id: string;
+  proveedor_id?: string | null;
   concepto: string;
   monto: number;
   fecha_gasto?: string;
