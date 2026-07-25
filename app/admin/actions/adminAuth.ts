@@ -402,3 +402,72 @@ export async function provisionarAdminEmpresa(params: {
   }
 }
 
+export async function actualizarUsuarioStaffAdmin(params: {
+  userId: string;
+  perfilId: string;
+  sucursalesPermitidas: string[];
+  empresasPermitidas: string[];
+}, token: string) {
+  const caller = await verifyStaffUser(token);
+  const supabaseAdmin = getAdminClient();
+
+  if (!caller.esSuperusuario) {
+    const { data: targetStaff } = await supabaseAdmin
+      .from('usuarios_staff')
+      .select('empresa_id')
+      .eq('id', params.userId)
+      .single();
+    if (!targetStaff || targetStaff.empresa_id !== caller.empresaId) {
+      throw new Error('Acceso denegado: No tienes permisos para editar a este usuario.');
+    }
+  }
+
+  try {
+    // 1. Actualizar el registro del usuario en la tabla public.usuarios_staff
+    const { error: dbError } = await supabaseAdmin
+      .from('usuarios_staff')
+      .update({
+        perfil_id: params.perfilId,
+        sucursales_permitidas: params.sucursalesPermitidas
+      })
+      .eq('id', params.userId);
+
+    if (dbError) throw dbError;
+
+    // 2. Actualizar metadatos en Supabase Auth
+    const { error: authError } = await supabaseAdmin.auth.admin.updateUserById(params.userId, {
+      user_metadata: {
+        perfil_id: params.perfilId
+      }
+    });
+    if (authError) console.error("Error actualizando metadata de Auth:", authError);
+
+    // 3. Actualizar pivotes de sucursales
+    await supabaseAdmin.from('sucursales_usuario_pivot').delete().eq('usuario_id', params.userId);
+    if (params.sucursalesPermitidas.length > 0) {
+      const pivots = params.sucursalesPermitidas.map((sucId) => ({
+        usuario_id: params.userId,
+        sucursal_id: sucId
+      }));
+      const { error: pivotError } = await supabaseAdmin.from('sucursales_usuario_pivot').insert(pivots);
+      if (pivotError) throw pivotError;
+    }
+
+    // 4. Actualizar pivotes de empresas
+    await supabaseAdmin.from('empresas_usuario_pivot').delete().eq('usuario_id', params.userId);
+    if (params.empresasPermitidas.length > 0) {
+      const pivots = params.empresasPermitidas.map((empId) => ({
+        usuario_id: params.userId,
+        empresa_id: empId
+      }));
+      const { error: pivotError } = await supabaseAdmin.from('empresas_usuario_pivot').insert(pivots);
+      if (pivotError) throw pivotError;
+    }
+
+    return { success: true };
+  } catch (err: any) {
+    console.error('Error en actualizarUsuarioStaffAdmin:', err);
+    return { success: false, error: err.message || 'Error desconocido' };
+  }
+}
+

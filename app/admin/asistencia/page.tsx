@@ -65,10 +65,10 @@ export default function AsistenciaNominasPage() {
 
   const tabs = [
     { id: 'monitoreo' as const, label: 'Dashboard', icon: Monitor },
+    { id: 'nomina' as const, label: 'Nómina y Propinas', icon: DollarSign },
     { id: 'empleados' as const, label: 'Expediente', icon: Users },
     { id: 'turnos' as const, label: 'Horarios', icon: Calendar },
     { id: 'incidencias' as const, label: 'Incidencias LFT', icon: AlertCircle },
-    { id: 'nomina' as const, label: 'Nómina', icon: DollarSign },
     { id: 'descansos' as const, label: 'Descansos', icon: Sun },
     { id: 'reloj' as const, label: 'Reloj ADMS', icon: Clock },
     { id: 'compliance' as const, label: 'Cumplimiento LFT', icon: Shield },
@@ -162,6 +162,9 @@ export default function AsistenciaNominasPage() {
                 puestos={puestos}
                 checadasRaw={checadasRaw}
                 empresaId={empresaId}
+                turnos={turnos}
+                horariosEmpleados={horariosEmpleados}
+                incidencias={incidencias}
               />
             )}
             {activeTab === 'descansos' && (

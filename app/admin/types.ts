@@ -69,7 +69,7 @@ export interface Pedido {
   estatus_pago?: string;
   metodo_pago?: string;
   pedido_detalles?: DetallePedido[];
-  created_at?: string;
+  creado_en?: string;
   comentarios?: string;
   comentarios_generales?: string;
   folio_factura?: string;
@@ -289,7 +289,7 @@ export interface ComprobanteDeposito {
   storage_provider?: 'Supabase' | 'GoogleDrive';
   cuenta_bancaria_id?: string | null;
   empresa_id?: string;
-  created_at?: string;
+  creado_en?: string;
   cuentas_bancarias?: CuentaBancaria | null;
   comprobantes_deposito_movimientos?: any[] | null;
   monto_debito?: number;

@@ -176,8 +176,10 @@ export async function importarMovimientosBancarios(
     referencia?: string;
   }[],
   token: string,
-  cuentaBancariaId?: string
-): Promise<{ success: boolean; count?: number; error?: string }> {
+  cuentaBancariaId?: string,
+  nombreArchivo: string = 'Estado_de_cuenta.xlsx',
+  cargaIdToReplace?: string
+): Promise<{ success: boolean; count?: number; cargaId?: string; error?: string }> {
   try {
     await ensureBasicStatuses();
     const { empresaId } = await getUserEmpresaId(token);
@@ -292,6 +294,63 @@ export async function importarMovimientosBancarios(
       };
     });
 
+    // Registrar o actualizar la carga_id
+    let totalDepositos = 0;
+    let totalRetiros = 0;
+    formattedMovements.forEach(m => {
+      totalDepositos += m.deposito || 0;
+      totalRetiros += m.retiro || 0;
+    });
+
+    let currentCargaId = cargaIdToReplace;
+
+    if (cargaIdToReplace) {
+      // Eliminar registros anteriores de la carga si estamos sustituyendo
+      const { data: oldMovs } = await supabaseAdmin
+        .from('movimientos_bancarios')
+        .select('id')
+        .eq('carga_id', cargaIdToReplace)
+        .eq('empresa_id', empresaId);
+
+      const oldIds = (oldMovs || []).map(m => m.id);
+      if (oldIds.length > 0) {
+        await supabaseAdmin.from('conciliaciones_bancarias').delete().in('movimiento_id', oldIds);
+        await supabaseAdmin.from('gastos').update({ movimiento_bancario_id: null }).in('movimiento_bancario_id', oldIds);
+        await supabaseAdmin.from('pedidos').update({ movimiento_bancario_id: null }).in('movimiento_bancario_id', oldIds);
+        await supabaseAdmin.from('movimientos_bancarios').delete().in('id', oldIds);
+      }
+
+      await supabaseAdmin
+        .from('cargas_estados_cuenta')
+        .update({
+          nombre_archivo: nombreArchivo,
+          fecha_carga: new Date().toISOString(),
+          cuenta_bancaria_id: cuentaBancariaId || null,
+          total_registros: formattedMovements.length,
+          total_depositos: totalDepositos,
+          total_retiros: totalRetiros
+        })
+        .eq('id', cargaIdToReplace);
+    } else {
+      const { data: newCarga } = await supabaseAdmin
+        .from('cargas_estados_cuenta')
+        .insert({
+          nombre_archivo: nombreArchivo,
+          fecha_carga: new Date().toISOString(),
+          cuenta_bancaria_id: cuentaBancariaId || null,
+          empresa_id: empresaId,
+          total_registros: formattedMovements.length,
+          total_depositos: totalDepositos,
+          total_retiros: totalRetiros
+        })
+        .select('id')
+        .maybeSingle();
+
+      if (newCarga) {
+        currentCargaId = newCarga.id;
+      }
+    }
+
     // Check for duplicates in the DB globally for this company (across all accounts)
     const { data: existingMovements, error: fetchErr } = await supabaseAdmin
       .from('movimientos_bancarios')
@@ -342,26 +401,31 @@ export async function importarMovimientosBancarios(
 
     // Filter to only new movements (matching based on occurrence counts)
     const addedKeyCounts: Record<string, number> = {};
-    const newMovements = formattedMovements.filter((m) => {
-      const key = makeKey({
-        fecha: m.fecha,
-        concepto: m.concepto,
-        monto: m.monto,
-        referencia: m.referencia,
-        cuenta_bancaria_id: m.cuenta_bancaria_id,
-      });
-      const dbCount = dbKeyCounts[key] || 0;
-      const addedCount = addedKeyCounts[key] || 0;
+    const newMovements = formattedMovements
+      .filter((m) => {
+        const key = makeKey({
+          fecha: m.fecha,
+          concepto: m.concepto,
+          monto: m.monto,
+          referencia: m.referencia,
+          cuenta_bancaria_id: m.cuenta_bancaria_id,
+        });
+        const dbCount = dbKeyCounts[key] || 0;
+        const addedCount = addedKeyCounts[key] || 0;
 
-      if (dbCount + addedCount < fileKeyCounts[key]) {
-        addedKeyCounts[key] = addedCount + 1;
-        return true;
-      }
-      return false;
-    });
+        if (dbCount + addedCount < fileKeyCounts[key]) {
+          addedKeyCounts[key] = addedCount + 1;
+          return true;
+        }
+        return false;
+      })
+      .map((m) => ({
+        ...m,
+        carga_id: currentCargaId || null
+      }));
 
     if (newMovements.length === 0) {
-      return { success: true, count: 0 };
+      return { success: true, count: 0, cargaId: currentCargaId };
     }
 
     const { data, error } = await supabaseAdmin
@@ -371,10 +435,157 @@ export async function importarMovimientosBancarios(
 
     if (error) throw error;
 
-    return { success: true, count: data?.length || 0 };
+    return { success: true, count: data?.length || 0, cargaId: currentCargaId };
   } catch (err: any) {
-    console.error('Error importing bank movements:', err);
     return { success: false, error: err.message || 'Error al importar movimientos' };
+  }
+}
+
+async function asociarMovimientosSinCarga(empresaId: string) {
+  try {
+    const { data: movsSinCarga, error: fetchErr } = await supabaseAdmin
+      .from('movimientos_bancarios')
+      .select('id, fecha, creado_en, retiro, deposito, cuenta_bancaria_id')
+      .eq('empresa_id', empresaId)
+      .is('carga_id', null);
+
+    if (fetchErr || !movsSinCarga || movsSinCarga.length === 0) return;
+
+    const grupos: { [key: string]: typeof movsSinCarga } = {};
+
+    for (const m of movsSinCarga) {
+      const fechaBase = m.creado_en ? new Date(m.creado_en).toISOString().substring(0, 10) : (m.fecha || 'Sin fecha');
+      const cuentaKey = m.cuenta_bancaria_id || 'sin_cuenta';
+      const groupKey = `${cuentaKey}_${fechaBase}`;
+
+      if (!grupos[groupKey]) {
+        grupos[groupKey] = [];
+      }
+      grupos[groupKey].push(m);
+    }
+
+    for (const key of Object.keys(grupos)) {
+      const list = grupos[key];
+      if (list.length === 0) continue;
+
+      const cuentaId = list[0].cuenta_bancaria_id || null;
+      const minDate = list[0].creado_en || new Date().toISOString();
+      const fechaStr = new Date(minDate).toISOString().substring(0, 10);
+
+      let totDep = 0;
+      let totRet = 0;
+      for (const item of list) {
+        totDep += Number(item.deposito || 0);
+        totRet += Number(item.retiro || 0);
+      }
+
+      const { data: newCarga, error: insertErr } = await supabaseAdmin
+        .from('cargas_estados_cuenta')
+        .insert({
+          empresa_id: empresaId,
+          cuenta_bancaria_id: cuentaId,
+          nombre_archivo: `Carga Existente (${fechaStr})`,
+          fecha_carga: minDate,
+          total_registros: list.length,
+          total_depositos: totDep,
+          total_retiros: totRet,
+          notas: 'Asociación automática de movimientos existentes en el sistema'
+        })
+        .select('id')
+        .single();
+
+      if (!insertErr && newCarga) {
+        const ids = list.map(item => item.id);
+        await supabaseAdmin
+          .from('movimientos_bancarios')
+          .update({ carga_id: newCarga.id })
+          .in('id', ids);
+      }
+    }
+  } catch (err) {
+    console.error('Error al asociar movimientos sin carga:', err);
+  }
+}
+
+export async function obtenerCargasEstadosCuenta(token: string) {
+  try {
+    const { empresaId } = await getUserEmpresaId(token);
+
+    // Auto-asociar movimientos previamente subidos que aún no tengan carga_id
+    await asociarMovimientosSinCarga(empresaId);
+
+    const { data, error } = await supabaseAdmin
+      .from('cargas_estados_cuenta')
+      .select('*, cuentas_bancarias(nombre, numero_cuenta)')
+      .eq('empresa_id', empresaId)
+      .order('fecha_carga', { ascending: false });
+
+    if (error) throw error;
+    return { success: true, data: data || [] };
+  } catch (err: any) {
+    return { success: false, error: err.message || 'Error al obtener historial de cargas' };
+  }
+}
+
+export async function obtenerMovimientosPorCarga(cargaId: string, token: string) {
+  try {
+    const { empresaId } = await getUserEmpresaId(token);
+    const { data, error } = await supabaseAdmin
+      .from('movimientos_bancarios')
+      .select('*, estatus_conciliacion_bancaria(nombre, color), cuentas_bancarias(nombre), categorias_movimiento_bancario(nombre)')
+      .eq('carga_id', cargaId)
+      .eq('empresa_id', empresaId)
+      .order('fecha', { ascending: false });
+
+    if (error) throw error;
+    return { success: true, data: data || [] };
+  } catch (err: any) {
+    return { success: false, error: err.message || 'Error al obtener movimientos de la carga' };
+  }
+}
+
+export async function eliminarCargaEstadoCuenta(cargaId: string, token: string) {
+  try {
+    const { empresaId } = await getUserEmpresaId(token);
+
+    const { data: movs, error: fetchErr } = await supabaseAdmin
+      .from('movimientos_bancarios')
+      .select('id')
+      .eq('carga_id', cargaId)
+      .eq('empresa_id', empresaId);
+
+    if (fetchErr) throw fetchErr;
+
+    const movIds = (movs || []).map(m => m.id);
+
+    if (movIds.length > 0) {
+      await supabaseAdmin
+        .from('conciliaciones_bancarias')
+        .delete()
+        .in('movimiento_id', movIds);
+
+      await supabaseAdmin
+        .from('gastos')
+        .update({ movimiento_bancario_id: null })
+        .in('movimiento_bancario_id', movIds);
+
+      await supabaseAdmin
+        .from('pedidos')
+        .update({ movimiento_bancario_id: null })
+        .in('movimiento_bancario_id', movIds);
+    }
+
+    const { error: deleteErr } = await supabaseAdmin
+      .from('cargas_estados_cuenta')
+      .delete()
+      .eq('id', cargaId)
+      .eq('empresa_id', empresaId);
+
+    if (deleteErr) throw deleteErr;
+
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err.message || 'Error al eliminar la carga de estado de cuenta' };
   }
 }
 
@@ -516,6 +727,19 @@ export async function autoConciliarMovimientos(token: string): Promise<{ success
     let matchedCount = 0;
 
     for (const mov of movements) {
+      // 1. SI EL MOVIMIENTO YA TIENE CONCILIACIÓN MANUAL REGISTRADA, NO TOCAR NUNCA
+      const { data: existingConcs } = await supabaseAdmin
+        .from('conciliaciones_bancarias')
+        .select('id')
+        .eq('movimiento_id', mov.id)
+        .eq('empresa_id', empresaId)
+        .limit(1);
+
+      if (existingConcs && existingConcs.length > 0) {
+        // Ignorar movimientos que fueron concilidados manualmente
+        continue;
+      }
+
       const isCash = esMovimientoEfectivo(mov.concepto);
       const isRetiro = mov.tipo_movimiento === 'Retiro';
       const absMonto = Math.abs(mov.monto);
@@ -583,9 +807,9 @@ export async function autoConciliarMovimientos(token: string): Promise<{ success
             return Math.abs(dateA - mDateTime) - Math.abs(dateB - mDateTime);
           });
 
-        const bestMatch = matches[0];
-
-        if (bestMatch) {
+        // REGLA: SI HAY MÁS DE 1 COINCIDENCIA, HAY MARGEN DE ERROR / AMBIGÜEDAD -> MANDAR A ASIGNACIÓN MANUAL
+        if (matches.length === 1) {
+          const bestMatch = matches[0];
           const disc = detectarDiscrepanciaPago(mov.concepto, bestMatch.metodo_pago);
           let targetStatusId = statusConciliado;
           
@@ -648,11 +872,14 @@ export async function autoConciliarMovimientos(token: string): Promise<{ success
           }
 
           matchedCount++;
+        } else if (matches.length > 1) {
+          // Existe ambigüedad (múltiples coincidencias) -> no auto-conciliar para evitar errores
+          console.log(`Auto-conciliación omitida para movimiento de retiro ${mov.id}: ${matches.length} coincidencias encontradas. Requiere revisión manual.`);
         } else {
           // Si no se encuentra coincidencia, cambiar estatus a "Movimiento no detectado" (statusNoDetectado)
           await supabaseAdmin
             .from('movimientos_bancarios')
-            .update({ estatus_conciliacion_id: statusNoDetectado || statusNoDeducible })
+            .update({ estatus_conciliacion_id: statusNoDetectado || statusPendiente })
             .eq('id', mov.id)
             .eq('empresa_id', empresaId);
         }
@@ -663,7 +890,7 @@ export async function autoConciliarMovimientos(token: string): Promise<{ success
             const sameAmount = Math.abs(Number(p.precio_total) - absMonto) < 0.05;
             if (!sameAmount) return false;
 
-            const pDate = parseDateOnly(p.fecha_pedido || p.created_at);
+            const pDate = parseDateOnly(p.fecha_pedido || p.creado_en);
             const mDate = parseDateOnly(mov.fecha);
             if (!pDate || !mDate) return false;
 
@@ -673,15 +900,16 @@ export async function autoConciliarMovimientos(token: string): Promise<{ success
             return validDate;
           })
           .sort((a, b) => {
-            const dateA = parseDateOnly(a.fecha_pedido || a.created_at)?.getTime() || 0;
-            const dateB = parseDateOnly(b.fecha_pedido || b.created_at)?.getTime() || 0;
+            const dateA = parseDateOnly(a.fecha_pedido || a.creado_en)?.getTime() || 0;
+            const dateB = parseDateOnly(b.fecha_pedido || b.creado_en)?.getTime() || 0;
             const mDateTime = parseDateOnly(mov.fecha)?.getTime() || 0;
             return Math.abs(dateA - mDateTime) - Math.abs(dateB - mDateTime);
           });
 
-        const bestMatch = matches[0];
+        // REGLA: SI HAY MÁS DE 1 COINCIDENCIA, HAY MARGEN DE ERROR / AMBIGÜEDAD -> MANDAR A ASIGNACIÓN MANUAL
+        if (matches.length === 1) {
+          const bestMatch = matches[0];
 
-        if (bestMatch) {
           await supabaseAdmin
             .from('pedidos')
             .update({ movimiento_bancario_id: mov.id, estatus_pago: 'Liquidado' })
@@ -720,11 +948,14 @@ export async function autoConciliarMovimientos(token: string): Promise<{ success
           }
 
           matchedCount++;
+        } else if (matches.length > 1) {
+          // Existe ambigüedad (múltiples pedidos con el mismo monto/fecha) -> dejar para asignación manual
+          console.log(`Auto-conciliación omitida para movimiento de depósito ${mov.id}: ${matches.length} pedidos candidatos encontrados. Requiere revisión manual.`);
         } else {
-          // Si no se encuentra coincidencia para depósito, cambiar estatus a "Movimiento no detectado" (statusNoDetectado)
+          // Si no se encuentra coincidencia para depósito, dejar como pendiente o no detectado
           await supabaseAdmin
             .from('movimientos_bancarios')
-            .update({ estatus_conciliacion_id: statusNoDetectado || statusNoDeducible })
+            .update({ estatus_conciliacion_id: statusNoDetectado || statusPendiente })
             .eq('id', mov.id)
             .eq('empresa_id', empresaId);
         }

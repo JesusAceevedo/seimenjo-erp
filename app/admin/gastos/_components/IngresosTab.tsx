@@ -4,12 +4,15 @@
 // Tab de Ingresos (Ventas) — con paginación, búsqueda, columnas enriquecidas.
 
 import React, { useState, useMemo } from 'react';
-import { UploadCloud, Plus, FileCode, FileText, CreditCard, Mail, Search, ChevronLeft, ChevronRight, CheckCircle, Clock, Eye, Edit3, Trash2 } from 'lucide-react';
+import { UploadCloud, Plus, FileCode, FileText, CreditCard, Mail, Search, ChevronLeft, ChevronRight, CheckCircle, Clock, Eye, Edit3, Trash2, Activity, Link as LinkIcon } from 'lucide-react';
 import { formatCurrency } from '../../../../lib/formatters';
 import { getMetodoPagoLabel } from '../../../../lib/constants/sat';
 import CargaXmlMasivaModal from './CargaXmlMasivaModal';
 import CargaManualModal from './CargaManualModal';
+import TrayectoriaPedidoModal from './TrayectoriaPedidoModal';
+import VincularXmlPedidoModal from './VincularXmlPedidoModal';
 import type { VentaFacturada } from '../../types';
+import { useCfdiViewer } from '../../_components/CfdiViewerContext';
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 
@@ -28,8 +31,27 @@ interface IngresosTabProps {
 
 const PAGE_SIZE_OPTIONS = [10, 20, 50];
 
-function EstatusFacturaBadge({ v }: { v: VentaFacturada }) {
-  const hasInvoice = v.facturas_clientes && v.facturas_clientes.length > 0;
+function getInvoiceForVenta(v: VentaFacturada, allVentas: VentaFacturada[]) {
+  if (v.facturas_clientes && v.facturas_clientes.length > 0) {
+    return v.facturas_clientes[0];
+  }
+  if (v.folio_factura) {
+    const folioClean = v.folio_factura.trim().toLowerCase();
+    for (const other of allVentas) {
+      if (other.facturas_clientes && other.facturas_clientes.length > 0) {
+        const found = other.facturas_clientes.find(f => 
+          (f.serie_folio && f.serie_folio.trim().toLowerCase() === folioClean) ||
+          (f.uuid_fiscal && f.uuid_fiscal.toLowerCase().includes(folioClean))
+        );
+        if (found) return found;
+      }
+    }
+  }
+  return null;
+}
+
+function EstatusFacturaBadge({ v, invoice }: { v: VentaFacturada; invoice?: any }) {
+  const hasInvoice = !!invoice || (v.facturas_clientes && v.facturas_clientes.length > 0) || !!v.folio_factura;
   if (hasInvoice) {
     return (
       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400">
@@ -63,9 +85,13 @@ export default function IngresosTab({
   onDeleteVenta,
   onRefresh,
 }: IngresosTabProps) {
+  const { openCfdi } = useCfdiViewer();
+  const handleViewCfdi = onViewCfdi || openCfdi;
 
   const [showXmlModal, setShowXmlModal] = useState(false);
   const [manualModal, setManualModal] = useState<{isOpen: boolean, id?: string}>({isOpen: false});
+  const [selectedTrayectoriaId, setSelectedTrayectoriaId] = useState<string | null>(null);
+  const [vincularModalPedidoId, setVincularModalPedidoId] = useState<string | null>(null);
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(PAGE_SIZE_OPTIONS[0]);
   const [search, setSearch] = useState('');
@@ -84,14 +110,13 @@ export default function IngresosTab({
   const filtrados = useMemo(() => {
     const q = search.toLowerCase();
     return ventasFacturadas.filter((v) => {
-      const invoice = v.facturas_clientes?.[0];
-      const totalAmount = v.facturas_clientes && v.facturas_clientes.length > 0
-        ? v.facturas_clientes.reduce((acc, f) => acc + (f.total || 0), 0)
-        : Number(v.precio_total || 0);
+      const invoice = getInvoiceForVenta(v, ventasFacturadas);
+      const totalAmount = Number(v.precio_total || 0);
 
       const matchSearch = !q || (
         (invoice?.uuid_fiscal?.toLowerCase().includes(q)) ||
         (invoice?.serie_folio?.toLowerCase().includes(q)) ||
+        (v.folio_factura?.toLowerCase().includes(q)) ||
         v.numero_pedido?.toString().includes(q) ||
         v.clientes?.nombre_local?.toLowerCase().includes(q) ||
         v.clientes?.rfc?.toLowerCase().includes(q) ||
@@ -105,7 +130,7 @@ export default function IngresosTab({
       if (!filtrosEstatus.sin_conciliar && !esConciliado) return false;
 
       // Estatus Factura
-      const hasInvoice = !!(v.facturas_clientes && v.facturas_clientes.length > 0);
+      const hasInvoice = !!invoice || (v.facturas_clientes && v.facturas_clientes.length > 0) || !!v.folio_factura;
       const esPendienteFacturar = !hasInvoice && v.estatus_pago === 'Liquidado';
       const esNoLiquidado = !hasInvoice && v.estatus_pago !== 'Liquidado';
 
@@ -144,17 +169,8 @@ export default function IngresosTab({
     };
 
     filtrados.forEach((v) => {
-      const totalAmount = v.facturas_clientes && v.facturas_clientes.length > 0
-        ? v.facturas_clientes.reduce((acc, f) => acc + (f.total || 0), 0)
-        : Number(v.precio_total || 0);
-
-      const ivaAmount = v.facturas_clientes && v.facturas_clientes.length > 0
-        ? v.facturas_clientes.reduce((acc, f) => {
-            if (Number(f.iva_trasladado) > 0) return acc + Number(f.iva_trasladado);
-            if (f.subtotal && Number(f.total) > Number(f.subtotal)) return acc + (Number(f.total) - Number(f.subtotal));
-            return acc + (Number(f.total) - (Number(f.total) / 1.16));
-          }, 0)
-        : (Number(v.precio_total || 0) * 0.16);
+      const totalAmount = Number(v.precio_total || 0);
+      const ivaAmount = totalAmount - (totalAmount / 1.16);
 
       totalMonto += totalAmount;
       totalIva += ivaAmount;
@@ -418,19 +434,14 @@ export default function IngresosTab({
           </thead>
           <tbody className="divide-y divide-gray-100 dark:divide-gray-800/50">
             {visible.map((v) => {
-              const invoice = v.facturas_clientes && v.facturas_clientes.length > 0 ? v.facturas_clientes[0] : null;
+              const invoice = getInvoiceForVenta(v, ventasFacturadas);
               const clientName = v.clientes?.nombre_local || v.cliente_nombre || 'Cliente Ocasional';
               const clientRfc = v.clientes?.rfc || 'S/N';
-              const totalAmount = v.facturas_clientes && v.facturas_clientes.length > 0
-                ? v.facturas_clientes.reduce((acc, f) => acc + (f.total || 0), 0)
-                : v.precio_total;
-              const ivaAmount = v.facturas_clientes && v.facturas_clientes.length > 0
-                ? v.facturas_clientes.reduce((acc, f) => {
-                    if (Number(f.iva_trasladado) > 0) return acc + Number(f.iva_trasladado);
-                    if (f.subtotal && Number(f.total) > Number(f.subtotal)) return acc + (Number(f.total) - Number(f.subtotal));
-                    return acc + (Number(f.total) - (Number(f.total) / 1.16));
-                  }, 0)
-                : (Number(v.precio_total) * 0.16);
+              const totalAmount = Number(v.precio_total || 0);
+              const ivaAmount = totalAmount - (totalAmount / 1.16);
+              const invoiceList = (v.facturas_clientes && v.facturas_clientes.length > 0)
+                ? v.facturas_clientes
+                : (invoice ? [invoice] : []);
 
               return (
                 <tr key={v.id} className="hover:bg-emerald-50/20 dark:hover:bg-emerald-950/10 transition-colors">
@@ -453,6 +464,15 @@ export default function IngresosTab({
                         </div>
                         <div className="text-[10px] text-gray-400 mt-0.5">
                           {invoice.serie_folio ? `Folio: ${invoice.serie_folio} · ` : ''}Pedido #{v.numero_pedido}
+                        </div>
+                      </div>
+                    ) : v.folio_factura ? (
+                      <div>
+                        <div className="text-gray-800 dark:text-gray-200 font-semibold">
+                          Folio: {v.folio_factura}
+                        </div>
+                        <div className="text-[10px] text-gray-400 mt-0.5">
+                          Pedido #{v.numero_pedido}
                         </div>
                       </div>
                     ) : (
@@ -479,22 +499,27 @@ export default function IngresosTab({
 
                   {/* Estatus facturación */}
                   <td className="p-3 text-center">
-                    <EstatusFacturaBadge v={v} />
+                    <EstatusFacturaBadge v={v} invoice={invoice} />
                   </td>
 
                   {/* Importe */}
                   <td className="p-3 text-right font-mono whitespace-nowrap">
                     <div className="font-bold text-emerald-600 dark:text-emerald-400 text-sm">+{formatCurrency(totalAmount)}</div>
                     <div className="text-[10px] text-gray-400 mt-0.5">IVA: {formatCurrency(ivaAmount)}</div>
+                    {invoice && invoice.total && Math.abs(Number(invoice.total) - totalAmount) > 0.01 && (
+                      <div className="text-[9px] font-sans text-amber-600 dark:text-amber-400 mt-0.5" title={`Factura XML por un total acumulado de ${formatCurrency(invoice.total)}`}>
+                        (XML total: {formatCurrency(invoice.total)})
+                      </div>
+                    )}
                   </td>
 
                   {/* Archivos */}
                   <td className="p-3">
-                    {v.facturas_clientes && v.facturas_clientes.length > 0 ? (
+                    {invoiceList.length > 0 ? (
                       <div className="flex flex-wrap gap-1 justify-center">
-                        {v.facturas_clientes.map((inv, idx) => (
+                        {invoiceList.map((inv, idx) => (
                           <div key={idx} className="flex gap-1 items-center">
-                            {v.facturas_clientes!.length > 1 && (
+                            {invoiceList.length > 1 && (
                               <span className="text-[9px] font-bold text-gray-400">#{idx + 1}</span>
                             )}
                             {inv.xml_url && inv.xml_url.split(',').filter(Boolean).map((url, si) => (
@@ -509,8 +534,8 @@ export default function IngresosTab({
                                 <FileText size={13} />
                               </button>
                             ))}
-                            {inv.xml_url && onViewCfdi && (
-                              <button onClick={() => onViewCfdi(inv.xml_url!.split(',')[0])} title="Ver XML"
+                            {inv.xml_url && handleViewCfdi && (
+                              <button onClick={() => handleViewCfdi(inv.xml_url!.split(',')[0])} title="Ver XML"
                                 className="p-1.5 bg-indigo-50 dark:bg-indigo-900/20 hover:bg-indigo-100 rounded border border-indigo-200 dark:border-indigo-900/50 text-indigo-500">
                                 <Eye size={13} />
                               </button>
@@ -527,11 +552,18 @@ export default function IngresosTab({
                     ) : (
                       <span className="text-[10px] text-gray-300 dark:text-gray-600 italic block text-center">—</span>
                     )}
-                    <div className="flex justify-center mt-1">
+                    <div className="flex justify-center gap-1 mt-1">
+                      <button 
+                        onClick={() => setVincularModalPedidoId(v.id)} 
+                        className="text-blue-600 hover:text-blue-800 bg-blue-50 dark:bg-blue-900/30 hover:bg-blue-100 dark:hover:bg-blue-900/50 p-1.5 rounded-lg transition-colors" 
+                        title="Vincular Factura XML de Carga Masiva"
+                      >
+                        <LinkIcon size={14} />
+                      </button>
                       <button 
                         onClick={() => setManualModal({isOpen: true, id: v.id})} 
-                        className="text-blue-500 hover:text-blue-700 bg-blue-50 dark:bg-blue-900/30 hover:bg-blue-100 dark:hover:bg-blue-900/50 p-1.5 rounded-lg transition-colors" 
-                        title="Añadir Documentos Faltantes"
+                        className="text-gray-600 hover:text-gray-800 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 p-1.5 rounded-lg transition-colors" 
+                        title="Añadir Documentos Faltantes (Manual)"
                       >
                         <Plus size={14} />
                       </button>
@@ -550,6 +582,13 @@ export default function IngresosTab({
                         </button>
                       ) : null}
                       <div className="flex gap-1 justify-center w-full mt-1">
+                        <button
+                          onClick={() => setSelectedTrayectoriaId(v.id)}
+                          title="Ver Trayectoria de Venta (Pedido ➔ XML ➔ Banco)"
+                          className="flex-1 flex justify-center items-center py-1 bg-purple-50 hover:bg-purple-100 dark:bg-purple-950/30 dark:hover:bg-purple-900/50 text-purple-600 dark:text-purple-400 rounded transition-colors"
+                        >
+                          <Activity size={12} />
+                        </button>
                         <button
                           onClick={() => onEditVenta(v)}
                           disabled={!!v.movimiento_bancario_id}
@@ -586,39 +625,52 @@ export default function IngresosTab({
       </div>
 
       {/* ── PAGINACIÓN ─────────────────────────────────────────────────────── */}
-      <div className="shrink-0 border-t border-gray-200 dark:border-gray-800 bg-gray-50/30 dark:bg-gray-900/20 px-4 py-2.5 flex items-center justify-between gap-3 flex-wrap">
-        <div className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
-          <span>Filas:</span>
+      <div className="p-3 border-t border-gray-200 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-900/30 flex items-center justify-between text-xs text-gray-500 dark:text-gray-400 shrink-0">
+        <div className="flex items-center gap-2">
+          <span>Mostrar</span>
           <select
             value={pageSize}
             onChange={(e) => { setPageSize(Number(e.target.value)); setPage(0); }}
-            className="bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-lg px-2 py-1 text-xs outline-none"
+            className="bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-lg px-2 py-1 outline-none text-gray-800 dark:text-gray-200"
           >
-            {PAGE_SIZE_OPTIONS.map(n => <option key={n} value={n}>{n}</option>)}
+            {PAGE_SIZE_OPTIONS.map(opt => (
+              <option key={opt} value={opt}>{opt}</option>
+            ))}
           </select>
-          <span>
-            {filtrados.length > 0
-              ? `${pagina * pageSize + 1}–${Math.min((pagina + 1) * pageSize, filtrados.length)} de ${filtrados.length}`
-              : '0 registros'}
-          </span>
+          <span>registros por página</span>
         </div>
+
         <div className="flex items-center gap-1">
-          <button onClick={() => setPage(0)} disabled={pagina === 0}
-            className="px-2 py-1 rounded-lg border border-gray-200 dark:border-gray-700 text-xs disabled:opacity-40 hover:bg-gray-100 dark:hover:bg-gray-800 font-bold text-gray-500">«</button>
-          <button onClick={() => setPage(p => Math.max(0, p - 1))} disabled={pagina === 0}
-            className="p-1.5 rounded-lg border border-gray-200 dark:border-gray-700 disabled:opacity-40 hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500">
+          <button
+            onClick={() => setPage(0)}
+            disabled={pagina === 0}
+            className="px-2 py-1 rounded-lg border border-gray-200 dark:border-gray-700 text-xs disabled:opacity-40 hover:bg-gray-100 dark:hover:bg-gray-800 font-bold text-gray-500"
+          >«</button>
+          <button
+            onClick={() => setPage(p => Math.max(0, p - 1))}
+            disabled={pagina === 0}
+            className="p-1 rounded-lg border border-gray-200 dark:border-gray-700 disabled:opacity-40 hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500"
+          >
             <ChevronLeft size={14} />
           </button>
-          <span className="px-3 text-xs font-semibold text-gray-700 dark:text-gray-300">{pagina + 1} / {totalPages}</span>
-          <button onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))} disabled={pagina >= totalPages - 1}
-            className="p-1.5 rounded-lg border border-gray-200 dark:border-gray-700 disabled:opacity-40 hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500">
+          <span className="px-2 font-mono text-gray-700 dark:text-gray-300">
+            Página {pagina + 1} de {totalPages}
+          </span>
+          <button
+            onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))}
+            disabled={pagina >= totalPages - 1}
+            className="p-1 rounded-lg border border-gray-200 dark:border-gray-700 disabled:opacity-40 hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500"
+          >
             <ChevronRight size={14} />
           </button>
-          <button onClick={() => setPage(totalPages - 1)} disabled={pagina >= totalPages - 1}
-            className="px-2 py-1 rounded-lg border border-gray-200 dark:border-gray-700 text-xs disabled:opacity-40 hover:bg-gray-100 dark:hover:bg-gray-800 font-bold text-gray-500">»</button>
+          <button
+            onClick={() => setPage(totalPages - 1)}
+            disabled={pagina >= totalPages - 1}
+            className="px-2 py-1 rounded-lg border border-gray-200 dark:border-gray-700 text-xs disabled:opacity-40 hover:bg-gray-100 dark:hover:bg-gray-800 font-bold text-gray-500"
+          >»</button>
         </div>
-      
-      
+      </div>
+
       {manualModal.isOpen && (
         <CargaManualModal
           tipo="venta"
@@ -644,7 +696,25 @@ export default function IngresosTab({
           }}
         />
       )}
-</div>
+      {vincularModalPedidoId && (
+        <VincularXmlPedidoModal
+          pedidoId={vincularModalPedidoId}
+          onClose={() => setVincularModalPedidoId(null)}
+          onSuccess={() => {
+            setVincularModalPedidoId(null);
+            if (onRefresh) onRefresh();
+          }}
+        />
+      )}
+      {selectedTrayectoriaId && (
+        <TrayectoriaPedidoModal
+          pedidoId={selectedTrayectoriaId}
+          onClose={() => setSelectedTrayectoriaId(null)}
+          onRefresh={() => {
+            if (onRefresh) onRefresh();
+          }}
+        />
+      )}
     </div>
   );
 }

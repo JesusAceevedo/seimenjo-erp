@@ -61,7 +61,7 @@ export default function VentasFacturadasModule() {
         .select('*, clientes(nombre_local, rfc, email_facturacion), facturas_clientes(*)')
         .eq('empresa_id', empresaId)
         .neq('estatus_pago', 'Cancelado')
-        .order('created_at', { ascending: false });
+        .order('creado_en', { ascending: false });
       setVentasFacturadas(vAll || []);
 
       // 2. Clientes para facturación acumulada

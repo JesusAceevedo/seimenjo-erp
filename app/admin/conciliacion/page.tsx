@@ -3,7 +3,7 @@
 /* eslint-disable react-hooks/exhaustive-deps */
 /* eslint-disable react/no-unescaped-entities */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../../lib/supabase';
 import { useThemeMode } from '../../../lib/useThemeMode';
@@ -35,7 +35,7 @@ import {
 import { ComprobanteDeposito } from '../types';
 import {
   RefreshCw, AlertTriangle, CheckCircle, Sun, Moon,
-  Calendar, ArrowRightLeft, Landmark
+  Calendar, ArrowRightLeft, Landmark, FileSpreadsheet
 } from 'lucide-react';
 import BancoTab from '../gastos/_components/BancoTab';
 import PeriodSelector from '../_components/PeriodSelector';
@@ -64,7 +64,7 @@ export default function BankReconciliationModule() {
   const [estatusCatalog, setEstatusCatalog] = useState<any[]>([]);
   const [formasPago, setFormasPago] = useState<any[]>([]);
   const [categoriasMovimiento, setCategoriasMovimiento] = useState<any[]>([]);
-  const [bancoSubTab, setBancoSubTab] = useState<'movimientos' | 'global' | 'comprobantes'>('movimientos');
+  const [bancoSubTab, setBancoSubTab] = useState<'movimientos' | 'ingresos_comprobantes' | 'cargas' | 'global' | 'comprobantes'>('movimientos');
   const [cuentasBancarias, setCuentasBancarias] = useState<any[]>([]);
   const [selectedCuentaId, setSelectedCuentaId] = useState<string>('');
   const [pedidosPendientes, setPedidosPendientes] = useState<any[]>([]);
@@ -84,8 +84,29 @@ export default function BankReconciliationModule() {
   const [bancoPage, setBancoPage] = useState<number>(0);
   const [bancoPageSize, setBancoPageSize] = useState<number>(10);
 
-  // Estados de carga e importación de Excel
+  // Estados de carga e importación de Excel con Mapeo Manual
   const [excelFile, setExcelFile] = useState<File | null>(null);
+  const [rawExcelRows, setRawExcelRows] = useState<any[]>([]);
+  const [selectedHeaderRowIndex, setSelectedHeaderRowIndex] = useState<number>(0);
+  const [excelHeaders, setExcelHeaders] = useState<string[]>([]);
+  const [showMappingModal, setShowMappingModal] = useState<boolean>(false);
+  const [sustituirCarga, setSustituirCarga] = useState<any | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const [columnMapping, setColumnMapping] = useState<{
+    fecha: string;
+    concepto: string;
+    retiro: string;
+    deposito: string;
+    referencia: string;
+  }>({
+    fecha: '',
+    concepto: '',
+    retiro: '',
+    deposito: '',
+    referencia: ''
+  });
+
   const [isUploading, setIsUploading] = useState(false);
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
 
@@ -266,7 +287,7 @@ export default function BankReconciliationModule() {
         .eq('empresa_id', empresaId)
         .is('folio_factura', null)
         .eq('estatus_pago', 'Liquidado')
-        .order('created_at', { ascending: false });
+        .order('creado_en', { ascending: false });
       setPedidosPendientes(pPend || []);
 
       // 7. Gastos reconciliables
@@ -332,12 +353,31 @@ export default function BankReconciliationModule() {
     init();
   }, [router]);
 
-  // --- ACCIONES ---
+  // --- ACCIONES DE IMPORTACIÓN DE EXCEL Y CARGAS ---
+  const updateHeadersAndMapping = (rows: any[], hIndex: number) => {
+    const rawHeaderRow = rows[hIndex] || [];
+    const headers = rawHeaderRow.map((h: any, idx: number) => {
+      const str = String(h || '').trim();
+      return str || `Columna ${idx + 1}`;
+    });
+    setExcelHeaders(headers);
+
+    const mapping = { fecha: '', concepto: '', retiro: '', deposito: '', referencia: '' };
+    headers.forEach((h: string) => {
+      const hl = h.toLowerCase();
+      if (hl.includes('fecha') || hl.includes('date')) mapping.fecha = h;
+      else if (hl.includes('concepto') || hl.includes('descrip') || hl.includes('detalle')) mapping.concepto = h;
+      else if (hl.includes('retiro') || hl.includes('cargo') || hl.includes('egreso') || hl.includes('salida')) mapping.retiro = h;
+      else if (hl.includes('deposito') || hl.includes('abono') || hl.includes('ingreso') || hl.includes('entrada')) mapping.deposito = h;
+      else if (hl.includes('ref') || hl.includes('nota') || hl.includes('id')) mapping.referencia = h;
+    });
+    setColumnMapping(mapping);
+  };
+
   const handleExcelUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file || !selectedCuentaId) return;
+    if (!file) return;
     setExcelFile(file);
-    setIsUploading(true);
 
     try {
       const reader = new FileReader();
@@ -350,93 +390,118 @@ export default function BankReconciliationModule() {
           const worksheet = workbook.Sheets[sheetName];
           const rawData = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as any[];
           
-          if (rawData.length === 0) {
+          if (!rawData || rawData.length === 0) {
             alert('El archivo está vacío.');
-            setIsUploading(false);
             return;
           }
+
+          setRawExcelRows(rawData);
 
           let headerIndex = 0;
           for (let i = 0; i < Math.min(15, rawData.length); i++) {
             const row = rawData[i];
-            if (row && row.some((cell: any) => typeof cell === 'string' && (cell.toLowerCase().includes('fecha') || cell.toLowerCase().includes('concepto')))) {
+            if (row && row.some((cell: any) => typeof cell === 'string' && (cell.toLowerCase().includes('fecha') || cell.toLowerCase().includes('concepto') || cell.toLowerCase().includes('descripcion')))) {
               headerIndex = i;
               break;
             }
           }
 
-          const headers = (rawData[headerIndex] || []).map((h: any) => String(h || '').trim());
-          const rows = rawData.slice(headerIndex + 1).filter((row: any) => row && row.length > 0);
-
-          const objectsData = rows.map((row: any) => {
-            const obj: any = {};
-            headers.forEach((h: string, idx: number) => {
-              obj[h] = row[idx];
-            });
-            return obj;
-          });
-
-          // Detect columns mapping
-          const mapping = { fecha: '', concepto: '', retiro: '', deposito: '', referencia: '' };
-          headers.forEach((h: string) => {
-            const hl = h.toLowerCase();
-            if (hl.includes('fecha') || hl.includes('date')) mapping.fecha = h;
-            else if (hl.includes('concepto') || hl.includes('descrip') || hl.includes('detalle')) mapping.concepto = h;
-            else if (hl.includes('retiro') || hl.includes('cargo') || hl.includes('egreso') || hl.includes('salida')) mapping.retiro = h;
-            else if (hl.includes('deposito') || hl.includes('abono') || hl.includes('ingreso') || hl.includes('entrada')) mapping.deposito = h;
-            else if (hl.includes('ref') || hl.includes('nota') || hl.includes('id')) mapping.referencia = h;
-          });
-
-          // Perform import using reconciliationActions
-          const token = await getSessionToken();
-          const parsedMovements = objectsData.map((row: any) => {
-            const fechaStr = row[mapping.fecha];
-            let fecha = new Date().toISOString().substring(0, 10);
-            if (fechaStr) {
-              const parsedDate = new Date(fechaStr);
-              if (!isNaN(parsedDate.getTime())) {
-                fecha = parsedDate.toISOString().substring(0, 10);
-              }
-            }
-
-            const rawRetiro = parseFloat(String(row[mapping.retiro] || 0).replace(/[^0-9.-]/g, '')) || 0;
-            const rawDeposito = parseFloat(String(row[mapping.deposito] || 0).replace(/[^0-9.-]/g, '')) || 0;
-
-            const isRetiro = rawRetiro > 0;
-            const monto = isRetiro ? -rawRetiro : rawDeposito;
-
-            return {
-              fecha,
-              concepto: String(row[mapping.concepto] || 'Movimiento sin concepto'),
-              retiro: rawRetiro,
-              deposito: rawDeposito,
-              monto,
-              tipo_movimiento: isRetiro ? 'Retiro' : 'Deposito',
-              referencia: row[mapping.referencia] ? String(row[mapping.referencia]) : undefined,
-              cuenta_bancaria_id: selectedCuentaId,
-              mes_conciliacion: selectedMonth
-            };
-          });
-
-          const importRes = await importarMovimientosBancarios(parsedMovements, token);
-          if (importRes.success) {
-            setMessage({ text: `Se importaron ${importRes.count} movimientos bancarios correctamente.`, type: 'success' });
-            setExcelFile(null);
-            await fetchData();
-          } else {
-            throw new Error(importRes.error);
-          }
+          setSelectedHeaderRowIndex(headerIndex);
+          updateHeadersAndMapping(rawData, headerIndex);
+          setShowMappingModal(true);
         } catch (e: any) {
-          alert('Error al parsear el archivo Excel: ' + e.message);
-        } finally {
-          setIsUploading(false);
+          alert('Error al leer el archivo Excel: ' + e.message);
         }
       };
       reader.readAsBinaryString(file);
     } catch (err: any) {
-      alert('Error en la importación: ' + err.message);
+      alert('Error al seleccionar el archivo: ' + err.message);
+    }
+  };
+
+  const handleConfirmImport = async () => {
+    if (!columnMapping.fecha || !columnMapping.concepto) {
+      alert('Debes asignar al menos los campos Fecha y Concepto.');
+      return;
+    }
+    if (!selectedCuentaId) {
+      alert('Debes seleccionar la cuenta bancaria destino.');
+      return;
+    }
+
+    setIsUploading(true);
+    setShowMappingModal(false);
+
+    try {
+      const dataRows = rawExcelRows.slice(selectedHeaderRowIndex + 1).filter((row: any) => row && row.length > 0);
+      const parsedMovements = dataRows.map((rowArr: any) => {
+        const rowObj: any = {};
+        excelHeaders.forEach((h: string, idx: number) => {
+          rowObj[h] = rowArr[idx];
+        });
+
+        const fechaStr = rowObj[columnMapping.fecha];
+        let fecha = new Date().toISOString().substring(0, 10);
+        if (fechaStr !== undefined && fechaStr !== null) {
+          if (typeof fechaStr === 'number') {
+            const jsDate = new Date((fechaStr - (25567 + 2)) * 86400 * 1000);
+            if (!isNaN(jsDate.getTime())) fecha = jsDate.toISOString().substring(0, 10);
+          } else {
+            const parsedDate = new Date(String(fechaStr));
+            if (!isNaN(parsedDate.getTime())) fecha = parsedDate.toISOString().substring(0, 10);
+          }
+        }
+
+        const rawRetiro = parseFloat(String(rowObj[columnMapping.retiro] || 0).replace(/[^0-9.-]/g, '')) || 0;
+        const rawDeposito = parseFloat(String(rowObj[columnMapping.deposito] || 0).replace(/[^0-9.-]/g, '')) || 0;
+
+        const isRetiro = rawRetiro > 0;
+        const monto = isRetiro ? -rawRetiro : rawDeposito;
+
+        return {
+          fecha,
+          concepto: String(rowObj[columnMapping.concepto] || 'Movimiento sin concepto'),
+          retiro: rawRetiro,
+          deposito: rawDeposito,
+          monto,
+          tipo_movimiento: isRetiro ? 'Retiro' : 'Deposito',
+          referencia: columnMapping.referencia ? String(rowObj[columnMapping.referencia] || '') : undefined,
+          cuenta_bancaria_id: selectedCuentaId,
+          mes_conciliacion: selectedMonth,
+          nombre_archivo: excelFile?.name
+        };
+      }).filter(m => m.fecha && m.concepto);
+
+      const token = await getSessionToken();
+      const importRes = await importarMovimientosBancarios(
+        parsedMovements,
+        token,
+        selectedCuentaId,
+        sustituirCarga?.id
+      );
+
+      if (importRes.success) {
+        const actionText = sustituirCarga ? 'Sustituidos' : 'Importados';
+        setMessage({ text: `${actionText} ${importRes.count} movimientos bancarios correctamente.`, type: 'success' });
+        setExcelFile(null);
+        setSustituirCarga(null);
+        await fetchData();
+      } else {
+        throw new Error(importRes.error);
+      }
+    } catch (e: any) {
+      alert('Error al importar los movimientos: ' + e.message);
+    } finally {
       setIsUploading(false);
     }
+  };
+
+  const handleStartSustituirCarga = (carga: any) => {
+    setSustituirCarga(carga);
+    if (carga.cuenta_id) {
+      setSelectedCuentaId(carga.cuenta_id);
+    }
+    fileInputRef.current?.click();
   };
 
   const handleAutoReconcile = async () => {
@@ -460,6 +525,7 @@ export default function BankReconciliationModule() {
   };
 
   const handleOpenReconcileModal = (m: any) => {
+    setManualMatchSearch('');
     setReconcileModal({
       open: true,
       movimiento: m,
@@ -851,10 +917,15 @@ export default function BankReconciliationModule() {
     return res;
   };
 
-  // --- FILTRO DE MOVIMIENTOS POR MES SELECCIONADO Y CUENTA ---
+  // --- FILTRO DE MOVIMIENTOS Y COMPROBANTES POR MES SELECCIONADO ---
   const movementsForSelectedMonth = movimientos.filter(m => {
     const mes = m.mes_conciliacion || (m.fecha ? m.fecha.substring(0, 7) : '');
     return mes === selectedMonth;
+  });
+
+  const comprobantesForSelectedMonth = comprobantes.filter(c => {
+    if (!c.fecha) return true;
+    return c.fecha.substring(0, 7) === selectedMonth;
   });
 
   // --- CÁLCULO DE SALDOS E INGRESOS/EGRESOS POR CUENTA ---
@@ -1000,7 +1071,7 @@ CREATE TABLE IF NOT EXISTS public.comprobantes_deposito (
     storage_provider TEXT CHECK (storage_provider IN ('Supabase', 'GoogleDrive')) DEFAULT 'Supabase',
     cuenta_bancaria_id UUID REFERENCES public.cuentas_bancarias(id) ON DELETE SET NULL,
     empresa_id UUID REFERENCES public.empresas(id) ON DELETE CASCADE DEFAULT public.get_auth_empresa_id(),
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+    creado_en TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS public.comprobantes_deposito_movimientos (
@@ -1009,7 +1080,7 @@ CREATE TABLE IF NOT EXISTS public.comprobantes_deposito_movimientos (
     movimiento_id UUID REFERENCES public.movimientos_bancarios(id) ON DELETE CASCADE,
     monto_asociado NUMERIC(12,2) NOT NULL CHECK (monto_asociado > 0),
     empresa_id UUID REFERENCES public.empresas(id) ON DELETE CASCADE DEFAULT public.get_auth_empresa_id(),
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    creado_en TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
     CONSTRAINT unique_comprobante_movimiento UNIQUE (comprobante_id, movimiento_id)
 );
 
@@ -1206,18 +1277,144 @@ NOTIFY pgrst, 'reload schema';`}
               handleUnlinkReconciliation={handleUnlinkReconciliation}
               handleBulkMoveMovimientos={handleBulkMoveMovimientos}
               handleUpdateMesConciliacion={handleUpdateMesConciliacion}
-              comprobantes={comprobantes}
+              comprobantes={comprobantesForSelectedMonth}
               onCrearComprobante={handleCrearComprobante}
               onActualizarComprobante={handleActualizarComprobante}
               onEliminarComprobante={handleEliminarComprobante}
               onVincularComprobante={handleVincularComprobante}
               onDesvincularComprobante={handleDesvincularComprobante}
               onFusionarReembolso={handleFusionarReembolso}
+              onStartSustituirCarga={handleStartSustituirCarga}
+              onReloadMovimientos={fetchData}
+              onOpenUploadModal={() => fileInputRef.current?.click()}
             />
           </div>
         </div>
 
       </div>
+
+      {/* INPUT OCULTO PARA SUSTITUIR / CARGAR ESTADO DE CUENTA */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".xlsx,.xls,.csv"
+        onChange={handleExcelUpload}
+        className="hidden"
+      />
+
+      {/* MODAL DE ASIGNACIÓN MANUAL DE ENCABEZADOS Y MAPEO DE COLUMNAS */}
+      {showMappingModal && (
+        <div className="fixed inset-0 bg-black/60 dark:bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4 transition-all">
+          <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-6 rounded-2xl w-full max-w-xl shadow-2xl text-gray-900 dark:text-gray-100 flex flex-col font-sans max-h-[90vh] overflow-y-auto">
+            <h3 className="text-base font-extrabold flex items-center gap-2 text-amber-500 mb-1">
+              <FileSpreadsheet size={18} /> Asignación de Encabezados y Mapeo
+            </h3>
+            
+            {sustituirCarga && (
+              <div className="mt-2 mb-3 p-3 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/50 rounded-xl text-amber-800 dark:text-amber-300 text-xs flex items-center gap-2">
+                <AlertTriangle size={16} className="shrink-0 text-amber-500" />
+                <div>
+                  <span className="font-bold">Sustituyendo Carga Original: </span>
+                  {sustituirCarga.nombre_archivo} ({sustituirCarga.total_movimientos} registros). Los movimientos anteriores y sus conciliaciones asociadas serán reemplazados.
+                </div>
+              </div>
+            )}
+
+            <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
+              Selecciona la fila que contiene los nombres de las columnas (encabezados) y asigna la correspondencia de los datos.
+            </p>
+
+            {/* Selector de Cuenta Destino */}
+            <div className="mb-4">
+              <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Cuenta Bancaria Destino *</label>
+              <select
+                value={selectedCuentaId}
+                onChange={(e) => setSelectedCuentaId(e.target.value)}
+                className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-xl text-xs text-gray-900 dark:text-white outline-none focus:ring-1 focus:ring-amber-500"
+              >
+                <option value="">-- Seleccionar Cuenta Bancaria --</option>
+                {cuentasBancarias.map(c => (
+                  <option key={c.id} value={c.id}>{c.nombre} ({c.moneda})</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Selector de Fila de Encabezados */}
+            <div className="mb-4 bg-gray-50 dark:bg-gray-900/60 p-3 rounded-xl border border-gray-200 dark:border-gray-800">
+              <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">
+                Fila de Encabezados en el Archivo
+              </label>
+              <select
+                value={selectedHeaderRowIndex}
+                onChange={(e) => {
+                  const idx = parseInt(e.target.value, 10);
+                  setSelectedHeaderRowIndex(idx);
+                  updateHeadersAndMapping(rawExcelRows, idx);
+                }}
+                className="w-full bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 p-2 rounded-xl text-xs text-gray-900 dark:text-white outline-none focus:ring-1 focus:ring-amber-500"
+              >
+                {rawExcelRows.slice(0, 15).map((row, idx) => {
+                  const sampleText = Array.isArray(row) ? row.filter(Boolean).slice(0, 4).join(' | ') : '';
+                  return (
+                    <option key={idx} value={idx}>
+                      Fila {idx + 1}: {sampleText || '(Fila vacía)'}
+                    </option>
+                  );
+                })}
+              </select>
+            </div>
+
+            {/* Mapeo de Campos */}
+            <div className="space-y-3 mb-6">
+              <h4 className="text-[10px] font-bold uppercase text-gray-400 tracking-wider">Correspondencia de Columnas</h4>
+              {[
+                { field: 'fecha', label: 'Columna de Fecha *', required: true },
+                { field: 'concepto', label: 'Columna de Concepto / Detalle *', required: true },
+                { field: 'retiro', label: 'Columna de Retiros / Cargos / Egresos', required: false },
+                { field: 'deposito', label: 'Columna de Depósitos / Abonos / Ingresos', required: false },
+                { field: 'referencia', label: 'Columna de Referencia / Folio', required: false }
+              ].map(({ field, label }) => (
+                <div key={field}>
+                  <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">{label}</label>
+                  <select
+                    value={(columnMapping as any)[field]}
+                    onChange={(e) => setColumnMapping(prev => ({ ...prev, [field]: e.target.value }))}
+                    className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-xl text-xs text-gray-900 dark:text-white outline-none focus:ring-1 focus:ring-amber-500"
+                  >
+                    <option value="">-- No asociar / Vacío --</option>
+                    {excelHeaders.map(header => (
+                      <option key={header} value={header}>{header}</option>
+                    ))}
+                  </select>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex gap-3 pt-2 border-t border-gray-100 dark:border-gray-800">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowMappingModal(false);
+                  setExcelFile(null);
+                  setSustituirCarga(null);
+                }}
+                className="flex-1 py-2.5 border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-300 rounded-xl font-semibold hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors text-xs"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmImport}
+                disabled={!columnMapping.fecha || !columnMapping.concepto || !selectedCuentaId || isUploading}
+                className="flex-1 py-2.5 bg-amber-500 hover:bg-amber-600 disabled:bg-gray-200 dark:disabled:bg-gray-850 disabled:text-gray-400 dark:disabled:text-gray-500 text-white font-bold rounded-xl shadow-md transition-colors flex items-center justify-center gap-1.5 text-xs disabled:opacity-50"
+              >
+                {isUploading ? <RefreshCw size={14} className="animate-spin" /> : null}
+                Confirmar e Importar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

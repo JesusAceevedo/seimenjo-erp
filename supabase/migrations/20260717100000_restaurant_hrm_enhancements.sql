@@ -135,11 +135,13 @@ ALTER TABLE public.vacaciones_empleado ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.prima_antiguedad_acumulada ENABLE ROW LEVEL SECURITY;
 
 -- Políticas RLS multi-inquilino
+DROP POLICY IF EXISTS "Aislamiento patrones_descanso" ON public.patrones_descanso;
 CREATE POLICY "Aislamiento patrones_descanso" ON public.patrones_descanso
     FOR ALL TO authenticated
     USING (is_superusuario() OR empresa_id = get_auth_empresa_id())
     WITH CHECK (is_superusuario() OR empresa_id = get_auth_empresa_id());
 
+DROP POLICY IF EXISTS "Aislamiento patron_descanso_dias" ON public.patron_descanso_dias;
 CREATE POLICY "Aislamiento patron_descanso_dias" ON public.patron_descanso_dias
     FOR ALL TO authenticated
     USING (
@@ -151,6 +153,7 @@ CREATE POLICY "Aislamiento patron_descanso_dias" ON public.patron_descanso_dias
         patron_id IN (SELECT id FROM public.patrones_descanso WHERE empresa_id = get_auth_empresa_id())
     );
 
+DROP POLICY IF EXISTS "Aislamiento empleado_patron_descanso" ON public.empleado_patron_descanso;
 CREATE POLICY "Aislamiento empleado_patron_descanso" ON public.empleado_patron_descanso
     FOR ALL TO authenticated
     USING (
@@ -162,6 +165,7 @@ CREATE POLICY "Aislamiento empleado_patron_descanso" ON public.empleado_patron_d
         empleado_id IN (SELECT id FROM public.empleados_detalle WHERE empresa_id = get_auth_empresa_id())
     );
 
+DROP POLICY IF EXISTS "Aislamiento descansos_mensuales" ON public.descansos_mensuales;
 CREATE POLICY "Aislamiento descansos_mensuales" ON public.descansos_mensuales
     FOR ALL TO authenticated
     USING (
@@ -173,6 +177,7 @@ CREATE POLICY "Aislamiento descansos_mensuales" ON public.descansos_mensuales
         empleado_id IN (SELECT id FROM public.empleados_detalle WHERE empresa_id = get_auth_empresa_id())
     );
 
+DROP POLICY IF EXISTS "Aislamiento turnos_puesto" ON public.turnos_puesto;
 CREATE POLICY "Aislamiento turnos_puesto" ON public.turnos_puesto
     FOR ALL TO authenticated
     USING (
@@ -184,6 +189,7 @@ CREATE POLICY "Aislamiento turnos_puesto" ON public.turnos_puesto
         puesto_id IN (SELECT id FROM public.puestos_trabajo WHERE empresa_id = get_auth_empresa_id())
     );
 
+DROP POLICY IF EXISTS "Aislamiento rotacion_turnos" ON public.rotacion_turnos;
 CREATE POLICY "Aislamiento rotacion_turnos" ON public.rotacion_turnos
     FOR ALL TO authenticated
     USING (
@@ -195,11 +201,13 @@ CREATE POLICY "Aislamiento rotacion_turnos" ON public.rotacion_turnos
         empleado_id IN (SELECT id FROM public.empleados_detalle WHERE empresa_id = get_auth_empresa_id())
     );
 
+DROP POLICY IF EXISTS "Aislamiento dias_festivos" ON public.dias_festivos;
 CREATE POLICY "Aislamiento dias_festivos" ON public.dias_festivos
     FOR ALL TO authenticated
     USING (is_superusuario() OR empresa_id = get_auth_empresa_id())
     WITH CHECK (is_superusuario() OR empresa_id = get_auth_empresa_id());
 
+DROP POLICY IF EXISTS "Aislamiento vacaciones_empleado" ON public.vacaciones_empleado;
 CREATE POLICY "Aislamiento vacaciones_empleado" ON public.vacaciones_empleado
     FOR ALL TO authenticated
     USING (
@@ -211,6 +219,7 @@ CREATE POLICY "Aislamiento vacaciones_empleado" ON public.vacaciones_empleado
         empleado_id IN (SELECT id FROM public.empleados_detalle WHERE empresa_id = get_auth_empresa_id())
     );
 
+DROP POLICY IF EXISTS "Aislamiento prima_antiguedad" ON public.prima_antiguedad_acumulada;
 CREATE POLICY "Aislamiento prima_antiguedad" ON public.prima_antiguedad_acumulada
     FOR ALL TO authenticated
     USING (

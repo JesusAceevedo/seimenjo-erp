@@ -282,26 +282,31 @@ ALTER TABLE public.periodos_nomina ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.recibos_nomina ENABLE ROW LEVEL SECURITY;
 
 -- Crear Políticas de RLS Multi-Inquilino
+DROP POLICY IF EXISTS "Aislamiento departamentos" ON public.departamentos;
 CREATE POLICY "Aislamiento departamentos" ON public.departamentos
     FOR ALL TO authenticated
     USING (is_superusuario() OR empresa_id = get_auth_empresa_id())
     WITH CHECK (is_superusuario() OR empresa_id = get_auth_empresa_id());
 
+DROP POLICY IF EXISTS "Aislamiento puestos" ON public.puestos_trabajo;
 CREATE POLICY "Aislamiento puestos" ON public.puestos_trabajo
     FOR ALL TO authenticated
     USING (is_superusuario() OR empresa_id = get_auth_empresa_id())
     WITH CHECK (is_superusuario() OR empresa_id = get_auth_empresa_id());
 
+DROP POLICY IF EXISTS "Aislamiento empleados" ON public.empleados_detalle;
 CREATE POLICY "Aislamiento empleados" ON public.empleados_detalle
     FOR ALL TO authenticated
     USING (is_superusuario() OR empresa_id = get_auth_empresa_id() OR usuario_staff_id = auth.uid())
     WITH CHECK (is_superusuario() OR empresa_id = get_auth_empresa_id());
 
+DROP POLICY IF EXISTS "Aislamiento turnos" ON public.turnos;
 CREATE POLICY "Aislamiento turnos" ON public.turnos
     FOR ALL TO authenticated
     USING (is_superusuario() OR empresa_id = get_auth_empresa_id())
     WITH CHECK (is_superusuario() OR empresa_id = get_auth_empresa_id());
 
+DROP POLICY IF EXISTS "Aislamiento horarios" ON public.horarios_empleados;
 CREATE POLICY "Aislamiento horarios" ON public.horarios_empleados
     FOR ALL TO authenticated
     USING (
@@ -313,11 +318,13 @@ CREATE POLICY "Aislamiento horarios" ON public.horarios_empleados
         empleado_id IN (SELECT id FROM public.empleados_detalle WHERE empresa_id = get_auth_empresa_id())
     );
 
+DROP POLICY IF EXISTS "Aislamiento checadas raw" ON public.asistencia_checadas_raw;
 CREATE POLICY "Aislamiento checadas raw" ON public.asistencia_checadas_raw
     FOR ALL TO authenticated
     USING (is_superusuario() OR empresa_id = get_auth_empresa_id())
     WITH CHECK (is_superusuario() OR empresa_id = get_auth_empresa_id());
 
+DROP POLICY IF EXISTS "Aislamiento asistencia diaria" ON public.asistencia_diaria;
 CREATE POLICY "Aislamiento asistencia diaria" ON public.asistencia_diaria
     FOR ALL TO authenticated
     USING (
@@ -329,6 +336,7 @@ CREATE POLICY "Aislamiento asistencia diaria" ON public.asistencia_diaria
         empleado_id IN (SELECT id FROM public.empleados_detalle WHERE empresa_id = get_auth_empresa_id())
     );
 
+DROP POLICY IF EXISTS "Aislamiento incidencias" ON public.incidencias_solicitudes;
 CREATE POLICY "Aislamiento incidencias" ON public.incidencias_solicitudes
     FOR ALL TO authenticated
     USING (
@@ -340,11 +348,13 @@ CREATE POLICY "Aislamiento incidencias" ON public.incidencias_solicitudes
         empleado_id IN (SELECT id FROM public.empleados_detalle WHERE empresa_id = get_auth_empresa_id())
     );
 
+DROP POLICY IF EXISTS "Aislamiento reglas propinas" ON public.reglas_pool_propinas;
 CREATE POLICY "Aislamiento reglas propinas" ON public.reglas_pool_propinas
     FOR ALL TO authenticated
     USING (is_superusuario() OR empresa_id = get_auth_empresa_id())
     WITH CHECK (is_superusuario() OR empresa_id = get_auth_empresa_id());
 
+DROP POLICY IF EXISTS "Aislamiento regla puesto detalle" ON public.regla_puesto_detalle;
 CREATE POLICY "Aislamiento regla puesto detalle" ON public.regla_puesto_detalle
     FOR ALL TO authenticated
     USING (
@@ -356,11 +366,13 @@ CREATE POLICY "Aislamiento regla puesto detalle" ON public.regla_puesto_detalle
         regla_id IN (SELECT id FROM public.reglas_pool_propinas WHERE empresa_id = get_auth_empresa_id())
     );
 
+DROP POLICY IF EXISTS "Aislamiento propinas acumuladas" ON public.propinas_acumuladas;
 CREATE POLICY "Aislamiento propinas acumuladas" ON public.propinas_acumuladas
     FOR ALL TO authenticated
     USING (is_superusuario() OR empresa_id = get_auth_empresa_id())
     WITH CHECK (is_superusuario() OR empresa_id = get_auth_empresa_id());
 
+DROP POLICY IF EXISTS "Aislamiento propinas distribucion" ON public.propinas_distribucion_empleado;
 CREATE POLICY "Aislamiento propinas distribucion" ON public.propinas_distribucion_empleado
     FOR ALL TO authenticated
     USING (
@@ -372,11 +384,13 @@ CREATE POLICY "Aislamiento propinas distribucion" ON public.propinas_distribucio
         empleado_id IN (SELECT id FROM public.empleados_detalle WHERE empresa_id = get_auth_empresa_id())
     );
 
+DROP POLICY IF EXISTS "Aislamiento periodos nomina" ON public.periodos_nomina;
 CREATE POLICY "Aislamiento periodos nomina" ON public.periodos_nomina
     FOR ALL TO authenticated
     USING (is_superusuario() OR empresa_id = get_auth_empresa_id())
     WITH CHECK (is_superusuario() OR empresa_id = get_auth_empresa_id());
 
+DROP POLICY IF EXISTS "Aislamiento recibos" ON public.recibos_nomina;
 CREATE POLICY "Aislamiento recibos" ON public.recibos_nomina
     FOR ALL TO authenticated
     USING (

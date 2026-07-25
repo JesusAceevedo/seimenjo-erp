@@ -243,16 +243,48 @@ export function useAsistencia() {
                 detail: hasIncidence.motivo || 'Omisión de checada justificada',
                 color: 'text-indigo-600 bg-indigo-500/10 border border-indigo-500/20 font-semibold'
               });
-            } else if (dateStr <= todayLocalStr) {
+            } else if (dateStr < todayLocalStr) {
               faltas += 1;
               dailyDetails.push({ date: dateStr, status: 'Falta', detail: 'Sin registros', color: 'text-rose-600 bg-rose-500/10 border border-rose-500/20 font-semibold' });
+            } else if (dateStr === todayLocalStr) {
+              let turnoHaIniciado = true;
+              if (turno && turno.hora_entrada_1) {
+                const [hIn, mIn] = turno.hora_entrada_1.split(':').map(Number);
+                const shiftLimit = new Date();
+                shiftLimit.setHours(hIn, mIn + (turno.tolerancia_minutos || 0), 59, 999);
+                const now = new Date();
+                if (now < shiftLimit) {
+                  turnoHaIniciado = false;
+                }
+              }
+              if (!turnoHaIniciado) {
+                dailyDetails.push({
+                  date: dateStr,
+                  status: 'Programado',
+                  detail: turno ? `${turno.nombre} (Inicia ${turno.hora_entrada_1.substring(0, 5)})` : 'Turno por iniciar',
+                  color: 'text-gray-400 bg-gray-100 dark:bg-gray-800'
+                });
+              } else {
+                faltas += 1;
+                dailyDetails.push({ date: dateStr, status: 'Falta', detail: 'Sin registros', color: 'text-rose-600 bg-rose-500/10 border border-rose-500/20 font-semibold' });
+              }
             } else {
               dailyDetails.push({ date: dateStr, status: 'Programado', detail: turno ? turno.nombre : 'Turno', color: 'text-gray-400 bg-gray-100 dark:bg-gray-800' });
             }
           } else {
             const entrada = new Date(dayLogs[0].timestamp);
-            const entradaStr = entrada.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            let entradaStr = entrada.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
             let salidaStr = '--:--', isRetardo = false, isSalidaTemprano = false;
+
+            if (excOmision && hasIncidence && hasIncidence.tipo_incidencia === 'omision_entrada' && hasIncidence.motivo) {
+              const match = hasIncidence.motivo.match(/\[Entrada:\s*([0-9]{1,2}:[0-9]{2})\]/);
+              if (match) {
+                const [h, m] = match[1].split(':').map(Number);
+                const ampm = h >= 12 ? 'PM' : 'AM';
+                const h12 = h % 12 || 12;
+                entradaStr = `${String(h12).padStart(2, '0')}:${String(m).padStart(2, '0')} ${ampm} (Justif.)`;
+              }
+            }
             
             if (turno) {
               const [hIn, mIn] = turno.hora_entrada_1.split(':').map(Number);
@@ -288,9 +320,23 @@ export function useAsistencia() {
               totalHorasTrabajadas += hoursWorked;
               if (hoursWorked > 8) horasExtras += (hoursWorked - 8);
             } else {
-              if (excOmision) {
+              if (excOmision && hasIncidence && hasIncidence.tipo_incidencia === 'omision_entrada') {
+                const salida = new Date(dayLogs[0].timestamp);
+                salidaStr = salida.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
                 isSalidaTemprano = false;
-                salidaStr = 'Justificada';
+              } else if (excOmision) {
+                isSalidaTemprano = false;
+                let customSalida = 'Justificada';
+                if (hasIncidence && hasIncidence.motivo) {
+                  const match = hasIncidence.motivo.match(/\[Salida:\s*([0-9]{1,2}:[0-9]{2})\]/);
+                  if (match) {
+                    const [h, m] = match[1].split(':').map(Number);
+                    const ampm = h >= 12 ? 'PM' : 'AM';
+                    const h12 = h % 12 || 12;
+                    customSalida = `${String(h12).padStart(2, '0')}:${String(m).padStart(2, '0')} ${ampm} (Justif.)`;
+                  }
+                }
+                salidaStr = customSalida;
               } else {
                 isSalidaTemprano = true;
                 salidasTemprano += 1;

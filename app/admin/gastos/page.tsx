@@ -356,7 +356,7 @@ export default function AdvancedBillingModule() {
         .select('*, clientes(nombre_local, rfc, email_facturacion), facturas_clientes(*)')
         .eq('empresa_id', empresaId)
         .neq('estatus_pago', 'Cancelado')
-        .order('created_at', { ascending: false });
+        .order('creado_en', { ascending: false });
       setVentasFacturadas(vAll || []);
 
       // 3. Pedidos pendientes de facturar (solo liquidados)
@@ -366,7 +366,7 @@ export default function AdvancedBillingModule() {
         .eq('empresa_id', empresaId)
         .is('folio_factura', null)
         .eq('estatus_pago', 'Liquidado')
-        .order('created_at', { ascending: false });
+        .order('creado_en', { ascending: false });
       setPedidosPendientes(pPend || []);
 
       // 4. Gastos pendientes de facturar/comprobar (egresos manuales sin comprobante)
@@ -1174,7 +1174,7 @@ export default function AdvancedBillingModule() {
         .eq('cliente_id', cId)
         .eq('estatus_pedido', 'Entregado')
         .is('folio_factura', null)
-        .order('created_at', { ascending: false });
+        .order('creado_en', { ascending: false });
 
       if (error) throw error;
 

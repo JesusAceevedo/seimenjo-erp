@@ -520,7 +520,9 @@ export async function calcularNominaCompleta(
   }
 
   const resultados = empleados.map((emp: any) => {
+    const todayLocalStr = new Date().toLocaleDateString('en-CA');
     const diasTrabajadosPeriodo = dateArray.filter(d => {
+      if (d > todayLocalStr) return false;
       const dateObj = new Date(d + 'T12:00:00');
       const dow = dateObj.getDay();
       const schedule = horariosList.find((h: any) => h.empleado_id === emp.id && h.dia_semana === dow);
@@ -533,7 +535,7 @@ export async function calcularNominaCompleta(
         l.zkteco_user_id === emp.zkteco_user_id &&
         new Date(l.timestamp).toLocaleDateString('en-CA') === d
       );
-      return logsDia.length >= 2;
+      return logsDia.length >= 1;
     });
 
     let horasDobles = 0;

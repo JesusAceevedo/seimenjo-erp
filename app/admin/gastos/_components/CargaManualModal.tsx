@@ -83,6 +83,32 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId 
     concepto: ''
   });
 
+  const [saldoFavorDisponible, setSaldoFavorDisponible] = useState<number>(0);
+  const [aplicarSaldoFavor, setAplicarSaldoFavor] = useState<boolean>(false);
+  const [montoSaldoFavorAplicar, setMontoSaldoFavorAplicar] = useState<string>('');
+
+  React.useEffect(() => {
+    const checkSaldo = async () => {
+      if (tipo === 'gasto' && manualFields.rfc.trim()) {
+        const { data: p } = await supabase
+          .from('proveedores')
+          .select('saldo_favor')
+          .ilike('rfc', manualFields.rfc.trim())
+          .maybeSingle();
+        if (p && Number(p.saldo_favor || 0) > 0) {
+          setSaldoFavorDisponible(Number(p.saldo_favor));
+        } else {
+          setSaldoFavorDisponible(0);
+          setAplicarSaldoFavor(false);
+        }
+      } else {
+        setSaldoFavorDisponible(0);
+        setAplicarSaldoFavor(false);
+      }
+    };
+    checkSaldo();
+  }, [manualFields.rfc, tipo]);
+
   // Cargar catálogos e información inicial
   React.useEffect(() => {
     const fetchCatalogos = async () => {
@@ -120,6 +146,37 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId 
             .eq('id', registroId)
             .maybeSingle();
           data = movData;
+        } else if (tipo === 'venta') {
+          const { data: docData } = await supabase
+            .from('facturas_clientes')
+            .select('*, clientes(*), pedidos(*)')
+            .or(`id.eq.${registroId},pedido_id.eq.${registroId}`)
+            .maybeSingle();
+
+          if (docData) {
+            data = docData;
+          } else {
+            const { data: pedData } = await supabase
+              .from('pedidos')
+              .select('*, clientes(*)')
+              .eq('id', registroId)
+              .maybeSingle();
+
+            if (pedData) {
+              setManualFields({
+                fecha: pedData.creado_en ? pedData.creado_en.split('T')[0] : new Date().toISOString().split('T')[0],
+                rfc: pedData.clientes?.rfc || '',
+                nombre: pedData.clientes?.nombre_local || pedData.cliente_nombre || '',
+                folio: pedData.folio_factura || '',
+                subtotal: pedData.precio_total ? pedData.precio_total.toString() : '',
+                iva: '',
+                total: pedData.precio_total ? pedData.precio_total.toString() : '',
+                metodoPagoId: '',
+                categoria_id: '',
+                concepto: `Pedido #${pedData.numero_pedido || ''}`
+              });
+            }
+          }
         } else {
           const { data: docData } = await supabase
             .from(tableStr)
@@ -456,27 +513,149 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId 
 
       if (registroId) {
         // ACTUALIZAR (Adjuntar documentos faltantes o reemplazar existentes)
-        const updateData: any = {};
-        if (tipo === 'movimiento') {
-          if (finalXmlUrl !== null) updateData.xml_url = finalXmlUrl;
-          if (finalPdfUrl !== null) updateData.pdf_factura_url = finalPdfUrl;
-          if (ticketChanged) updateData.pdf_ticket_url = finalTicketUrl;
-          if (finalSoporteUrl !== null) updateData.soporte_reembolso_url = finalSoporteUrl;
+        if (tipo === 'venta') {
+          const { data: existingFc } = await supabase
+            .from('facturas_clientes')
+            .select('id, pedido_id')
+            .or(`id.eq.${registroId},pedido_id.eq.${registroId}`)
+            .maybeSingle();
 
-          updateData.concepto = manualFields.concepto;
-          if (manualFields.categoria_id) {
-            updateData.categoria_movimiento_id = manualFields.categoria_id;
+          if (existingFc) {
+            const updateData: any = {};
+            if (finalXmlUrl !== null) updateData.xml_url = finalXmlUrl;
+            if (finalPdfUrl !== null) updateData.pdf_url = finalPdfUrl;
+            if (ticketChanged) updateData.ticket_url = finalTicketUrl;
+            if (finalSoporteUrl !== null) updateData.soporte_reembolso_url = finalSoporteUrl;
+
+            if (uuidFiscal) updateData.uuid_fiscal = uuidFiscal.toUpperCase();
+            if (manualFields.folio) updateData.serie_folio = manualFields.folio;
+            if (manualFields.total) updateData.total = parseFloat(manualFields.total);
+            if (manualFields.subtotal) updateData.subtotal = parseFloat(manualFields.subtotal);
+            if (manualFields.iva) updateData.iva_trasladado = parseFloat(manualFields.iva);
+            if (manualFields.fecha) updateData.fecha_emision = manualFields.fecha;
+
+            if (Object.keys(updateData).length > 0) {
+              const { error } = await supabase.from('facturas_clientes').update(updateData).eq('id', existingFc.id);
+              if (error) throw error;
+            }
+
+            const pedId = existingFc.pedido_id || registroId;
+            if (pedId) {
+              await supabase
+                .from('pedidos')
+                .update({
+                  folio_factura: manualFields.folio || (uuidFiscal ? `UUID-${uuidFiscal.substring(0, 6)}` : 'FACTURADO'),
+                  estatus_pago: 'Liquidado'
+                })
+                .eq('id', pedId);
+            }
+          } else {
+            // No existía factura cliente aún para este pedido -> Insertar registro en facturas_clientes y actualizar pedido
+            let empresaId = '';
+            try {
+              const sesionGuardada = localStorage.getItem('seimenjo_session');
+              if (sesionGuardada) {
+                empresaId = JSON.parse(sesionGuardada).empresa_id;
+              }
+            } catch (e) {}
+            if (!empresaId) empresaId = user.user_metadata?.empresa_id;
+
+            let clienteId = null;
+            const targetRfc = manualFields.rfc.trim();
+            if (targetRfc && empresaId) {
+              const { data: cli } = await supabase
+                .from('clientes')
+                .select('id')
+                .eq('rfc', targetRfc.toUpperCase())
+                .eq('empresa_id', empresaId)
+                .maybeSingle();
+
+              if (cli) {
+                clienteId = cli.id;
+              } else {
+                const { data: newCli } = await supabase
+                  .from('clientes')
+                  .insert({
+                    rfc: targetRfc.toUpperCase(),
+                    nombre_local: manualFields.nombre.trim() || 'CLIENTE DESCONOCIDO',
+                    telefono: '0000000000',
+                    es_anonimo: false,
+                    empresa_id: empresaId
+                  })
+                  .select('id')
+                  .single();
+                if (newCli) clienteId = newCli.id;
+              }
+            }
+
+            let formaPagoId: string | null = null;
+            const selectedFp = formasPago.find(f => f.id === manualFields.metodoPagoId);
+            if (selectedFp) formaPagoId = selectedFp.id;
+
+            const insertPayload: any = {
+              pedido_id: registroId,
+              cliente_id: clienteId,
+              serie_folio: manualFields.folio || 'SF-MANUAL',
+              uuid_fiscal: uuidFiscal?.toUpperCase() || null,
+              total: parseFloat(manualFields.total || '0'),
+              subtotal: parseFloat(manualFields.subtotal || manualFields.total || '0'),
+              iva_trasladado: parseFloat(manualFields.iva || '0'),
+              xml_url: finalXmlUrl,
+              pdf_url: finalPdfUrl,
+              ticket_url: finalTicketUrl,
+              fecha_emision: manualFields.fecha,
+              forma_pago_id: formaPagoId,
+              estatus_factura_id: uuidFiscal ? (await supabase.from('estatus_factura').select('id').ilike('nombre', 'Facturado').maybeSingle()).data?.id || null : null,
+              uso_cfdi_clave: usoCfdi || 'G03',
+              empresa_id: empresaId,
+              fecha_timbrado: fechaTimbrado || null
+            };
+
+            if (insertPayload.uuid_fiscal) {
+              const { data: duplicate } = await supabase
+                .from('facturas_clientes')
+                .select('id')
+                .ilike('uuid_fiscal', insertPayload.uuid_fiscal)
+                .maybeSingle();
+              if (duplicate) {
+                throw new Error(`La factura con UUID ${insertPayload.uuid_fiscal} ya existe en el sistema.`);
+              }
+            }
+
+            const { error: insErr } = await supabase.from('facturas_clientes').insert([insertPayload]);
+            if (insErr) throw insErr;
+
+            await supabase
+              .from('pedidos')
+              .update({
+                folio_factura: manualFields.folio || (uuidFiscal ? `UUID-${uuidFiscal.substring(0, 6)}` : 'FACTURADO'),
+                estatus_pago: 'Liquidado'
+              })
+              .eq('id', registroId);
           }
         } else {
-          if (finalXmlUrl !== null) updateData.xml_url = finalXmlUrl;
-          if (finalPdfUrl !== null) updateData.pdf_url = finalPdfUrl;
-          if (ticketChanged) updateData.ticket_url = finalTicketUrl;
-          if (finalSoporteUrl !== null) updateData.soporte_reembolso_url = finalSoporteUrl;
-        }
+          const updateData: any = {};
+          if (tipo === 'movimiento') {
+            if (finalXmlUrl !== null) updateData.xml_url = finalXmlUrl;
+            if (finalPdfUrl !== null) updateData.pdf_factura_url = finalPdfUrl;
+            if (ticketChanged) updateData.pdf_ticket_url = finalTicketUrl;
+            if (finalSoporteUrl !== null) updateData.soporte_reembolso_url = finalSoporteUrl;
 
-        if (Object.keys(updateData).length > 0) {
-          const { error } = await supabase.from(tableStr).update(updateData).eq('id', registroId);
-          if (error) throw error;
+            updateData.concepto = manualFields.concepto;
+            if (manualFields.categoria_id) {
+              updateData.categoria_movimiento_id = manualFields.categoria_id;
+            }
+          } else {
+            if (finalXmlUrl !== null) updateData.xml_url = finalXmlUrl;
+            if (finalPdfUrl !== null) updateData.pdf_url = finalPdfUrl;
+            if (ticketChanged) updateData.ticket_url = finalTicketUrl;
+            if (finalSoporteUrl !== null) updateData.soporte_reembolso_url = finalSoporteUrl;
+          }
+
+          if (Object.keys(updateData).length > 0) {
+            const { error } = await supabase.from(tableStr).update(updateData).eq('id', registroId);
+            if (error) throw error;
+          }
         }
       } else {
         // CREAR NUEVO REGISTRO
@@ -641,6 +820,24 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId 
         if (error) throw error;
 
         if (tipo === 'gasto' && newRecord) {
+          if (proveedorId && aplicarSaldoFavor) {
+            const valApp = parseFloat(montoSaldoFavorAplicar);
+            if (valApp > 0) {
+              await supabase.from('gastos').update({ saldo_favor_aplicado: valApp }).eq('id', newRecord.id);
+              const nSaldo = Math.max(0, saldoFavorDisponible - valApp);
+              await supabase.from('proveedores').update({ saldo_favor: nSaldo }).eq('id', proveedorId);
+              await supabase.from('historial_saldos_favor_proveedores').insert({
+                proveedor_id: proveedorId,
+                empresa_id: empresaId,
+                monto: -valApp,
+                tipo: 'aplicacion_gasto',
+                gasto_id: newRecord.id,
+                concepto: `Aplicación de saldo a favor en captura de gasto (${manualFields.folio || 'S/F'})`,
+                origen_detalle: `Descuento de $${valApp.toFixed(2)} aplicado al gasto ID ${newRecord.id}`
+              });
+            }
+          }
+
           const sessionData = localStorage.getItem('seimenjo_session');
           let token = '';
           if (sessionData) {
@@ -665,7 +862,11 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId 
       onSuccess();
     } catch (err: any) {
       console.error(err);
-      setErrorGlobal(err.message || 'Ocurrió un error inesperado al procesar.');
+      let msg = err.message || 'Ocurrió un error inesperado al procesar.';
+      if (msg.includes('gastos_uuid_fiscal_key') || err?.code === '23505') {
+        msg = `La factura con UUID ${insertPayload?.uuid_fiscal || ''} ya se encuentra registrada previamente en el sistema.`;
+      }
+      setErrorGlobal(msg);
     } finally {
       setProcesando(false);
     }
@@ -909,6 +1110,36 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId 
                   className="w-full mt-1 bg-gray-50 dark:bg-gray-950 border border-gray-300 dark:border-gray-700 p-2.5 rounded-lg text-sm text-gray-950 dark:text-white outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all"
                 />
               </div>
+
+              {saldoFavorDisponible > 0 && (
+                <div className="sm:col-span-2 p-3.5 bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 rounded-xl flex items-center justify-between text-xs font-sans">
+                  <div>
+                    <span className="font-bold text-emerald-800 dark:text-emerald-300 block">
+                      Este proveedor cuenta con Saldo a Favor de ${saldoFavorDisponible.toFixed(2)}
+                    </span>
+                    <p className="text-[11px] text-emerald-600 dark:text-emerald-400 mt-0.5">
+                      ¿Deseas aplicar este saldo a favor para descontarlo del total de esta factura/gasto?
+                    </p>
+                  </div>
+                  <label className="flex items-center gap-2 font-bold text-emerald-700 dark:text-emerald-300 cursor-pointer shrink-0">
+                    <input
+                      type="checkbox"
+                      checked={aplicarSaldoFavor}
+                      onChange={(e) => {
+                        const checked = e.target.checked;
+                        setAplicarSaldoFavor(checked);
+                        if (checked) {
+                          const tot = parseFloat(manualFields.total || '0') || 0;
+                          const maxApp = Math.min(saldoFavorDisponible, tot > 0 ? tot : saldoFavorDisponible);
+                          setMontoSaldoFavorAplicar(maxApp.toString());
+                        }
+                      }}
+                      className="w-4 h-4 accent-emerald-600 rounded cursor-pointer"
+                    />
+                    <span>Aplicar Saldo</span>
+                  </label>
+                </div>
+              )}
 
               {(tipo === 'gasto' || tipo === 'movimiento') && (
                 <div className="sm:col-span-2">

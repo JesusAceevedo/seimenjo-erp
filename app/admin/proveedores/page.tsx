@@ -169,6 +169,7 @@ export default function ProveedoresPage() {
           handleSaveProveedor={handleSaveProveedor}
           handleDeleteProveedor={handleDeleteProveedor}
           onDownloadFile={handleDownloadFile}
+          onReloadProveedores={fetchProveedores}
         />
       </div>
     </div>

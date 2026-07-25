@@ -86,7 +86,40 @@ export default function CargaXmlMasivaModal({ onClose, onSuccess, tipo }: CargaX
         if (firstE) defaultEstatusId = firstE.id;
       }
 
+      // Obtener empresaId activo
+      let empresaId = '';
+      try {
+        const sesionGuardada = localStorage.getItem('seimenjo_session');
+        if (sesionGuardada) {
+          const datosSesion = JSON.parse(sesionGuardada);
+          empresaId = datosSesion.empresa_id;
+        }
+      } catch (e) {
+        console.error('Error reading active company from localStorage:', e);
+      }
+
+      if (!empresaId) {
+        empresaId = user.user_metadata?.empresa_id;
+      }
+
+      if (!empresaId) {
+        throw new Error('No se pudo identificar la empresa activa en tu sesión.');
+      }
+
+      // Obtener periodos cerrados de cierres_mensuales
+      const { data: cierresData } = await supabase
+        .from('cierres_mensuales')
+        .select('mes, estatus')
+        .eq('empresa_id', empresaId);
+
+      const periodosCerrados = new Set(
+        (cierresData || [])
+          .filter(c => c.estatus === 'cerrado_definitivo')
+          .map(c => c.mes)
+      );
+
       for (const file of archivos) {
+        let insertPayload: any = {};
         try {
           const text = await file.text();
           const parser = new DOMParser();
@@ -236,27 +269,9 @@ export default function CargaXmlMasivaModal({ onClose, onSuccess, tipo }: CargaX
           }
 
           // 2. Insertar en base de datos
-          let insertPayload: any = {};
+          insertPayload = {};
 
           if (tipo === 'gasto') {
-            let empresaId = '';
-            try {
-              const sesionGuardada = localStorage.getItem('seimenjo_session');
-              if (sesionGuardada) {
-                const datosSesion = JSON.parse(sesionGuardada);
-                empresaId = datosSesion.empresa_id;
-              }
-            } catch (e) {
-              console.error('Error reading active company from localStorage:', e);
-            }
-
-            if (!empresaId) {
-              empresaId = user.user_metadata?.empresa_id;
-            }
-
-            if (!empresaId) {
-              throw new Error('No se pudo identificar la empresa activa en tu sesión.');
-            }
 
             // Buscar o crear proveedor por RFC
             let proveedorId = null;
@@ -306,24 +321,6 @@ export default function CargaXmlMasivaModal({ onClose, onSuccess, tipo }: CargaX
               es_deducible: true
             };
           } else {
-            let empresaId = '';
-            try {
-              const sesionGuardada = localStorage.getItem('seimenjo_session');
-              if (sesionGuardada) {
-                const datosSesion = JSON.parse(sesionGuardada);
-                empresaId = datosSesion.empresa_id;
-              }
-            } catch (e) {
-              console.error('Error reading active company from localStorage:', e);
-            }
-
-            if (!empresaId) {
-              empresaId = user.user_metadata?.empresa_id;
-            }
-
-            if (!empresaId) {
-              throw new Error('No se pudo identificar la empresa activa en tu sesión.');
-            }
 
             // Buscar o crear cliente por RFC
             let clienteId = null;
@@ -354,6 +351,27 @@ export default function CargaXmlMasivaModal({ onClose, onSuccess, tipo }: CargaX
               }
             }
 
+            // Buscar pedido candidato único para vincular automáticamente si no hay ambigüedad
+            let candidatePedido: any = null;
+            let ambiguedadMensaje = '';
+
+            if (clienteId && total > 0) {
+              const { data: candidates } = await supabase
+                .from('pedidos')
+                .select('id, precio_total, folio_factura, movimiento_bancario_id')
+                .eq('empresa_id', empresaId)
+                .eq('cliente_id', clienteId)
+                .is('folio_factura', null)
+                .gte('precio_total', total - 0.05)
+                .lte('precio_total', total + 0.05);
+
+              if (candidates && candidates.length === 1) {
+                candidatePedido = candidates[0];
+              } else if (candidates && candidates.length > 1) {
+                ambiguedadMensaje = ` (Factura subida: Se detectaron ${candidates.length} pedidos con el mismo monto para este cliente. Favor de vincular manualmente).`;
+              }
+            }
+
             insertPayload = {
               serie_folio: folioStr,
               uuid_fiscal: uuid.toUpperCase(),
@@ -363,6 +381,7 @@ export default function CargaXmlMasivaModal({ onClose, onSuccess, tipo }: CargaX
               xml_url: xmlUrl,
               fecha_emision: fecha_emision,
               cliente_id: clienteId,
+              pedido_id: candidatePedido ? candidatePedido.id : null,
               forma_pago_id: formaPagoId,
               estatus_factura_id: defaultEstatusId,
               uso_cfdi_clave: usoCfdi || 'G03',
@@ -371,12 +390,13 @@ export default function CargaXmlMasivaModal({ onClose, onSuccess, tipo }: CargaX
             };
           }
 
-          // 1. Validar que la factura pertenece al ciclo del mes de junio de 2026
-          if (!fecha_emision.startsWith('2026-06')) {
+          // 1. Validar que el periodo contable no esté cerrado definitivamente
+          const mesFactura = fecha_emision.substring(0, 7); // 'YYYY-MM'
+          if (periodosCerrados.has(mesFactura)) {
             nuevosResultados.push({
               nombre: file.name,
               estatus: 'error',
-              mensaje: `La factura no pertenece al ciclo del mes de junio de 2026 (Fecha del XML: ${fecha_emision}).`
+              mensaje: `El periodo contable ${mesFactura} se encuentra cerrado de manera definitiva. No se pueden subir facturas para este mes.`
             });
             continue;
           }
@@ -478,16 +498,44 @@ export default function CargaXmlMasivaModal({ onClose, onSuccess, tipo }: CargaX
 
           const { error: dbError } = await supabase.from(tableStr).insert([insertPayload]);
           if (dbError) throw dbError;
-          nuevosResultados.push({ nombre: file.name, estatus: 'ok' });
+
+          // Sincronizar folio en pedido y documentos en movimiento bancario si hubo vinculación
+          if (tipo === 'venta' && insertPayload.pedido_id) {
+            const folioStr = insertPayload.serie_folio || (insertPayload.uuid_fiscal ? `UUID:${insertPayload.uuid_fiscal.substring(0, 8)}` : '');
+            await supabase.from('pedidos').update({ folio_factura: folioStr }).eq('id', insertPayload.pedido_id);
+
+            // Obtener pedido para verificar si tiene movimiento bancario
+            const { data: pData } = await supabase.from('pedidos').select('movimiento_bancario_id').eq('id', insertPayload.pedido_id).single();
+            if (pData?.movimiento_bancario_id) {
+              await supabase.from('movimientos_bancarios').update({
+                xml_url: insertPayload.xml_url || null,
+                visible_ingresos: true
+              }).eq('id', pData.movimiento_bancario_id);
+            }
+          }
+
+          nuevosResultados.push({
+            nombre: file.name,
+            estatus: 'ok',
+            mensaje: ambiguedadMensaje ? ambiguedadMensaje.trim() : (insertPayload.pedido_id ? 'Vinculado automáticamente al Pedido del cliente' : undefined)
+          });
 
         } catch (err: any) {
-          console.error(err);
-          nuevosResultados.push({ nombre: file.name, estatus: 'error', mensaje: err.message || 'Error de procesamiento' });
+          console.error('Error procesando archivo:', file.name, err);
+          let detailedMessage = err?.message || err?.details || err?.error_description || (typeof err === 'object' ? JSON.stringify(err) : String(err)) || 'Error de procesamiento';
+          if (detailedMessage.includes('gastos_uuid_fiscal_key') || (err?.code === '23505' && detailedMessage.includes('uuid_fiscal'))) {
+            detailedMessage = `Esta factura ya está registrada en la base de datos (UUID duplicado: ${insertPayload?.uuid_fiscal || 'existente'}).`;
+          }
+          nuevosResultados.push({ nombre: file.name, estatus: 'error', mensaje: detailedMessage });
         }
       }
     } catch (gErr: any) {
-      console.error(gErr);
-      nuevosResultados.push({ nombre: 'General', estatus: 'error', mensaje: gErr.message || 'Error de sesión' });
+      console.error('Error general en procesarArchivos:', gErr);
+      let detailedGeneralMessage = gErr?.message || gErr?.details || (typeof gErr === 'object' ? JSON.stringify(gErr) : String(gErr)) || 'Error de sesión';
+      if (detailedGeneralMessage.includes('gastos_uuid_fiscal_key') || gErr?.code === '23505') {
+        detailedGeneralMessage = 'Se intentó registrar una factura o gasto cuyo UUID fiscal ya existe en la base de datos.';
+      }
+      nuevosResultados.push({ nombre: 'General', estatus: 'error', mensaje: detailedGeneralMessage });
     }
 
     setResultados(nuevosResultados);

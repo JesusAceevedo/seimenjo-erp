@@ -99,7 +99,7 @@ export default function AdminMonitor() {
     const { data } = await supabase
       .from('pedidos')
       .select('*, pedido_detalles(*, producto_variantes(gramaje, precio_base, productos(nombre))), clientes(nombre_local)')
-      .order('created_at', { ascending: false })
+      .order('creado_en', { ascending: false })
       .range(from, to);
 
     setPedidos(data || []);

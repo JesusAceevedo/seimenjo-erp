@@ -1993,7 +1993,7 @@ export default function ConfigPage() {
                     </thead>
                     <tbody className="divide-y divide-gray-100 dark:divide-gray-800/40">
                       {empresas.map(emp => {
-                        const modulosDisponibles = ['ventas', 'clientes', 'productos', 'inventario', 'gastos', 'facturacion', 'expediente', 'proveedores', 'personal', 'configuracion', 'produccion'];
+                        const modulosDisponibles = ['ventas', 'clientes', 'productos', 'inventario', 'gastos', 'contabilidad', 'conciliacion', 'expediente', 'proveedores', 'personal', 'asistencia', 'configuracion'];
                         const getModuloLabel = (modulo: string) => {
                           const labels: Record<string, string> = {
                             ventas: 'Pedidos',
@@ -2001,12 +2001,13 @@ export default function ConfigPage() {
                             productos: 'Productos',
                             inventario: 'Inventario',
                             gastos: 'Egresos',
-                            facturacion: 'Facturación',
+                            contabilidad: 'Contabilidad',
+                            conciliacion: 'Conciliación Bancaria',
                             expediente: 'Expediente',
                             proveedores: 'Proveedores',
                             personal: 'Personal',
-                            configuracion: 'Configuración',
-                            produccion: 'Producción'
+                            asistencia: 'Asistencia y Nóminas',
+                            configuracion: 'Configuración'
                           };
                           return (labels[modulo] || modulo).toUpperCase();
                         };
@@ -2289,7 +2290,7 @@ export default function ConfigPage() {
                             </span>
                           </td>
                           <td className="p-3 text-gray-500 font-mono">
-                            {new Date(c.created_at).toLocaleDateString()}
+                            {new Date(c.creado_en).toLocaleDateString()}
                           </td>
                           <td className="p-3 text-right">
                             <div className="flex justify-end gap-1.5">

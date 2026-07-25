@@ -15,11 +15,14 @@ CREATE TABLE IF NOT EXISTS public.zkteco_comandos (
 ALTER TABLE public.zkteco_comandos ENABLE ROW LEVEL SECURITY;
 
 -- Policy to allow select and write for authenticated users
+DROP POLICY IF EXISTS "Allow select for staff" ON public.zkteco_comandos;
 CREATE POLICY "Allow select for staff" ON public.zkteco_comandos
     FOR SELECT TO authenticated USING (true);
 
+DROP POLICY IF EXISTS "Allow insert for staff" ON public.zkteco_comandos;
 CREATE POLICY "Allow insert for staff" ON public.zkteco_comandos
     FOR INSERT TO authenticated WITH CHECK (true);
 
+DROP POLICY IF EXISTS "Allow update for staff" ON public.zkteco_comandos;
 CREATE POLICY "Allow update for staff" ON public.zkteco_comandos
     FOR UPDATE TO authenticated USING (true);

@@ -11,7 +11,5 @@ DROP INDEX IF EXISTS public.rfc_unico;
 DROP INDEX IF EXISTS public.unique_rfc;
 DROP INDEX IF EXISTS public.proveedores_rfc_key;
 
--- Add new unique constraint scoped to (rfc, empresa_id)
--- This allows different companies (empresa_id) to have the same supplier RFC,
--- while still ensuring RFCs are unique within each individual company.
+ALTER TABLE public.proveedores DROP CONSTRAINT IF EXISTS proveedores_rfc_empresa_unique CASCADE;
 ALTER TABLE public.proveedores ADD CONSTRAINT proveedores_rfc_empresa_unique UNIQUE (rfc, empresa_id);

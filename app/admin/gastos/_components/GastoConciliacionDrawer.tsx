@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { formatCurrency } from '../../../../lib/formatters';
 import { supabase } from '../../../../lib/supabase';
+import { useCfdiViewer } from '../../_components/CfdiViewerContext';
 
 interface GastoConciliacionDrawerProps {
   open: boolean;
@@ -26,6 +27,9 @@ export default function GastoConciliacionDrawer({
   onDownloadFile,
   onViewCfdi
 }: GastoConciliacionDrawerProps) {
+  const { openCfdi } = useCfdiViewer();
+  const handleViewCfdi = onViewCfdi || openCfdi;
+
   const [comentarios, setComentarios] = useState('');
   const [isEditingComms, setIsEditingComms] = useState(false);
   const [savingComms, setSavingComms] = useState(false);
@@ -233,9 +237,9 @@ export default function GastoConciliacionDrawer({
                     >
                       <FileCode size={11} /> XML
                     </button>
-                    {onViewCfdi && (
+                    {handleViewCfdi && (
                       <button
-                        onClick={() => onViewCfdi(gasto.xml_url!.split(',')[0])}
+                        onClick={() => handleViewCfdi(gasto.xml_url!.split(',')[0])}
                         className="inline-flex items-center gap-1 px-2.5 py-1 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-650 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-900/50 rounded-lg hover:bg-indigo-100 dark:hover:bg-indigo-900/60 font-bold transition-all text-[10px]"
                         title="Ver representación impresa del XML"
                       >

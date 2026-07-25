@@ -133,7 +133,7 @@ export default function AdminGastos() {
   }, []);
   
   // Filtros de fecha y método de pago
-  const [filtroRango, setFiltroRango] = useState<string>('todo');
+  const [filtroRango, setFiltroRango] = useState<string>('mes_actual');
   const [fechaInicio, setFechaInicio] = useState<string>('');
   const [fechaFin, setFechaFin] = useState<string>('');
   const [filtroMetodoPago, setFiltroMetodoPago] = useState<string>('');
@@ -299,13 +299,15 @@ export default function AdminGastos() {
       let endDateStr: string | null = null;
 
       const hoy = new Date();
-      if (filtroRango === 'semana') {
+      if (filtroRango === 'mes_actual') {
+        startDateStr = `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, '0')}-01`;
+      } else if (filtroRango === 'semana') {
         const haceUnaSemana = new Date();
         haceUnaSemana.setDate(hoy.getDate() - 7);
         startDateStr = haceUnaSemana.toISOString().split('T')[0];
       } else if (filtroRango === 'mes') {
         const haceUnMes = new Date();
-        haceUnMes.setMonth(hoy.getMonth() - 1);
+        haceUnMes.setDate(hoy.getDate() - 30);
         startDateStr = haceUnMes.toISOString().split('T')[0];
       } else if (filtroRango === 'rango' && fechaInicio) {
         startDateStr = fechaInicio;
@@ -317,21 +319,20 @@ export default function AdminGastos() {
       // 1. Consultar ventas del período
       let salesQuery = supabase
         .from('pedidos')
-        .select('precio_total, created_at, estatus_pago')
+        .select('precio_total, fecha_pedido, creado_en, estatus_pago')
         .eq('empresa_id', empresaId);
 
       // Si no se aplica filtro (rango todo), solo consideramos el mes en curso para los ingresos
       let salesStartDateStr = startDateStr;
       if (filtroRango === 'todo') {
-        const inicioMes = new Date(hoy.getFullYear(), hoy.getMonth(), 1);
-        salesStartDateStr = inicioMes.toISOString().split('T')[0];
+        salesStartDateStr = null;
       }
 
       if (salesStartDateStr) {
-        salesQuery = salesQuery.gte('created_at', `${salesStartDateStr}T00:00:00.000Z`);
+        salesQuery = salesQuery.or(`fecha_pedido.gte.${salesStartDateStr},creado_en.gte.${salesStartDateStr}`);
       }
       if (endDateStr) {
-        salesQuery = salesQuery.lte('created_at', `${endDateStr}T23:59:59.999Z`);
+        salesQuery = salesQuery.or(`fecha_pedido.lte.${endDateStr},creado_en.lte.${endDateStr}`);
       }
 
       const { data: salesData, error: salesError } = await salesQuery;
@@ -416,22 +417,23 @@ export default function AdminGastos() {
     let kpiEndDate: Date | null = null;
 
     const hoy = new Date();
-    if (filtroRango === 'todo') {
-      kpiStartDate = new Date(hoy.getFullYear(), hoy.getMonth(), 1);
+    let kpiStartStr: string | null = null;
+    let kpiEndStr: string | null = null;
+
+    if (filtroRango === 'mes_actual') {
+      kpiStartStr = `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, '0')}-01`;
     } else if (filtroRango === 'semana') {
       const haceUnaSemana = new Date();
       haceUnaSemana.setDate(hoy.getDate() - 7);
-      haceUnaSemana.setHours(0, 0, 0, 0);
-      kpiStartDate = haceUnaSemana;
+      kpiStartStr = haceUnaSemana.toISOString().split('T')[0];
     } else if (filtroRango === 'mes') {
       const haceUnMes = new Date();
-      haceUnMes.setMonth(hoy.getMonth() - 1);
-      haceUnMes.setHours(0, 0, 0, 0);
-      kpiStartDate = haceUnMes;
+      haceUnMes.setDate(hoy.getDate() - 30);
+      kpiStartStr = haceUnMes.toISOString().split('T')[0];
     } else if (filtroRango === 'rango' && fechaInicio) {
-      kpiStartDate = new Date(fechaInicio + 'T00:00:00');
+      kpiStartStr = fechaInicio;
       if (fechaFin) {
-        kpiEndDate = new Date(fechaFin + 'T23:59:59');
+        kpiEndStr = fechaFin;
       }
     }
 
@@ -439,10 +441,9 @@ export default function AdminGastos() {
       if (g.gasto_padre_id) return;
 
       if (g.fecha_gasto) {
-        const fechaG = new Date(g.fecha_gasto + 'T00:00:00');
-        // Validar si entra en el rango del KPI
-        if (kpiStartDate && fechaG < kpiStartDate) return;
-        if (kpiEndDate && fechaG > kpiEndDate) return;
+        const fechaGStr = String(g.fecha_gasto).split('T')[0];
+        if (kpiStartStr && fechaGStr < kpiStartStr) return;
+        if (kpiEndStr && fechaGStr > kpiEndStr) return;
       }
 
       const monto = Number(g.monto || 0);
@@ -688,10 +689,11 @@ export default function AdminGastos() {
                 onChange={(e) => setFiltroRango(e.target.value)}
                 className="border border-gray-200 dark:border-gray-800 p-2 rounded-lg text-sm bg-gray-50 dark:bg-gray-900 outline-none text-gray-900 dark:text-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
               >
-                <option value="todo">Todos los egresos</option>
+                <option value="mes_actual">Mes actual</option>
+                <option value="mes">Últimos 30 días</option>
                 <option value="semana">Última semana</option>
-                <option value="mes">Último mes</option>
                 <option value="rango">Rango personalizado</option>
+                <option value="todo">Todos los egresos</option>
               </select>
             </div>
 

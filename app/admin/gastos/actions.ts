@@ -409,9 +409,11 @@ export async function guardarFacturaEnBaseDatos(payload: {
             .neq('estatus_pago', 'Liquidado')
             .is('folio_factura', null)
             .eq('empresa_id', empresaId)
-            .order('created_at', { ascending: false })
+            .order('creado_en', { ascending: false })
             .limit(1)
             .maybeSingle();
+
+          const folioStr = `${xmlData.serie || ''}${xmlData.folio || ''}`.trim() || (xmlData.uuid ? `UUID-${xmlData.uuid.substring(0, 6)}` : 'FACTURADO');
 
           if (matchedP) {
             matchedPedidoId = matchedP.id;
@@ -428,11 +430,55 @@ export async function guardarFacturaEnBaseDatos(payload: {
             await supabaseAdmin
               .from('pedidos')
               .update({
-                folio_factura: `${xmlData.serie || ''}${xmlData.folio || ''}`.trim() || 'FACTURADO',
+                folio_factura: folioStr,
                 estatus_pago: 'Liquidado'
               })
               .eq('id', matchedPedidoId)
               .eq('empresa_id', empresaId);
+          } else {
+            // Check for multiple orders of the same client whose sum equals xmlData.total
+            const { data: clientOrders } = await supabaseAdmin
+              .from('pedidos')
+              .select('id, numero_pedido, precio_total')
+              .eq('cliente_id', clienteId)
+              .is('folio_factura', null)
+              .neq('estatus_pago', 'Cancelado')
+              .eq('empresa_id', empresaId)
+              .order('creado_en', { ascending: false });
+
+            if (clientOrders && clientOrders.length > 1) {
+              let matchedSubset: typeof clientOrders = [];
+              let currentSum = 0;
+              for (const p of clientOrders) {
+                if (currentSum + Number(p.precio_total) <= xmlData.total + 0.01) {
+                  currentSum += Number(p.precio_total);
+                  matchedSubset.push(p);
+                  if (Math.abs(currentSum - xmlData.total) < 0.01) break;
+                }
+              }
+
+              if (Math.abs(currentSum - xmlData.total) < 0.01 && matchedSubset.length > 0) {
+                matchedPedidoId = matchedSubset[0].id;
+                const matchedIds = matchedSubset.map(p => p.id);
+
+                console.log(`Auto-conciliated: matched Invoice with ${matchedSubset.length} Pedidos (${matchedSubset.map(p => '#' + p.numero_pedido).join(', ')})`);
+
+                await supabaseAdmin
+                  .from('facturas_clientes')
+                  .update({ pedido_id: matchedPedidoId })
+                  .eq('id', data.id)
+                  .eq('empresa_id', empresaId);
+
+                await supabaseAdmin
+                  .from('pedidos')
+                  .update({
+                    folio_factura: folioStr,
+                    estatus_pago: 'Liquidado'
+                  })
+                  .in('id', matchedIds)
+                  .eq('empresa_id', empresaId);
+              }
+            }
           }
         }
 
@@ -1142,3 +1188,231 @@ export async function consultarSatYActualizarCfdi(
     return { success: false, estado: 'No Encontrado', actualizado: false, error: err.message };
   }
 }
+
+// ---------------------------------------------------------------------------
+// 12. Vinculación Manual y Trayectoria de Pedidos (Ventas ↔ XML ↔ Conciliación)
+// ---------------------------------------------------------------------------
+
+export async function vincularFacturaAPedido(
+  facturaId: string,
+  pedidoId: string,
+  token: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { empresaId } = await getUserEmpresaId(token);
+    if (!empresaId) throw new Error('Sesión no válida o empresa no especificada.');
+
+    // 1. Obtener la factura de cliente
+    const { data: factura, error: fErr } = await supabaseAdmin
+      .from('facturas_clientes')
+      .select('*')
+      .eq('id', facturaId)
+      .eq('empresa_id', empresaId)
+      .single();
+
+    if (fErr || !factura) throw new Error('Factura de cliente no encontrada.');
+
+    // 2. Obtener el pedido objetivo
+    const { data: pedido, error: pErr } = await supabaseAdmin
+      .from('pedidos')
+      .select('*, clientes(rfc)')
+      .eq('id', pedidoId)
+      .eq('empresa_id', empresaId)
+      .single();
+
+    if (pErr || !pedido) throw new Error('Pedido no encontrado.');
+
+    // 3. Vincular la factura al pedido
+    const { error: updFErr } = await supabaseAdmin
+      .from('facturas_clientes')
+      .update({ pedido_id: pedidoId })
+      .eq('id', facturaId)
+      .eq('empresa_id', empresaId);
+
+    if (updFErr) throw updFErr;
+
+    // 4. Sincronizar el folio de factura en el pedido
+    const folioStr = factura.serie_folio || (factura.uuid_fiscal ? `UUID:${factura.uuid_fiscal.substring(0, 8)}` : '');
+    if (folioStr) {
+      await supabaseAdmin
+        .from('pedidos')
+        .update({ folio_factura: folioStr })
+        .eq('id', pedidoId)
+        .eq('empresa_id', empresaId);
+    }
+
+    // 5. Si el pedido ya tiene un movimiento bancario conciliado, sincronizar los documentos XML/PDF al movimiento bancario
+    if (pedido.movimiento_bancario_id) {
+      const xmlToSet = factura.xml_url || null;
+      const pdfToSet = factura.pdf_url || null;
+      const ticketToSet = factura.ticket_url || null;
+
+      await supabaseAdmin
+        .from('movimientos_bancarios')
+        .update({
+          ...(xmlToSet ? { xml_url: xmlToSet } : {}),
+          ...(pdfToSet ? { pdf_factura_url: pdfToSet } : {}),
+          ...(ticketToSet ? { pdf_ticket_url: ticketToSet } : {}),
+          visible_ingresos: true
+        })
+        .eq('id', pedido.movimiento_bancario_id)
+        .eq('empresa_id', empresaId);
+    }
+
+    return { success: true };
+  } catch (err: any) {
+    console.error('Error al vincular factura a pedido:', err);
+    return { success: false, error: err.message || 'Error al vincular factura.' };
+  }
+}
+
+export async function desvincularFacturaDePedido(
+  facturaId: string,
+  token: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { empresaId } = await getUserEmpresaId(token);
+    if (!empresaId) throw new Error('Sesión no válida o empresa no especificada.');
+
+    // 1. Obtener la factura para saber cuál pedido tenía
+    const { data: factura } = await supabaseAdmin
+      .from('facturas_clientes')
+      .select('pedido_id')
+      .eq('id', facturaId)
+      .eq('empresa_id', empresaId)
+      .single();
+
+    const previousPedidoId = factura?.pedido_id;
+
+    // 2. Desvincular la factura
+    const { error: updErr } = await supabaseAdmin
+      .from('facturas_clientes')
+      .update({ pedido_id: null })
+      .eq('id', facturaId)
+      .eq('empresa_id', empresaId);
+
+    if (updErr) throw updErr;
+
+    // 3. Si había un pedido vinculado, verificar si le quedan otras facturas
+    if (previousPedidoId) {
+      const { data: remaining } = await supabaseAdmin
+        .from('facturas_clientes')
+        .select('id, serie_folio, uuid_fiscal')
+        .eq('pedido_id', previousPedidoId)
+        .eq('empresa_id', empresaId);
+
+      if (!remaining || remaining.length === 0) {
+        await supabaseAdmin
+          .from('pedidos')
+          .update({ folio_factura: null })
+          .eq('id', previousPedidoId)
+          .eq('empresa_id', empresaId);
+      } else {
+        const nextFolio = remaining[0].serie_folio || `UUID:${remaining[0].uuid_fiscal?.substring(0, 8)}`;
+        await supabaseAdmin
+          .from('pedidos')
+          .update({ folio_factura: nextFolio })
+          .eq('id', previousPedidoId)
+          .eq('empresa_id', empresaId);
+      }
+    }
+
+    return { success: true };
+  } catch (err: any) {
+    console.error('Error al desvincular factura de pedido:', err);
+    return { success: false, error: err.message || 'Error al desvincular factura.' };
+  }
+}
+
+export async function obtenerFacturasClientesSinVincular(
+  token: string
+): Promise<{ success: boolean; data?: any[]; error?: string }> {
+  try {
+    const { empresaId } = await getUserEmpresaId(token);
+    if (!empresaId) throw new Error('Sesión no válida.');
+
+    const { data, error } = await supabaseAdmin
+      .from('facturas_clientes')
+      .select('*, clientes(nombre_local, rfc, email_facturacion), estatus_factura(nombre)')
+      .eq('empresa_id', empresaId)
+      .is('pedido_id', null)
+      .order('fecha_emision', { ascending: false });
+
+    if (error) throw error;
+    return { success: true, data: data || [] };
+  } catch (err: any) {
+    console.error('Error al obtener facturas sin vincular:', err);
+    return { success: false, error: err.message || 'Error al cargar facturas sin vincular.' };
+  }
+}
+
+export async function obtenerTrayectoriaPedido(
+  pedidoId: string,
+  token: string
+): Promise<{ success: boolean; data?: any; error?: string }> {
+  try {
+    const { empresaId } = await getUserEmpresaId(token);
+    if (!empresaId) throw new Error('Sesión no válida.');
+
+    // 1. Pedido con cliente
+    const { data: pedido, error: pErr } = await supabaseAdmin
+      .from('pedidos')
+      .select('*, clientes(*), pedido_detalles(*, producto_variantes(*, productos(*)))')
+      .eq('id', pedidoId)
+      .eq('empresa_id', empresaId)
+      .single();
+
+    if (pErr || !pedido) throw new Error('Pedido no encontrado.');
+
+    // 2. Facturas de clientes asociadas
+    const { data: facturas } = await supabaseAdmin
+      .from('facturas_clientes')
+      .select('*, estatus_factura(nombre), formas_pago(nombre, codigo)')
+      .eq('pedido_id', pedidoId)
+      .eq('empresa_id', empresaId);
+
+    // 3. Movimiento bancario (si existe)
+    let movimientoBancario = null;
+    let conciliacionEntry = null;
+
+    if (pedido.movimiento_bancario_id) {
+      const { data: mov } = await supabaseAdmin
+        .from('movimientos_bancarios')
+        .select('*, estatus_conciliacion_bancaria(*), cuentas_bancarias(*)')
+        .eq('id', pedido.movimiento_bancario_id)
+        .eq('empresa_id', empresaId)
+        .maybeSingle();
+
+      movimientoBancario = mov;
+    }
+
+    // Buscar también en la tabla junction de conciliaciones_bancarias
+    const { data: concJunction } = await supabaseAdmin
+      .from('conciliaciones_bancarias')
+      .select('*, movimientos_bancarios(*, estatus_conciliacion_bancaria(*), cuentas_bancarias(*))')
+      .eq('pedido_id', pedidoId)
+      .eq('empresa_id', empresaId)
+      .maybeSingle();
+
+    if (concJunction) {
+      conciliacionEntry = concJunction;
+      if (!movimientoBancario && concJunction.movimientos_bancarios) {
+        movimientoBancario = concJunction.movimientos_bancarios;
+      }
+    }
+
+    return {
+      success: true,
+      data: {
+        pedido,
+        facturas: facturas || [],
+        movimientoBancario,
+        conciliacionEntry
+      }
+    };
+  } catch (err: any) {
+    console.error('Error al obtener trayectoria del pedido:', err);
+    return { success: false, error: err.message || 'Error al obtener la trayectoria.' };
+  }
+}
+

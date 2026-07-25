@@ -9,8 +9,9 @@ import { formatCurrency } from '../../../../lib/formatters';
 import CargaXmlMasivaModal from './CargaXmlMasivaModal';
 import CargaManualModal from './CargaManualModal';
 import type { GastoFacturado, CategoriaGasto } from '../../types';
-import { supabase } from '../../../../lib/supabase';
 import { SAT_FORMAS_PAGO, getMetodoPagoLabel } from '../../../../lib/constants/sat';
+import { useCfdiViewer } from '../../_components/CfdiViewerContext';
+import { supabase } from '../../../../lib/supabase';
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 
@@ -71,6 +72,8 @@ export default function EgresosTab({
   onRefresh,
   onViewConciliacion,
 }: EgresosTabProps) {
+  const { openCfdi } = useCfdiViewer();
+  const handleViewCfdi = onViewCfdi || openCfdi;
 
   // Paginación
   const [showXmlModal, setShowXmlModal] = useState(false);
@@ -754,9 +757,9 @@ export default function EgresosTab({
                             {arr.length > 1 && <span className="text-[9px] font-bold">{idx + 1}</span>}
                           </button>
                         ))}
-                        {g.xml_url && onViewCfdi && (
+                        {g.xml_url && handleViewCfdi && (
                           <button
-                            onClick={() => onViewCfdi(g.xml_url!.split(',')[0])}
+                            onClick={() => handleViewCfdi(g.xml_url!.split(',')[0])}
                             title="Ver representación impresa del XML"
                             className="p-1.5 bg-indigo-50 dark:bg-indigo-900/20 hover:bg-indigo-100 dark:hover:bg-indigo-900/40 rounded border border-indigo-200 dark:border-indigo-900/50 text-indigo-600 flex items-center gap-0.5"
                           >

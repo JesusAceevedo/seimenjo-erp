@@ -11,12 +11,15 @@ import React from 'react';
 import {
   FileCode, FileText, CreditCard, List, Scale, Settings,
   ArrowRightLeft, Play, RefreshCw, FileSpreadsheet, Plus, Trash2, Edit3,
-  Layers, Check, X, UploadCloud, Paperclip, AlertTriangle
+  Layers, Check, X, UploadCloud, Paperclip, AlertTriangle, Filter, Eye
 } from 'lucide-react';
 import { formatCurrency } from '../../../../lib/formatters';
 import type { MovimientoBancario, EstatusConciliacion, GastoReconciliable, FormaPago, ComprobanteDeposito } from '../../types';
 import { supabase } from '../../../../lib/supabase';
 import { getMetodoPagoLabel } from '../../../../lib/constants/sat';
+import { useCfdiViewer } from '../../_components/CfdiViewerContext';
+import CargasTab from './CargasTab';
+import { generarSaldoFavorDesdeConciliacion } from '../../proveedores/proveedoresActions';
 
 // ── Tipos de estado que se pasan como props ──────────────────────────────────
 
@@ -62,8 +65,13 @@ interface PedidoPendiente {
 
 export interface BancoTabProps {
   // Sub-tab activo
-  bancoSubTab: 'movimientos' | 'global' | 'comprobantes';
-  setBancoSubTab: (sub: 'movimientos' | 'global' | 'comprobantes') => void;
+  bancoSubTab: 'movimientos' | 'ingresos_comprobantes' | 'cargas' | 'global' | 'comprobantes';
+  setBancoSubTab: (sub: 'movimientos' | 'ingresos_comprobantes' | 'cargas' | 'global' | 'comprobantes') => void;
+
+  token?: string;
+  onStartSustituirCarga?: (carga: any) => void;
+  onReloadMovimientos?: () => void;
+  onOpenUploadModal?: () => void;
 
   cuentasBancarias?: any[];
   gastosFacturados?: any[];
@@ -279,13 +287,42 @@ export default function BancoTab({
   onVincularComprobante,
   onDesvincularComprobante,
   onFusionarReembolso,
+  token,
+  onStartSustituirCarga,
+  onReloadMovimientos,
+  onOpenUploadModal,
 }: BancoTabProps) {
+  const { openCfdi } = useCfdiViewer();
+  const handleViewCfdi = onViewCfdi || openCfdi;
 
   const [tiposSelected, setTiposSelected] = React.useState<string[]>([]);
   const [estatusSelected, setEstatusSelected] = React.useState<string[]>([]);
   const [visibilidadesSelected, setVisibilidadesSelected] = React.useState<string[]>([]);
   const [categoriasSelected, setCategoriasSelected] = React.useState<string[]>([]);
   const [selectedMovimientos, setSelectedMovimientos] = React.useState<string[]>([]);
+  const [showFiltrosAvanzados, setShowFiltrosAvanzados] = React.useState<boolean>(false);
+  const [guardarExcedenteComoSaldoFavor, setGuardarExcedenteComoSaldoFavor] = React.useState<boolean>(false);
+  const [ingresosSubSeccion, setIngresosSubSeccion] = React.useState<'comprobantes' | 'global'>('comprobantes');
+
+  const parseInputNumber = (val: any): number => {
+    if (val === undefined || val === null) return 0;
+    if (typeof val === 'number') return val;
+    let cleaned = String(val).trim();
+    if (!cleaned) return 0;
+    if (cleaned.includes(',')) {
+      const parts = cleaned.split(',');
+      const lastPart = parts[parts.length - 1];
+      if (lastPart.length === 3 && parts.length > 1) {
+        cleaned = cleaned.replace(/,/g, '');
+      } else if (parts.length === 2) {
+        cleaned = cleaned.replace(',', '.');
+      } else {
+        cleaned = cleaned.replace(/,/g, '');
+      }
+    }
+    const num = parseFloat(cleaned);
+    return isNaN(num) ? 0 : num;
+  };
 
   const [activeDepositMov, setActiveDepositMov] = React.useState<any | null>(null);
   const [activeCompToLink, setActiveCompToLink] = React.useState<ComprobanteDeposito | null>(null);
@@ -893,26 +930,29 @@ export default function BancoTab({
       <div className="flex border-b border-gray-200 dark:border-gray-800 bg-gray-50/20 dark:bg-gray-900/10 p-2 gap-2 shrink-0">
         {([
           { key: 'movimientos', label: 'Movimientos de Cuenta', icon: <List size={14} /> },
-          { key: 'global', label: 'Facturación Global (Ingresos)', icon: <Scale size={14} /> },
-          { key: 'comprobantes', label: 'Comprobantes Pendientes', icon: <CreditCard size={14} /> },
-          ] as const).map(({ key, label, icon }) => (
-          <button
-            key={key}
-            onClick={() => {
-              setBancoSubTab(key);
-              if (key === 'global') {
-                setSelectedGlobalDepositId(null);
-                setSelectedGlobalPedidosIds([]);
-              }
-            }}
-            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${bancoSubTab === key
-              ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30'
-              : 'text-gray-400 hover:text-gray-700 dark:hover:text-white'
-            }`}
-          >
-            {icon} {label}
-          </button>
-        ))}
+          { key: 'ingresos_comprobantes', label: 'Ingresos y Comprobantes', icon: <CreditCard size={14} /> },
+          { key: 'cargas', label: 'Cargas de Estado de Cuenta', icon: <FileSpreadsheet size={14} /> },
+        ] as const).map(({ key, label, icon }) => {
+          const isActive = bancoSubTab === key || (key === 'ingresos_comprobantes' && (bancoSubTab === 'global' || bancoSubTab === 'comprobantes'));
+          return (
+            <button
+              key={key}
+              onClick={() => {
+                setBancoSubTab(key);
+                if (key === 'ingresos_comprobantes') {
+                  setSelectedGlobalDepositId(null);
+                  setSelectedGlobalPedidosIds([]);
+                }
+              }}
+              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${isActive
+                ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30'
+                : 'text-gray-400 hover:text-gray-700 dark:hover:text-white'
+              }`}
+            >
+              {icon} {label}
+            </button>
+          );
+        })}
       </div>
 
       <div className="flex-1 overflow-hidden flex flex-col min-h-0">
@@ -950,24 +990,6 @@ export default function BancoTab({
                     ))}
                   </select>
 
-                  <div className="relative overflow-hidden shrink-0">
-                    <input
-                      type="file"
-                      accept=".xlsx,.xls,.csv"
-                      onChange={handleExcelUpload}
-                      disabled={!selectedCuentaId || isUploading}
-                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
-                    />
-                    <button
-                      type="button"
-                      disabled={!selectedCuentaId || isUploading}
-                      className="px-3.5 py-2 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 shadow-md"
-                    >
-                      {isUploading ? <RefreshCw size={14} className="animate-spin" /> : <FileSpreadsheet size={14} />}
-                      {excelFile ? excelFile.name : 'Cargar Estado'}
-                    </button>
-                  </div>
-
                   <button
                     onClick={handleAutoReconcile}
                     disabled={!selectedCuentaId}
@@ -989,6 +1011,21 @@ export default function BancoTab({
                   </button>
 
                   <button
+                    onClick={() => setShowFiltrosAvanzados(!showFiltrosAvanzados)}
+                    className={`px-3.5 py-2 rounded-lg text-xs font-bold transition-all shrink-0 flex items-center gap-1.5 border ${
+                      showFiltrosAvanzados || tiposSelected.length > 0 || estatusSelected.length > 0 || visibilidadesSelected.length > 0 || categoriasSelected.length > 0
+                        ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/30'
+                        : 'bg-gray-200 dark:bg-gray-800 text-gray-700 dark:text-gray-300 border-transparent hover:bg-gray-300 dark:hover:bg-gray-700'
+                    }`}
+                  >
+                    <Filter size={14} />
+                    <span>{showFiltrosAvanzados ? 'Ocultar Filtros' : 'Mostrar Filtros'}</span>
+                    {(tiposSelected.length > 0 || estatusSelected.length > 0 || visibilidadesSelected.length > 0 || categoriasSelected.length > 0) && (
+                      <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+                    )}
+                  </button>
+
+                  <button
                     onClick={() => {
                       setTiposSelected([]);
                       setEstatusSelected([]);
@@ -1006,8 +1043,8 @@ export default function BancoTab({
                 {/* Resumen Horizontal de Saldos */}
                 {selectedCuentaId && (() => {
                   const cuenta = cuentasBancarias?.find(c => c.id === selectedCuentaId);
-                  const depositos = filtered.filter(m => m.tipo_movimiento === 'Deposito').reduce((acc, m) => acc + Number(m.monto), 0);
-                  const retiros = filtered.filter(m => m.tipo_movimiento === 'Retiro').reduce((acc, m) => acc + Number(m.monto), 0);
+                  const depositos = filtered.filter(m => m.tipo_movimiento === 'Deposito').reduce((acc, m) => acc + Math.abs(Number(m.monto)), 0);
+                  const retiros = filtered.filter(m => m.tipo_movimiento === 'Retiro').reduce((acc, m) => acc + Math.abs(Number(m.monto)), 0);
                   const saldoInicial = Number(cuenta?.saldo_inicial || 0);
                   const saldoCalculado = saldoInicial + depositos - retiros;
 
@@ -1039,144 +1076,146 @@ export default function BancoTab({
                   );
                 })()}
 
-                {/* Grid de Checklists de Filtro */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-xs font-sans">
-                  {/* Tipo */}
-                  <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 p-3 rounded-xl flex flex-col shadow-sm">
-                    <span className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2 block">Tipo de Movimiento</span>
-                    <div className="space-y-1.5 flex-1">
-                      <label className="flex items-center gap-2 cursor-pointer text-gray-700 dark:text-gray-300 text-[11px] font-semibold hover:text-gray-900 dark:hover:text-white">
-                        <input
-                          type="checkbox"
-                          checked={tiposSelected.includes('Deposito')}
-                          onChange={(e) => {
-                            const newTipos = e.target.checked ? [...tiposSelected, 'Deposito'] : tiposSelected.filter(t => t !== 'Deposito');
-                            setTiposSelected(newTipos);
-                            setBancoPage(0);
-                          }}
-                          className="w-3.5 h-3.5 rounded text-amber-500 focus:ring-amber-500 border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950"
-                        />
-                        <span>Depósitos (+)</span>
-                      </label>
-                      <label className="flex items-center gap-2 cursor-pointer text-gray-700 dark:text-gray-300 text-[11px] font-semibold hover:text-gray-900 dark:hover:text-white">
-                        <input
-                          type="checkbox"
-                          checked={tiposSelected.includes('Retiro')}
-                          onChange={(e) => {
-                            const newTipos = e.target.checked ? [...tiposSelected, 'Retiro'] : tiposSelected.filter(t => t !== 'Retiro');
-                            setTiposSelected(newTipos);
-                            setBancoPage(0);
-                          }}
-                          className="w-3.5 h-3.5 rounded text-amber-500 focus:ring-amber-500 border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950"
-                        />
-                        <span>Retiros (-)</span>
-                      </label>
-                    </div>
-                  </div>
-
-                  {/* Estatus */}
-                  <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 p-3 rounded-xl flex flex-col shadow-sm">
-                    <span className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2 block">Estatus Conciliación</span>
-                    <div className="space-y-1.5 flex-1 max-h-24 overflow-y-auto pr-1">
-                      {estatusCatalog.map((e) => (
-                        <label key={e.id} className="flex items-center gap-2 cursor-pointer text-gray-700 dark:text-gray-300 text-[11px] font-semibold hover:text-gray-900 dark:hover:text-white">
+                {/* Grid de Checklists de Filtro (Colapsable) */}
+                {showFiltrosAvanzados && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-xs font-sans animate-in fade-in duration-200">
+                    {/* Tipo */}
+                    <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 p-3 rounded-xl flex flex-col shadow-sm">
+                      <span className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2 block">Tipo de Movimiento</span>
+                      <div className="space-y-1.5 flex-1">
+                        <label className="flex items-center gap-2 cursor-pointer text-gray-700 dark:text-gray-300 text-[11px] font-semibold hover:text-gray-900 dark:hover:text-white">
                           <input
                             type="checkbox"
-                            checked={estatusSelected.includes(e.clave)}
-                            onChange={(chk) => {
-                              const newEstatus = chk.target.checked ? [...estatusSelected, e.clave] : estatusSelected.filter(es => es !== e.clave);
-                              setEstatusSelected(newEstatus);
+                            checked={tiposSelected.includes('Deposito')}
+                            onChange={(e) => {
+                              const newTipos = e.target.checked ? [...tiposSelected, 'Deposito'] : tiposSelected.filter(t => t !== 'Deposito');
+                              setTiposSelected(newTipos);
                               setBancoPage(0);
                             }}
                             className="w-3.5 h-3.5 rounded text-amber-500 focus:ring-amber-500 border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950"
                           />
-                          <span>{e.nombre}</span>
+                          <span>Depósitos (+)</span>
                         </label>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Visibilidad ERP */}
-                  <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 p-3 rounded-xl flex flex-col shadow-sm">
-                    <span className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2 block">Visibilidad ERP</span>
-                    <div className="space-y-1.5 flex-1">
-                      <label className="flex items-center gap-2 cursor-pointer text-gray-700 dark:text-gray-300 text-[11px] font-semibold hover:text-gray-900 dark:hover:text-white">
-                        <input
-                          type="checkbox"
-                          checked={visibilidadesSelected.includes('visibles_egresos')}
-                          onChange={(e) => {
-                            const newVis = e.target.checked ? [...visibilidadesSelected, 'visibles_egresos'] : visibilidadesSelected.filter(v => v !== 'visibles_egresos');
-                            setVisibilidadesSelected(newVis);
-                            setBancoPage(0);
-                          }}
-                          className="w-3.5 h-3.5 rounded text-amber-500 focus:ring-amber-500 border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950"
-                        />
-                        <span>Ver en Egresos</span>
-                      </label>
-                      <label className="flex items-center gap-2 cursor-pointer text-gray-700 dark:text-gray-300 text-[11px] font-semibold hover:text-gray-900 dark:hover:text-white">
-                        <input
-                          type="checkbox"
-                          checked={visibilidadesSelected.includes('visibles_ingresos')}
-                          onChange={(e) => {
-                            const newVis = e.target.checked ? [...visibilidadesSelected, 'visibles_ingresos'] : visibilidadesSelected.filter(v => v !== 'visibles_ingresos');
-                            setVisibilidadesSelected(newVis);
-                            setBancoPage(0);
-                          }}
-                          className="w-3.5 h-3.5 rounded text-amber-500 focus:ring-amber-500 border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950"
-                        />
-                        <span>Ver en Ingresos</span>
-                      </label>
-                      <label className="flex items-center gap-2 cursor-pointer text-gray-700 dark:text-gray-300 text-[11px] font-semibold hover:text-gray-900 dark:hover:text-white">
-                        <input
-                          type="checkbox"
-                          checked={visibilidadesSelected.includes('ocultos')}
-                          onChange={(e) => {
-                            const newVis = e.target.checked ? [...visibilidadesSelected, 'ocultos'] : visibilidadesSelected.filter(v => v !== 'ocultos');
-                            setVisibilidadesSelected(newVis);
-                            setBancoPage(0);
-                          }}
-                          className="w-3.5 h-3.5 rounded text-amber-500 focus:ring-amber-500 border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950"
-                        />
-                        <span>Ocultos en ERP</span>
-                      </label>
-                    </div>
-                  </div>
-
-                  {/* Categoría */}
-                  <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 p-3 rounded-xl flex flex-col shadow-sm">
-                    <span className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2 block">Categoría de Movimiento</span>
-                    <div className="space-y-1.5 flex-1 max-h-24 overflow-y-auto pr-1">
-                      <label className="flex items-center gap-2 cursor-pointer text-gray-700 dark:text-gray-300 text-[11px] font-semibold hover:text-gray-900 dark:hover:text-white">
-                        <input
-                          type="checkbox"
-                          checked={categoriasSelected.includes('sin_categoria')}
-                          onChange={(chk) => {
-                            const newCats = chk.target.checked ? [...categoriasSelected, 'sin_categoria'] : categoriasSelected.filter(c => c !== 'sin_categoria');
-                            setCategoriasSelected(newCats);
-                            setBancoPage(0);
-                          }}
-                          className="w-3.5 h-3.5 rounded text-amber-500 focus:ring-amber-500 border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950"
-                        />
-                        <span className="italic text-gray-400">Sin Categoría</span>
-                      </label>
-                      {categoriasMovimiento?.map((c) => (
-                        <label key={c.id} className="flex items-center gap-2 cursor-pointer text-gray-700 dark:text-gray-300 text-[11px] font-semibold hover:text-gray-900 dark:hover:text-white">
+                        <label className="flex items-center gap-2 cursor-pointer text-gray-700 dark:text-gray-300 text-[11px] font-semibold hover:text-gray-900 dark:hover:text-white">
                           <input
                             type="checkbox"
-                            checked={categoriasSelected.includes(c.id)}
+                            checked={tiposSelected.includes('Retiro')}
+                            onChange={(e) => {
+                              const newTipos = e.target.checked ? [...tiposSelected, 'Retiro'] : tiposSelected.filter(t => t !== 'Retiro');
+                              setTiposSelected(newTipos);
+                              setBancoPage(0);
+                            }}
+                            className="w-3.5 h-3.5 rounded text-amber-500 focus:ring-amber-500 border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950"
+                          />
+                          <span>Retiros (-)</span>
+                        </label>
+                      </div>
+                    </div>
+
+                    {/* Estatus */}
+                    <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 p-3 rounded-xl flex flex-col shadow-sm">
+                      <span className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2 block">Estatus Conciliación</span>
+                      <div className="space-y-1.5 flex-1 max-h-24 overflow-y-auto pr-1">
+                        {estatusCatalog.map((e) => (
+                          <label key={e.id} className="flex items-center gap-2 cursor-pointer text-gray-700 dark:text-gray-300 text-[11px] font-semibold hover:text-gray-900 dark:hover:text-white">
+                            <input
+                              type="checkbox"
+                              checked={estatusSelected.includes(e.clave)}
+                              onChange={(chk) => {
+                                const newEstatus = chk.target.checked ? [...estatusSelected, e.clave] : estatusSelected.filter(es => es !== e.clave);
+                                setEstatusSelected(newEstatus);
+                                setBancoPage(0);
+                              }}
+                              className="w-3.5 h-3.5 rounded text-amber-500 focus:ring-amber-500 border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950"
+                            />
+                            <span>{e.nombre}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Visibilidad ERP */}
+                    <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 p-3 rounded-xl flex flex-col shadow-sm">
+                      <span className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2 block">Visibilidad ERP</span>
+                      <div className="space-y-1.5 flex-1">
+                        <label className="flex items-center gap-2 cursor-pointer text-gray-700 dark:text-gray-300 text-[11px] font-semibold hover:text-gray-900 dark:hover:text-white">
+                          <input
+                            type="checkbox"
+                            checked={visibilidadesSelected.includes('visibles_egresos')}
+                            onChange={(e) => {
+                              const newVis = e.target.checked ? [...visibilidadesSelected, 'visibles_egresos'] : visibilidadesSelected.filter(v => v !== 'visibles_egresos');
+                              setVisibilidadesSelected(newVis);
+                              setBancoPage(0);
+                            }}
+                            className="w-3.5 h-3.5 rounded text-amber-500 focus:ring-amber-500 border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950"
+                          />
+                          <span>Ver en Egresos</span>
+                        </label>
+                        <label className="flex items-center gap-2 cursor-pointer text-gray-700 dark:text-gray-300 text-[11px] font-semibold hover:text-gray-900 dark:hover:text-white">
+                          <input
+                            type="checkbox"
+                            checked={visibilidadesSelected.includes('visibles_ingresos')}
+                            onChange={(e) => {
+                              const newVis = e.target.checked ? [...visibilidadesSelected, 'visibles_ingresos'] : visibilidadesSelected.filter(v => v !== 'visibles_ingresos');
+                              setVisibilidadesSelected(newVis);
+                              setBancoPage(0);
+                            }}
+                            className="w-3.5 h-3.5 rounded text-amber-500 focus:ring-amber-500 border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950"
+                          />
+                          <span>Ver en Ingresos</span>
+                        </label>
+                        <label className="flex items-center gap-2 cursor-pointer text-gray-700 dark:text-gray-300 text-[11px] font-semibold hover:text-gray-900 dark:hover:text-white">
+                          <input
+                            type="checkbox"
+                            checked={visibilidadesSelected.includes('ocultos')}
+                            onChange={(e) => {
+                              const newVis = e.target.checked ? [...visibilidadesSelected, 'ocultos'] : visibilidadesSelected.filter(v => v !== 'ocultos');
+                              setVisibilidadesSelected(newVis);
+                              setBancoPage(0);
+                            }}
+                            className="w-3.5 h-3.5 rounded text-amber-500 focus:ring-amber-500 border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950"
+                          />
+                          <span>Ocultos en ERP</span>
+                        </label>
+                      </div>
+                    </div>
+
+                    {/* Categoría */}
+                    <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 p-3 rounded-xl flex flex-col shadow-sm">
+                      <span className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2 block">Categoría de Movimiento</span>
+                      <div className="space-y-1.5 flex-1 max-h-24 overflow-y-auto pr-1">
+                        <label className="flex items-center gap-2 cursor-pointer text-gray-700 dark:text-gray-300 text-[11px] font-semibold hover:text-gray-900 dark:hover:text-white">
+                          <input
+                            type="checkbox"
+                            checked={categoriasSelected.includes('sin_categoria')}
                             onChange={(chk) => {
-                              const newCats = chk.target.checked ? [...categoriasSelected, c.id] : categoriasSelected.filter(cs => cs !== c.id);
+                              const newCats = chk.target.checked ? [...categoriasSelected, 'sin_categoria'] : categoriasSelected.filter(c => c !== 'sin_categoria');
                               setCategoriasSelected(newCats);
                               setBancoPage(0);
                             }}
                             className="w-3.5 h-3.5 rounded text-amber-500 focus:ring-amber-500 border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950"
                           />
-                          <span>{c.nombre}</span>
+                          <span className="italic text-gray-400">Sin Categoría</span>
                         </label>
-                      ))}
+                        {categoriasMovimiento?.map((c) => (
+                          <label key={c.id} className="flex items-center gap-2 cursor-pointer text-gray-700 dark:text-gray-300 text-[11px] font-semibold hover:text-gray-900 dark:hover:text-white">
+                            <input
+                              type="checkbox"
+                              checked={categoriasSelected.includes(c.id)}
+                              onChange={(chk) => {
+                                const newCats = chk.target.checked ? [...categoriasSelected, c.id] : categoriasSelected.filter(cs => cs !== c.id);
+                                setCategoriasSelected(newCats);
+                                setBancoPage(0);
+                              }}
+                              className="w-3.5 h-3.5 rounded text-amber-500 focus:ring-amber-500 border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950"
+                            />
+                            <span>{c.nombre}</span>
+                          </label>
+                        ))}
+                      </div>
                     </div>
                   </div>
-                </div>
+                )}
               </div>
 
               {/* Barra de Acciones Masivas */}
@@ -1537,10 +1576,10 @@ export default function BancoTab({
                                     <FileText size={13} />{a.length > 1 && <span className="text-[8px] font-bold font-mono">{i + 1}</span>}
                                   </button>
                                 ))
-                              ) : m.xml_url && onViewCfdi ? (
-                                <button onClick={() => onViewCfdi(m.xml_url!.split(',')[0])}
-                                  className="p-1 rounded text-[10px] text-red-500 hover:bg-red-500/10 flex items-center gap-0.5" title="Ver Representación PDF">
-                                  <FileText size={13} />
+                              ) : m.xml_url && handleViewCfdi ? (
+                                <button onClick={() => handleViewCfdi(m.xml_url!.split(',')[0])}
+                                  className="p-1 rounded text-[10px] text-indigo-600 hover:bg-indigo-500/10 flex items-center gap-0.5" title="Ver Representación CFDI">
+                                  <Eye size={13} />
                                 </button>
                               ) : (
                                 <button disabled className="p-1 rounded text-[10px] text-gray-300 cursor-not-allowed"><FileText size={13} /></button>
@@ -1607,688 +1646,609 @@ export default function BancoTab({
           </div>
         )}
 
-        {/* ── SUB-TAB 2: FACTURACIÓN GLOBAL ───────────────────────────────── */}
-        {bancoSubTab === 'global' && (
+        {/* ── SUB-TAB 2: INGRESOS Y COMPROBANTES (UNIFICADO) ───────────────── */}
+        {(bancoSubTab === 'ingresos_comprobantes' || bancoSubTab === 'global' || bancoSubTab === 'comprobantes') && (
           <div className="flex-1 flex flex-col p-4 overflow-hidden min-h-0">
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 flex-1 min-h-0 overflow-hidden">
-              {/* Depósitos bancarios */}
-              <div className="flex flex-col min-h-0 bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden shadow-sm">
-                <div className="p-3 bg-gray-50/50 dark:bg-gray-900/40 border-b border-gray-200 dark:border-gray-800 shrink-0">
-                  <h4 className="text-xs font-extrabold uppercase text-amber-500 flex items-center gap-1.5">
-                    <CreditCard size={14} /> 1. Selecciona un Depósito Bancario
-                  </h4>
-                </div>
-                <div className="flex-1 overflow-auto">
-                  <table className="w-full text-left border-collapse text-xs">
-                    <thead>
-                      <tr className="bg-gray-50 dark:bg-gray-900/50 border-b border-gray-200 dark:border-gray-800 text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
-                        <th className="p-3 w-12 text-center" />
-                        <th className="p-3">Fecha</th>
-                        <th className="p-3">Concepto</th>
-                        <th className="p-3 text-right">Depósito</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100 dark:divide-gray-800/60 font-sans">
-                      {movimientos
-                        .filter((m) => m.tipo_movimiento === 'Deposito' && m.estatus_conciliacion_bancaria?.clave !== 'comprobado')
-                        .map((m) => (
-                          <tr key={m.id}
-                            onClick={() => { setSelectedGlobalDepositId(m.id); setSelectedGlobalPedidosIds([]); }}
-                            className={`cursor-pointer hover:bg-gray-50/40 dark:hover:bg-gray-900/20 transition-all ${selectedGlobalDepositId === m.id ? 'bg-amber-500/10 hover:bg-amber-500/15' : ''}`}>
-                            <td className="p-3 text-center">
-                              <input type="radio" name="global_deposit" checked={selectedGlobalDepositId === m.id}
-                                onChange={() => { setSelectedGlobalDepositId(m.id); setSelectedGlobalPedidosIds([]); }}
-                                className="w-3.5 h-3.5 text-amber-500 focus:ring-amber-500" />
-                            </td>
-                            <td className="p-3 font-mono text-gray-500">{new Date(m.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })}</td>
-                            <td className="p-3">
-                              <div className="font-bold text-gray-800 dark:text-gray-200">{m.concepto}</div>
-                              {m.referencia && <span className="text-[10px] text-gray-400">Ref: {m.referencia}</span>}
-                            </td>
-                            <td className="p-3 text-right font-mono font-bold text-emerald-500">+{formatCurrency(m.deposito)}</td>
-                          </tr>
-                        ))}
-                      {movimientos.filter((m) => m.tipo_movimiento === 'Deposito' && m.estatus_conciliacion_bancaria?.clave !== 'comprobado').length === 0 && (
-                        <tr><td colSpan={4} className="p-8 text-center text-gray-400 italic">No hay depósitos pendientes de conciliar</td></tr>
+            {/* Control de Sub-sección interna */}
+            <div className="flex items-center gap-2 mb-4 bg-gray-100 dark:bg-gray-900 p-1.5 rounded-2xl w-fit shrink-0 border border-gray-200 dark:border-gray-800">
+              <button
+                type="button"
+                onClick={() => setIngresosSubSeccion('comprobantes')}
+                className={`px-4 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-2 ${
+                  ingresosSubSeccion === 'comprobantes'
+                    ? 'bg-amber-500 text-white shadow-md'
+                    : 'text-gray-500 hover:text-gray-900 dark:hover:text-white'
+                }`}
+              >
+                <CreditCard size={15} /> Comprobantes y Fichas de Depósito ({comprobantes.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setIngresosSubSeccion('global')}
+                className={`px-4 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-2 ${
+                  ingresosSubSeccion === 'global'
+                    ? 'bg-amber-500 text-white shadow-md'
+                    : 'text-gray-500 hover:text-gray-900 dark:hover:text-white'
+                }`}
+              >
+                <Scale size={15} /> Facturación Global y Conciliación Ventas
+              </button>
+            </div>
+
+            {ingresosSubSeccion === 'comprobantes' ? (
+              <div className="flex-1 flex flex-col overflow-hidden min-h-0 gap-6">
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 flex-1 min-h-0 overflow-hidden">
+                  
+                  {/* Formulario de creación */}
+                  <div className="flex flex-col min-h-0 bg-white dark:bg-gray-955 border border-gray-200 dark:border-gray-800 rounded-xl p-4 overflow-auto shadow-sm font-sans">
+                    <h4 className="text-xs font-extrabold uppercase text-amber-500 flex items-center gap-1.5 mb-4 border-b border-gray-150 dark:border-gray-900 pb-2">
+                      <Plus size={14} /> Registrar Comprobante Independiente
+                    </h4>
+                    
+                    <div className="space-y-4">
+                      <div>
+                        <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block mb-1">Tipo de Comprobante</label>
+                        <select
+                          value={newCompForm.tipo}
+                          onChange={(e) => setNewCompForm(p => ({ ...p, tipo: e.target.value as any }))}
+                          className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs text-gray-900 dark:text-white focus:ring-1 focus:ring-amber-500 outline-none"
+                        >
+                          <option value="deposito_ventanilla">Depósito en Ventanilla</option>
+                          <option value="corte_tarjeta">Corte Diario de Tarjeta</option>
+                        </select>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block mb-1">Fecha</label>
+                          <input
+                            type="date"
+                            value={newCompForm.fecha}
+                            onChange={(e) => setNewCompForm(p => ({ ...p, fecha: e.target.value }))}
+                            className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs text-gray-900 dark:text-white focus:ring-1 focus:ring-amber-500 outline-none"
+                          />
+                        </div>
+                        {newCompForm.tipo === 'deposito_ventanilla' ? (
+                          <div>
+                            <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block mb-1">Monto (MXN)</label>
+                            <input
+                              type="number"
+                              placeholder="0.00"
+                              step="0.01"
+                              value={newCompForm.monto}
+                              onChange={(e) => setNewCompForm(p => ({ ...p, monto: e.target.value }))}
+                              className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs text-gray-900 dark:text-white focus:ring-1 focus:ring-amber-500 outline-none font-mono"
+                            />
+                          </div>
+                        ) : (
+                          <div>
+                            <label className="text-[10px] font-bold text-amber-500 uppercase tracking-wider block mb-1">Monto Calculado</label>
+                            <div className="w-full bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-750 p-2 rounded-lg text-xs font-mono font-bold text-gray-900 dark:text-white">
+                              {(() => {
+                                const tot = parseInputNumber(newCompForm.montoDebito || 0) +
+                                            parseInputNumber(newCompForm.montoCredito || 0) +
+                                            parseInputNumber(newCompForm.montoAmex || 0);
+                                return formatCurrency(tot);
+                              })()}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      {newCompForm.tipo === 'corte_tarjeta' && (
+                        <div className="p-3 bg-amber-50/50 dark:bg-amber-955/20 border border-amber-200 dark:border-amber-900/40 rounded-xl space-y-2.5">
+                          <span className="text-[10px] font-bold text-amber-600 dark:text-amber-400 uppercase tracking-wider block">Desglose por Tipo de Tarjeta</span>
+                          <div className="grid grid-cols-3 gap-2 text-xs font-mono">
+                            <div>
+                              <label className="text-[9px] text-gray-500 block">Débito</label>
+                              <input
+                                type="number"
+                                step="0.01"
+                                placeholder="0.00"
+                                value={newCompForm.montoDebito}
+                                onChange={(e) => setNewCompForm(p => ({ ...p, montoDebito: e.target.value }))}
+                                className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-1.5 rounded text-xs text-gray-900 dark:text-white"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[9px] text-gray-500 block">Crédito</label>
+                              <input
+                                type="number"
+                                step="0.01"
+                                placeholder="0.00"
+                                value={newCompForm.montoCredito}
+                                onChange={(e) => setNewCompForm(p => ({ ...p, montoCredito: e.target.value }))}
+                                className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-1.5 rounded text-xs text-gray-900 dark:text-white"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[9px] text-gray-500 block">AMEX</label>
+                              <input
+                                type="number"
+                                step="0.01"
+                                placeholder="0.00"
+                                value={newCompForm.montoAmex}
+                                onChange={(e) => setNewCompForm(p => ({ ...p, montoAmex: e.target.value }))}
+                                className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-1.5 rounded text-xs text-gray-900 dark:text-white"
+                              />
+                            </div>
+                          </div>
+                        </div>
                       )}
-                    </tbody>
-                  </table>
+
+                      <div>
+                        <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block mb-1">Cuenta de Destino Relacionada</label>
+                        <select
+                          value={newCompForm.cuentaBancariaId}
+                          onChange={(e) => setNewCompForm(p => ({ ...p, cuentaBancariaId: e.target.value }))}
+                          className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs text-gray-900 dark:text-white focus:ring-1 focus:ring-amber-500 outline-none"
+                        >
+                          <option value="">- Ninguna / Seleccionar Banco -</option>
+                          {(cuentasBancarias || []).map(cb => (
+                            <option key={cb.id} value={cb.id}>{cb.nombre} - {cb.banco}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block mb-1">Descripción / Notas</label>
+                        <textarea
+                          rows={2}
+                          placeholder="Ej: Depósito efectivo ventas fin de semana..."
+                          value={newCompForm.descripcion}
+                          onChange={(e) => setNewCompForm(p => ({ ...p, descripcion: e.target.value }))}
+                          className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs text-gray-900 dark:text-white focus:ring-1 focus:ring-amber-500 outline-none resize-none"
+                        />
+                      </div>
+
+                      {/* Adjunto Ticket y Almacenamiento */}
+                      <div>
+                        <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block mb-1">Proveedor de Almacenamiento</label>
+                        <div className="flex gap-4 mt-1 text-xs">
+                          <label className="flex items-center gap-1.5 cursor-pointer">
+                            <input
+                              type="radio"
+                              name="comp_storage"
+                              checked={newCompForm.storageProvider === 'Supabase'}
+                              onChange={() => setNewCompForm(p => ({ ...p, storageProvider: 'Supabase', archivoUrl: '' }))}
+                            />
+                            <span>Supabase Storage</span>
+                          </label>
+                          <label className="flex items-center gap-1.5 cursor-pointer">
+                            <input
+                              type="radio"
+                              name="comp_storage"
+                              checked={newCompForm.storageProvider === 'GoogleDrive'}
+                              onChange={() => setNewCompForm(p => ({ ...p, storageProvider: 'GoogleDrive', archivoUrl: '' }))}
+                            />
+                            <span>Google Drive Link</span>
+                          </label>
+                        </div>
+                      </div>
+
+                      {newCompForm.storageProvider === 'Supabase' ? (
+                        <div>
+                          <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block mb-1">Ticket de Depósito (Imagen / PDF)</label>
+                          <div className="relative overflow-hidden w-full">
+                            <input
+                              type="file"
+                              accept="image/*,.pdf"
+                              onChange={handleUploadCompFile}
+                              disabled={compUploadLoading}
+                              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
+                            />
+                            <button
+                              type="button"
+                              disabled={compUploadLoading}
+                              className="w-full py-2 bg-gray-100 hover:bg-gray-200 dark:bg-gray-900 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-700 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5"
+                            >
+                              {compUploadLoading ? <RefreshCw size={14} className="animate-spin" /> : <UploadCloud size={14} />}
+                              {newCompForm.archivoUrl ? 'Archivo cargado con éxito ✓' : 'Seleccionar Archivo...'}
+                            </button>
+                          </div>
+                          {newCompForm.archivoUrl && (
+                            <p className="text-[9px] text-gray-400 font-mono mt-1 truncate">{newCompForm.archivoUrl.split('/').pop()}</p>
+                          )}
+                        </div>
+                      ) : (
+                        <div>
+                          <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block mb-1">Enlace de Google Drive</label>
+                          <input
+                            type="url"
+                            placeholder="https://drive.google.com/..."
+                            value={newCompForm.archivoUrl}
+                            onChange={(e) => setNewCompForm(p => ({ ...p, archivoUrl: e.target.value }))}
+                            className="w-full bg-white dark:bg-gray-955 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs text-gray-900 dark:text-white focus:ring-1 focus:ring-amber-500 outline-none font-mono"
+                          />
+                        </div>
+                      )}
+
+                      {newCompForm.error && (
+                        <div className="text-[11px] text-red-500 bg-red-50 dark:bg-red-955/20 border border-red-200 dark:border-red-900/50 p-2.5 rounded-lg">{newCompForm.error}</div>
+                      )}
+
+                      {editingCompId && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingCompId(null);
+                            setNewCompForm({
+                              tipo: 'deposito_ventanilla',
+                              fecha: new Date().toISOString().substring(0, 10),
+                              monto: '',
+                              descripcion: '',
+                              archivoUrl: '',
+                              storageProvider: 'Supabase',
+                              cuentaBancariaId: '',
+                              loading: false,
+                              error: '',
+                              montoDebito: '',
+                              montoCredito: '',
+                              propinaDebito: '',
+                              propinaCredito: '',
+                              montoAmex: '',
+                              propinaAmex: ''
+                            });
+                          }}
+                          className="w-full mb-2 py-2 border border-gray-300 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300 rounded-lg text-xs font-bold transition-all shadow-sm"
+                        >
+                          Cancelar Edición
+                        </button>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const tot = newCompForm.tipo === 'deposito_ventanilla'
+                            ? parseInputNumber(newCompForm.monto)
+                            : parseInputNumber(newCompForm.montoDebito || 0) +
+                              parseInputNumber(newCompForm.montoCredito || 0) +
+                              parseInputNumber(newCompForm.propinaDebito || 0) +
+                              parseInputNumber(newCompForm.propinaCredito || 0) +
+                              parseInputNumber(newCompForm.montoAmex || 0) +
+                              parseInputNumber(newCompForm.propinaAmex || 0);
+
+                          if (!tot || tot <= 0) {
+                            setNewCompForm(p => ({ ...p, error: 'Por favor ingresa un monto válido mayor a 0.' }));
+                            return;
+                          }
+                          if (!newCompForm.fecha) {
+                            setNewCompForm(p => ({ ...p, error: 'Por favor selecciona la fecha del ticket.' }));
+                            return;
+                          }
+
+                          if (editingCompId) {
+                            const currentComp = comprobantes.find(c => c.id === editingCompId);
+                            if (currentComp) {
+                              const linkedSum = (currentComp.comprobantes_deposito_movimientos || []).reduce((acc, rel) => acc + Number(rel.monto_asociado), 0);
+                              if (linkedSum > 0 && Math.abs(tot - linkedSum) >= 0.05) {
+                                if (!confirm(`Advertencia: El nuevo monto del comprobante (${formatCurrency(tot)}) no coincide con la suma de los movimientos vinculados (${formatCurrency(linkedSum)}). ¿Deseas continuar?`)) {
+                                  return;
+                                }
+                              }
+                            }
+                          }
+
+                          setNewCompForm(p => ({ ...p, loading: true, error: '' }));
+                          try {
+                            const payload = {
+                              tipo: newCompForm.tipo,
+                              fecha: newCompForm.fecha,
+                              monto: tot,
+                              descripcion: newCompForm.descripcion,
+                              archivo_url: newCompForm.archivoUrl,
+                              storage_provider: newCompForm.storageProvider,
+                              cuenta_bancaria_id: newCompForm.cuentaBancariaId || null,
+                              monto_debito: parseInputNumber(newCompForm.montoDebito || 0),
+                              monto_credito: parseInputNumber(newCompForm.montoCredito || 0),
+                              propina_debito: parseInputNumber(newCompForm.propinaDebito || 0),
+                              propina_credito: parseInputNumber(newCompForm.propinaCredito || 0),
+                              monto_amex: parseInputNumber(newCompForm.montoAmex || 0),
+                              propina_amex: parseInputNumber(newCompForm.propinaAmex || 0)
+                            };
+
+                            let res;
+                            if (editingCompId) {
+                              res = await onActualizarComprobante?.(editingCompId, payload);
+                            } else {
+                              res = await onCrearComprobante?.(payload);
+                            }
+
+                            if (res && !res.success) {
+                              throw new Error(res.error);
+                            }
+
+                            setEditingCompId(null);
+                            setNewCompForm({
+                              tipo: 'deposito_ventanilla',
+                              fecha: new Date().toISOString().substring(0, 10),
+                              monto: '',
+                              descripcion: '',
+                              archivoUrl: '',
+                              storageProvider: 'Supabase',
+                              cuentaBancariaId: '',
+                              loading: false,
+                              error: '',
+                              montoDebito: '',
+                              montoCredito: '',
+                              propinaDebito: '',
+                              propinaCredito: '',
+                              montoAmex: '',
+                              propinaAmex: ''
+                            });
+                          } catch (err: any) {
+                            setNewCompForm(p => ({ ...p, error: err.message || 'Error al guardar.' }));
+                          } finally {
+                            setNewCompForm(p => ({ ...p, loading: false }));
+                          }
+                        }}
+                        disabled={newCompForm.loading || compUploadLoading}
+                        className="w-full py-2.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-lg text-xs font-extrabold shadow-md flex items-center justify-center gap-1.5 transition-all mt-2"
+                      >
+                        {newCompForm.loading ? <RefreshCw size={14} className="animate-spin" /> : (editingCompId ? <Check size={14} /> : <Plus size={14} />)}
+                        {editingCompId ? 'Actualizar Comprobante' : 'Guardar Comprobante'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Tabla de comprobantes */}
+                  <div className="lg:col-span-2 flex flex-col min-h-0 bg-white dark:bg-gray-955 border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden shadow-sm font-sans">
+                    <div className="p-3 bg-gray-50/50 dark:bg-gray-900/40 border-b border-gray-200 dark:border-gray-800 shrink-0 flex justify-between items-center flex-wrap gap-2">
+                      <h4 className="text-xs font-extrabold uppercase text-amber-500 flex items-center gap-1.5">
+                        <List size={14} /> Comprobantes Registrados y Conciliación
+                      </h4>
+                      <span className="text-[10px] font-bold text-gray-400">
+                        {comprobantes.length} comprobantes en total
+                      </span>
+                    </div>
+
+                    <div className="flex-1 overflow-auto">
+                      <table className="w-full text-left border-collapse text-xs">
+                        <thead>
+                          <tr className="bg-gray-50 dark:bg-gray-900/50 border-b border-gray-200 dark:border-gray-800 text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+                            <th className="p-3">Fecha</th>
+                            <th className="p-3">Tipo / Desglose</th>
+                            <th className="p-3">Banco Destino</th>
+                            <th className="p-3">Descripción</th>
+                            <th className="p-3 text-right">Monto</th>
+                            <th className="p-3 text-center">Ticket</th>
+                            <th className="p-3 text-right">Acciones</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100 dark:divide-gray-800/60">
+                          {comprobantes.map(c => {
+                            const isVentanilla = c.tipo === 'deposito_ventanilla';
+                            const sumAsoc = c.comprobantes_deposito_movimientos?.reduce((s, r) => s + Number(r.monto_asociado || 0), 0) || 0;
+                            const isFullyAssoc = Math.abs(Number(c.monto) - sumAsoc) < 0.05;
+
+                            return (
+                              <tr key={c.id} className="hover:bg-gray-50/40 dark:hover:bg-gray-900/20 transition-all">
+                                <td className="p-3 font-mono text-gray-500">{new Date(c.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })}</td>
+                                <td className="p-3">
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <span className={`text-[9px] font-black px-2 py-0.5 rounded uppercase ${
+                                      isVentanilla ? 'bg-blue-100 dark:bg-blue-955/30 text-blue-600 dark:text-blue-400' : 'bg-purple-100 dark:bg-purple-955/30 text-purple-600 dark:text-purple-400'
+                                    }`}>
+                                      {isVentanilla ? 'Depósito Ventanilla' : 'Corte Tarjeta'}
+                                    </span>
+                                    {isFullyAssoc ? (
+                                      <span className="bg-emerald-100 text-emerald-700 dark:bg-emerald-955/30 dark:text-emerald-400 text-[8px] font-black px-1.5 py-0.5 rounded uppercase">Conciliado</span>
+                                    ) : (
+                                      <span className="bg-amber-100 text-amber-700 dark:bg-amber-955/30 dark:text-amber-400 text-[8px] font-black px-1.5 py-0.5 rounded uppercase">Pendiente</span>
+                                    )}
+                                  </div>
+                                  {!isVentanilla && (
+                                    <div className="mt-1 text-[9px] text-gray-400 font-mono space-y-0.5">
+                                      {c.monto_debito > 0 && <div>D: {formatCurrency(c.monto_debito)}</div>}
+                                      {c.monto_credito > 0 && <div>C: {formatCurrency(c.monto_credito)}</div>}
+                                      {c.monto_amex > 0 && <div>A: {formatCurrency(c.monto_amex)}</div>}
+                                    </div>
+                                  )}
+                                </td>
+                                <td className="p-3 text-gray-600 dark:text-gray-300 font-semibold">{c.cuentas_bancarias?.nombre || '-'}</td>
+                                <td className="p-3 text-gray-700 dark:text-gray-200">{c.descripcion || '-'}</td>
+                                <td className="p-3 text-right font-mono font-bold text-gray-900 dark:text-white">
+                                  {formatCurrency(c.monto)}
+                                  {sumAsoc > 0 && (
+                                    <div className="text-[9px] font-normal text-emerald-500">Asoc: {formatCurrency(sumAsoc)}</div>
+                                  )}
+                                </td>
+                                <td className="p-3 text-center">
+                                  {c.ticket_url ? (
+                                    <button
+                                      onClick={() => handleViewTicket(c.ticket_url!)}
+                                      className="p-1 bg-amber-50 dark:bg-amber-955/20 text-amber-600 hover:bg-amber-100 dark:hover:bg-amber-900/30 rounded border border-amber-200 dark:border-amber-900/40 text-[9px] font-bold inline-flex items-center gap-0.5"
+                                    >
+                                      <Eye size={10} /> Ver
+                                    </button>
+                                  ) : (
+                                    <span className="text-[9px] text-gray-400 italic">Sin Ticket</span>
+                                  )}
+                                </td>
+                                <td className="p-3 text-right">
+                                  <div className="flex justify-end gap-1.5">
+                                    <button
+                                      onClick={() => {
+                                        setEditingCompId(c.id);
+                                        setNewCompForm({
+                                          tipo: c.tipo,
+                                          fecha: c.fecha,
+                                          monto: String(c.monto || ''),
+                                          montoDebito: String(c.monto_debito || ''),
+                                          montoCredito: String(c.monto_credito || ''),
+                                          montoAmex: String(c.monto_amex || ''),
+                                          cuentaBancariaId: c.cuenta_bancaria_id || '',
+                                          descripcion: c.descripcion || ''
+                                        });
+                                      }}
+                                      className="p-1 text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-955/20 rounded font-bold text-[10px] flex items-center gap-0.5"
+                                    >
+                                      <Edit3 size={11} /> Editar
+                                    </button>
+                                    <button
+                                      onClick={() => handleRemoveComprobante(c.id)}
+                                      className="p-1 text-red-500 hover:bg-red-50 dark:hover:bg-red-955/20 rounded font-bold text-[10px]"
+                                    >
+                                      <Trash2 size={11} />
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                          {comprobantes.length === 0 && (
+                            <tr>
+                              <td colSpan={7} className="p-8 text-center text-gray-400 italic">
+                                No hay comprobantes registrados en el período seleccionado.
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
                 </div>
               </div>
-
-              {/* Pedidos pendientes */}
-              <div className="flex flex-col min-h-0 bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden shadow-sm">
-                <div className="p-3 bg-gray-50/50 dark:bg-gray-900/40 border-b border-gray-200 dark:border-gray-800 shrink-0 flex justify-between items-center">
-                  <h4 className="text-xs font-extrabold uppercase text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5">
-                    <Layers size={14} /> 2. Selecciona las Ventas a Asociar
-                  </h4>
-                  {selectedGlobalDepositId && (
-                    <button
-                      onClick={() => {
-                        const allIds = pedidosPendientes.map((p) => p.id);
-                        const allSelected = selectedGlobalPedidosIds.length === pedidosPendientes.length;
-                        setSelectedGlobalPedidosIds(allSelected ? [] : allIds);
-                      }}
-                      className="text-[10px] font-bold text-blue-500 hover:underline">
-                      {selectedGlobalPedidosIds.length === pedidosPendientes.length ? 'Desmarcar Todos' : 'Seleccionar Todos'}
-                    </button>
-                  )}
-                </div>
-                <div className="flex-1 overflow-auto">
-                  {!selectedGlobalDepositId ? (
-                    <div className="h-full flex flex-col items-center justify-center p-8 text-center">
-                      <CreditCard size={32} className="text-amber-500 mb-2.5 opacity-50" />
-                      <p className="text-xs font-semibold text-gray-500">Ningún depósito seleccionado</p>
-                      <p className="text-[10px] text-gray-400 mt-1 max-w-[250px]">Selecciona un depósito bancario para desplegar los pedidos.</p>
-                    </div>
-                  ) : (
+            ) : (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 flex-1 min-h-0 overflow-hidden">
+                {/* Depósitos bancarios */}
+                <div className="flex flex-col min-h-0 bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden shadow-sm">
+                  <div className="p-3 bg-gray-50/50 dark:bg-gray-900/40 border-b border-gray-200 dark:border-gray-800 shrink-0">
+                    <h4 className="text-xs font-extrabold uppercase text-amber-500 flex items-center gap-1.5">
+                      <CreditCard size={14} /> 1. Selecciona un Depósito Bancario
+                    </h4>
+                  </div>
+                  <div className="flex-1 overflow-auto">
                     <table className="w-full text-left border-collapse text-xs">
                       <thead>
                         <tr className="bg-gray-50 dark:bg-gray-900/50 border-b border-gray-200 dark:border-gray-800 text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
                           <th className="p-3 w-12 text-center" />
-                          <th className="p-3">Pedido</th>
-                          <th className="p-3">Cliente</th>
-                          <th className="p-3 text-right">Importe</th>
+                          <th className="p-3">Fecha</th>
+                          <th className="p-3">Concepto</th>
+                          <th className="p-3 text-right">Depósito</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-100 dark:divide-gray-800/60 font-sans">
-                        {pedidosPendientes.map((p) => (
-                          <tr key={p.id}
-                            onClick={() => {
-                              const idx = selectedGlobalPedidosIds.indexOf(p.id);
-                              const newIds = [...selectedGlobalPedidosIds];
-                              idx > -1 ? newIds.splice(idx, 1) : newIds.push(p.id);
-                              setSelectedGlobalPedidosIds(newIds);
-                            }}
-                            className="cursor-pointer hover:bg-gray-50/40 dark:hover:bg-gray-900/20 transition-all">
-                            <td className="p-3 text-center">
-                              <input type="checkbox" checked={selectedGlobalPedidosIds.includes(p.id)}
-                                onChange={() => {}} className="w-3.5 h-3.5 text-emerald-500 focus:ring-emerald-500 rounded" />
-                            </td>
-                            <td className="p-3 font-mono font-bold">#{p.numero_pedido}</td>
-                            <td className="p-3">
-                              <div className="font-semibold text-gray-800 dark:text-gray-200">{p.cliente_nombre || 'Cliente General'}</div>
-                              {p.fecha_pedido && <span className="text-[10px] text-gray-400">{new Date(p.fecha_pedido).toLocaleDateString()}</span>}
-                            </td>
-                            <td className="p-3 text-right font-mono font-bold">{formatCurrency(p.precio_total)}</td>
-                          </tr>
-                        ))}
-                        {pedidosPendientes.length === 0 && (
-                          <tr><td colSpan={4} className="p-8 text-center text-gray-400 italic">No hay pedidos pendientes de asociar</td></tr>
+                        {movimientos
+                          .filter((m) => m.tipo_movimiento === 'Deposito' && m.estatus_conciliacion_bancaria?.clave !== 'comprobado')
+                          .map((m) => (
+                            <tr key={m.id}
+                              onClick={() => { setSelectedGlobalDepositId(m.id); setSelectedGlobalPedidosIds([]); }}
+                              className={`cursor-pointer hover:bg-gray-50/40 dark:hover:bg-gray-900/20 transition-all ${selectedGlobalDepositId === m.id ? 'bg-amber-500/10 hover:bg-amber-500/15' : ''}`}>
+                              <td className="p-3 text-center">
+                                <input type="radio" name="global_deposit" checked={selectedGlobalDepositId === m.id}
+                                  onChange={() => { setSelectedGlobalDepositId(m.id); setSelectedGlobalPedidosIds([]); }}
+                                  className="w-3.5 h-3.5 text-amber-500 focus:ring-amber-500" />
+                              </td>
+                              <td className="p-3 font-mono text-gray-500">{new Date(m.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })}</td>
+                              <td className="p-3">
+                                <div className="font-bold text-gray-800 dark:text-gray-200">{m.concepto}</div>
+                                {m.referencia && <span className="text-[10px] text-gray-400">Ref: {m.referencia}</span>}
+                              </td>
+                              <td className="p-3 text-right font-mono font-bold text-emerald-500">+{formatCurrency(m.deposito)}</td>
+                            </tr>
+                          ))}
+                        {movimientos.filter((m) => m.tipo_movimiento === 'Deposito' && m.estatus_conciliacion_bancaria?.clave !== 'comprobado').length === 0 && (
+                          <tr><td colSpan={4} className="p-8 text-center text-gray-400 italic">No hay depósitos pendientes de conciliar en este período</td></tr>
                         )}
                       </tbody>
                     </table>
-                  )}
+                  </div>
+                </div>
+
+                {/* Pedidos pendientes */}
+                <div className="flex flex-col min-h-0 bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden shadow-sm">
+                  <div className="p-3 bg-gray-50/50 dark:bg-gray-900/40 border-b border-gray-200 dark:border-gray-800 shrink-0 flex justify-between items-center">
+                    <h4 className="text-xs font-extrabold uppercase text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5">
+                      <Layers size={14} /> 2. Selecciona las Ventas a Asociar
+                    </h4>
+                    {selectedGlobalDepositId && (
+                      <button
+                        onClick={() => {
+                          const allIds = pedidosPendientes.map((p) => p.id);
+                          const allSelected = selectedGlobalPedidosIds.length === pedidosPendientes.length;
+                          setSelectedGlobalPedidosIds(allSelected ? [] : allIds);
+                        }}
+                        className="text-[10px] font-bold text-blue-500 hover:underline">
+                        {selectedGlobalPedidosIds.length === pedidosPendientes.length ? 'Desmarcar Todos' : 'Seleccionar Todos'}
+                      </button>
+                    )}
+                  </div>
+                  <div className="flex-1 overflow-auto">
+                    {!selectedGlobalDepositId ? (
+                      <div className="h-full flex flex-col items-center justify-center p-8 text-center">
+                        <CreditCard size={32} className="text-amber-500 mb-2.5 opacity-50" />
+                        <p className="text-xs font-semibold text-gray-500">Ningún depósito seleccionado</p>
+                        <p className="text-[10px] text-gray-400 mt-1 max-w-[250px]">Selecciona un depósito bancario para desplegar los pedidos.</p>
+                      </div>
+                    ) : (
+                      <table className="w-full text-left border-collapse text-xs">
+                        <thead>
+                          <tr className="bg-gray-50 dark:bg-gray-900/50 border-b border-gray-200 dark:border-gray-800 text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+                            <th className="p-3 w-12 text-center" />
+                            <th className="p-3">Pedido</th>
+                            <th className="p-3">Cliente</th>
+                            <th className="p-3 text-right">Monto</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100 dark:divide-gray-800/60 font-sans">
+                          {pedidosPendientes.map((p) => (
+                            <tr
+                              key={p.id}
+                              onClick={() => {
+                                const sel = [...selectedGlobalPedidosIds];
+                                const idx = sel.indexOf(p.id);
+                                idx > -1 ? sel.splice(idx, 1) : sel.push(p.id);
+                                setSelectedGlobalPedidosIds(sel);
+                              }}
+                              className={`cursor-pointer hover:bg-gray-50/40 dark:hover:bg-gray-900/20 transition-all ${selectedGlobalPedidosIds.includes(p.id) ? 'bg-blue-500/10 hover:bg-blue-500/15' : ''}`}
+                            >
+                              <td className="p-3 text-center">
+                                <input
+                                  type="checkbox"
+                                  checked={selectedGlobalPedidosIds.includes(p.id)}
+                                  onChange={() => {
+                                    const sel = [...selectedGlobalPedidosIds];
+                                    const idx = sel.indexOf(p.id);
+                                    idx > -1 ? sel.splice(idx, 1) : sel.push(p.id);
+                                    setSelectedGlobalPedidosIds(sel);
+                                  }}
+                                  className="w-3.5 h-3.5 text-blue-500 focus:ring-blue-500 rounded"
+                                />
+                              </td>
+                              <td className="p-3 font-mono font-bold text-gray-800 dark:text-gray-200">#{p.numero_pedido}</td>
+                              <td className="p-3 text-gray-600 dark:text-gray-400">{p.cliente_nombre || 'N/A'}</td>
+                              <td className="p-3 text-right font-mono font-bold text-emerald-500">{formatCurrency(p.precio_total)}</td>
+                            </tr>
+                          ))}
+                          {pedidosPendientes.length === 0 && (
+                            <tr>
+                              <td colSpan={4} className="p-8 text-center text-gray-400 italic">
+                                No hay pedidos pendientes de conciliar
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
                 </div>
               </div>
-            </div>
-
-            {/* Resumen y acción */}
-            {selectedGlobalDepositId && (() => {
-              const dep = movimientos.find((m) => m.id === selectedGlobalDepositId);
-              const depMonto = dep ? Number(dep.deposito || dep.monto) : 0;
-              const totalVentas = pedidosPendientes.filter((p) => selectedGlobalPedidosIds.includes(p.id)).reduce((s, p) => s + Number(p.precio_total || 0), 0);
-              const dif = depMonto - totalVentas;
-              const match = Math.abs(dif) < 0.05;
-              return (
-                <div className="mt-4 p-4 bg-amber-500/10 border border-amber-500/20 rounded-xl flex justify-between items-center flex-wrap gap-4 shrink-0 font-sans">
-                  <div className="flex gap-6 flex-wrap text-xs">
-                    <div>
-                      <span className="text-gray-500 dark:text-gray-400 block">Depósito Bancario:</span>
-                      <span className="text-base font-extrabold text-amber-600 dark:text-amber-400">{formatCurrency(depMonto)}</span>
-                    </div>
-                    <div>
-                      <span className="text-gray-500 dark:text-gray-400 block">Ventas Seleccionadas ({selectedGlobalPedidosIds.length}):</span>
-                      <span className="text-base font-extrabold text-emerald-600 dark:text-emerald-400">{formatCurrency(totalVentas)}</span>
-                    </div>
-                    <div>
-                      <span className="text-gray-500 dark:text-gray-400 block">Diferencia:</span>
-                      <span className={`text-base font-mono font-extrabold ${match ? 'text-emerald-500' : 'text-amber-500'}`}>{formatCurrency(dif)}</span>
-                    </div>
-                  </div>
-                  <button
-                    onClick={handleGlobalLink}
-                    disabled={selectedGlobalPedidosIds.length === 0 || isUploading}
-                    className="px-6 py-2.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-md transition-all flex items-center gap-1.5"
-                  >
-                    {isUploading ? <RefreshCw size={14} className="animate-spin" /> : <Check size={14} />}
-                    Asociar y Conciliar
-                  </button>
-                </div>
-              );
-            })()}
+            )}
           </div>
         )}
 
-        {/* ── SUB-TAB 3: COMPROBANTES PENDIENTES ───────────────────────────── */}
-        {bancoSubTab === 'comprobantes' && (
-          <div className="flex-1 flex flex-col p-4 overflow-hidden min-h-0 gap-6">
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 flex-1 min-h-0 overflow-hidden">
-              
-              {/* Formulario de creación */}
-              <div className="flex flex-col min-h-0 bg-white dark:bg-gray-955 border border-gray-200 dark:border-gray-800 rounded-xl p-4 overflow-auto shadow-sm font-sans">
-                <h4 className="text-xs font-extrabold uppercase text-amber-500 flex items-center gap-1.5 mb-4 border-b border-gray-150 dark:border-gray-900 pb-2">
-                  <Plus size={14} /> Registrar Comprobante Independiente
-                </h4>
-                
-                <div className="space-y-4">
-                  <div>
-                    <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block mb-1">Tipo de Comprobante</label>
-                    <select
-                      value={newCompForm.tipo}
-                      onChange={(e) => setNewCompForm(p => ({ ...p, tipo: e.target.value as any }))}
-                      className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs text-gray-900 dark:text-white focus:ring-1 focus:ring-amber-500 outline-none"
-                    >
-                      <option value="deposito_ventanilla">Depósito en Ventanilla</option>
-                      <option value="corte_tarjeta">Corte Diario de Tarjeta</option>
-                    </select>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block mb-1">Fecha</label>
-                      <input
-                        type="date"
-                        value={newCompForm.fecha}
-                        onChange={(e) => setNewCompForm(p => ({ ...p, fecha: e.target.value }))}
-                        className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs text-gray-900 dark:text-white focus:ring-1 focus:ring-amber-500 outline-none"
-                      />
-                    </div>
-                    {newCompForm.tipo === 'deposito_ventanilla' ? (
-                      <div>
-                        <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block mb-1">Monto (MXN)</label>
-                        <input
-                          type="number"
-                          placeholder="0.00"
-                          step="0.01"
-                          value={newCompForm.monto}
-                          onChange={(e) => setNewCompForm(p => ({ ...p, monto: e.target.value }))}
-                          className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs text-gray-900 dark:text-white focus:ring-1 focus:ring-amber-500 outline-none font-mono"
-                        />
-                      </div>
-                    ) : (
-                      <div>
-                        <label className="text-[10px] font-bold text-amber-500 uppercase tracking-wider block mb-1">Monto Calculado</label>
-                        <div className="w-full bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-750 p-2 rounded-lg text-xs font-mono font-bold text-gray-900 dark:text-white">
-                          {(() => {
-                            const tot = Number(newCompForm.montoDebito || 0) +
-                                        Number(newCompForm.montoCredito || 0) +
-                                        Number(newCompForm.propinaDebito || 0) +
-                                        Number(newCompForm.propinaCredito || 0) +
-                                        Number(newCompForm.montoAmex || 0) +
-                                        Number(newCompForm.propinaAmex || 0);
-                            return formatCurrency(tot);
-                          })()}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                  {newCompForm.tipo === 'corte_tarjeta' && (
-                    <div className="p-3 bg-gray-50 dark:bg-gray-900/40 border border-gray-200 dark:border-gray-800 rounded-xl space-y-3">
-                      <h5 className="text-[10px] font-extrabold uppercase text-gray-400 tracking-wider">Desglose del Corte Diario</h5>
-                      
-                      <div className="grid grid-cols-2 gap-2 text-[10px]">
-                        <div>
-                          <label className="font-bold text-gray-550 block mb-0.5">Importe Débito</label>
-                          <input
-                            type="number"
-                            placeholder="0.00"
-                            step="0.01"
-                            value={newCompForm.montoDebito}
-                            onChange={(e) => setNewCompForm(p => ({ ...p, montoDebito: e.target.value }))}
-                            className="w-full bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 p-1.5 rounded text-xs font-mono text-gray-900 dark:text-white"
-                          />
-                        </div>
-                        <div>
-                          <label className="font-bold text-gray-550 block mb-0.5">Propina Débito</label>
-                          <input
-                            type="number"
-                            placeholder="0.00"
-                            step="0.01"
-                            value={newCompForm.propinaDebito}
-                            onChange={(e) => setNewCompForm(p => ({ ...p, propinaDebito: e.target.value }))}
-                            className="w-full bg-white dark:bg-gray-955 border border-gray-300 dark:border-gray-700 p-1.5 rounded text-xs font-mono text-gray-900 dark:text-white"
-                          />
-                        </div>
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-2 text-[10px]">
-                        <div>
-                          <label className="font-bold text-gray-550 block mb-0.5">Importe Crédito</label>
-                          <input
-                            type="number"
-                            placeholder="0.00"
-                            step="0.01"
-                            value={newCompForm.montoCredito}
-                            onChange={(e) => setNewCompForm(p => ({ ...p, montoCredito: e.target.value }))}
-                            className="w-full bg-white dark:bg-gray-955 border border-gray-300 dark:border-gray-700 p-1.5 rounded text-xs font-mono text-gray-900 dark:text-white"
-                          />
-                        </div>
-                        <div>
-                          <label className="font-bold text-gray-550 block mb-0.5">Propina Crédito</label>
-                          <input
-                            type="number"
-                            placeholder="0.00"
-                            step="0.01"
-                            value={newCompForm.propinaCredito}
-                            onChange={(e) => setNewCompForm(p => ({ ...p, propinaCredito: e.target.value }))}
-                            className="w-full bg-white dark:bg-gray-955 border border-gray-300 dark:border-gray-700 p-1.5 rounded text-xs font-mono text-gray-900 dark:text-white"
-                          />
-                        </div>
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-2 text-[10px]">
-                        <div>
-                          <label className="font-bold text-gray-550 block mb-0.5">Importe Amex</label>
-                          <input
-                            type="number"
-                            placeholder="0.00"
-                            step="0.01"
-                            value={newCompForm.montoAmex}
-                            onChange={(e) => setNewCompForm(p => ({ ...p, montoAmex: e.target.value }))}
-                            className="w-full bg-white dark:bg-gray-955 border border-gray-300 dark:border-gray-700 p-1.5 rounded text-xs font-mono text-gray-900 dark:text-white"
-                          />
-                        </div>
-                        <div>
-                          <label className="font-bold text-gray-550 block mb-0.5">Propina Amex</label>
-                          <input
-                            type="number"
-                            placeholder="0.00"
-                            step="0.01"
-                            value={newCompForm.propinaAmex}
-                            onChange={(e) => setNewCompForm(p => ({ ...p, propinaAmex: e.target.value }))}
-                            className="w-full bg-white dark:bg-gray-955 border border-gray-300 dark:border-gray-700 p-1.5 rounded text-xs font-mono text-gray-900 dark:text-white"
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  <div>
-                    <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block mb-1">Cuenta de Destino Relacionada</label>
-                    <select
-                      value={newCompForm.cuentaBancariaId}
-                      onChange={(e) => setNewCompForm(p => ({ ...p, cuentaBancariaId: e.target.value }))}
-                      className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs text-gray-900 dark:text-white focus:ring-1 focus:ring-amber-500 outline-none"
-                    >
-                      <option value="">- Ninguna / Seleccionar Banco -</option>
-                      {cuentasBancarias.map((cb) => (
-                        <option key={cb.id} value={cb.id}>{cb.nombre} ({cb.moneda})</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block mb-1">Descripción / Notas</label>
-                    <textarea
-                      value={newCompForm.descripcion}
-                      onChange={(e) => setNewCompForm(p => ({ ...p, descripcion: e.target.value }))}
-                      placeholder="Ej: Depósito efectivo ventas fin de semana..."
-                      rows={2}
-                      className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs text-gray-900 dark:text-white focus:ring-1 focus:ring-amber-500 outline-none resize-none"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block mb-1">Proveedor de Almacenamiento</label>
-                    <div className="flex gap-4 mt-1 text-xs">
-                      <label className="flex items-center gap-1.5 cursor-pointer">
-                        <input
-                          type="radio"
-                          name="comp_storage"
-                          checked={newCompForm.storageProvider === 'Supabase'}
-                          onChange={() => setNewCompForm(p => ({ ...p, storageProvider: 'Supabase', archivoUrl: '' }))}
-                        />
-                        <span>Supabase Storage</span>
-                      </label>
-                      <label className="flex items-center gap-1.5 cursor-pointer">
-                        <input
-                          type="radio"
-                          name="comp_storage"
-                          checked={newCompForm.storageProvider === 'GoogleDrive'}
-                          onChange={() => setNewCompForm(p => ({ ...p, storageProvider: 'GoogleDrive', archivoUrl: '' }))}
-                        />
-                        <span>Google Drive Link</span>
-                      </label>
-                    </div>
-                  </div>
-
-                  {newCompForm.storageProvider === 'Supabase' ? (
-                    <div>
-                      <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block mb-1">Ticket de Depósito (Imagen / PDF)</label>
-                      <div className="relative overflow-hidden w-full">
-                        <input
-                          type="file"
-                          accept="image/*,.pdf"
-                          onChange={handleUploadCompFile}
-                          disabled={compUploadLoading}
-                          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
-                        />
-                        <button
-                          type="button"
-                          disabled={compUploadLoading}
-                          className="w-full py-2 bg-gray-100 hover:bg-gray-200 dark:bg-gray-900 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-700 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5"
-                        >
-                          {compUploadLoading ? <RefreshCw size={14} className="animate-spin" /> : <UploadCloud size={14} />}
-                          {newCompForm.archivoUrl ? 'Archivo cargado con éxito ✓' : 'Seleccionar Archivo...'}
-                        </button>
-                      </div>
-                      {newCompForm.archivoUrl && (
-                        <p className="text-[9px] text-gray-400 font-mono mt-1 truncate">{newCompForm.archivoUrl.split('/').pop()}</p>
-                      )}
-                    </div>
-                  ) : (
-                    <div>
-                      <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block mb-1">Enlace de Google Drive</label>
-                      <input
-                        type="url"
-                        placeholder="https://drive.google.com/..."
-                        value={newCompForm.archivoUrl}
-                        onChange={(e) => setNewCompForm(p => ({ ...p, archivoUrl: e.target.value }))}
-                        className="w-full bg-white dark:bg-gray-955 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs text-gray-900 dark:text-white focus:ring-1 focus:ring-amber-500 outline-none font-mono"
-                      />
-                    </div>
-                  )}
-
-                  {newCompForm.error && (
-                    <div className="text-[11px] text-red-500 bg-red-50 dark:bg-red-955/20 border border-red-200 dark:border-red-900/50 p-2.5 rounded-lg">{newCompForm.error}</div>
-                  )}
-
-                  {editingCompId && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setEditingCompId(null);
-                        setNewCompForm({
-                          tipo: 'deposito_ventanilla',
-                          fecha: new Date().toISOString().substring(0, 10),
-                          monto: '',
-                          descripcion: '',
-                          archivoUrl: '',
-                          storageProvider: 'Supabase',
-                          cuentaBancariaId: '',
-                          loading: false,
-                          error: '',
-                          montoDebito: '',
-                          montoCredito: '',
-                          propinaDebito: '',
-                          propinaCredito: '',
-                          montoAmex: '',
-                          propinaAmex: ''
-                        });
-                      }}
-                      className="w-full mb-2 py-2 border border-gray-300 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300 rounded-lg text-xs font-bold transition-all shadow-sm"
-                    >
-                      Cancelar Edición
-                    </button>
-                  )}
-
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      const tot = newCompForm.tipo === 'deposito_ventanilla'
-                        ? Number(newCompForm.monto)
-                        : Number(newCompForm.montoDebito || 0) +
-                          Number(newCompForm.montoCredito || 0) +
-                          Number(newCompForm.propinaDebito || 0) +
-                          Number(newCompForm.propinaCredito || 0) +
-                          Number(newCompForm.montoAmex || 0) +
-                          Number(newCompForm.propinaAmex || 0);
-
-                      if (!tot || tot <= 0) {
-                        setNewCompForm(p => ({ ...p, error: 'Por favor ingresa un monto válido mayor a 0.' }));
-                        return;
-                      }
-                      if (!newCompForm.fecha) {
-                        setNewCompForm(p => ({ ...p, error: 'Por favor selecciona la fecha del ticket.' }));
-                        return;
-                      }
-
-                      // Advertencia si el monto modificado no coincide con la suma de lo ya vinculado
-                      if (editingCompId) {
-                        const currentComp = comprobantes.find(c => c.id === editingCompId);
-                        if (currentComp) {
-                          const linkedSum = (currentComp.comprobantes_deposito_movimientos || []).reduce((acc, rel) => acc + Number(rel.monto_asociado), 0);
-                          if (linkedSum > 0 && Math.abs(tot - linkedSum) >= 0.05) {
-                            if (!confirm(`Advertencia: El nuevo monto del comprobante (${formatCurrency(tot)}) no coincide con la suma de los movimientos vinculados (${formatCurrency(linkedSum)}). ¿Deseas continuar?`)) {
-                              return;
-                            }
-                          }
-                        }
-                      }
-
-                      setNewCompForm(p => ({ ...p, loading: true, error: '' }));
-                      try {
-                        const payload = {
-                          tipo: newCompForm.tipo,
-                          fecha: newCompForm.fecha,
-                          monto: tot,
-                          descripcion: newCompForm.descripcion,
-                          archivo_url: newCompForm.archivoUrl,
-                          storage_provider: newCompForm.storageProvider,
-                          cuenta_bancaria_id: newCompForm.cuentaBancariaId || null,
-                          monto_debito: Number(newCompForm.montoDebito || 0),
-                          monto_credito: Number(newCompForm.montoCredito || 0),
-                          propina_debito: Number(newCompForm.propinaDebito || 0),
-                          propina_credito: Number(newCompForm.propinaCredito || 0),
-                          monto_amex: Number(newCompForm.montoAmex || 0),
-                          propina_amex: Number(newCompForm.propinaAmex || 0)
-                        };
-
-                        let res;
-                        if (editingCompId) {
-                          res = await onActualizarComprobante?.(editingCompId, payload);
-                        } else {
-                          res = await onCrearComprobante?.(payload);
-                        }
-
-                        if (res && !res.success) {
-                          throw new Error(res.error);
-                        }
-
-                        // Reset form
-                        setEditingCompId(null);
-                        setNewCompForm({
-                          tipo: 'deposito_ventanilla',
-                          fecha: new Date().toISOString().substring(0, 10),
-                          monto: '',
-                          descripcion: '',
-                          archivoUrl: '',
-                          storageProvider: 'Supabase',
-                          cuentaBancariaId: '',
-                          loading: false,
-                          error: '',
-                          montoDebito: '',
-                          montoCredito: '',
-                          propinaDebito: '',
-                          propinaCredito: '',
-                          montoAmex: '',
-                          propinaAmex: ''
-                        });
-                      } catch (err: any) {
-                        setNewCompForm(p => ({ ...p, error: err.message || 'Error al guardar.' }));
-                      } finally {
-                        setNewCompForm(p => ({ ...p, loading: false }));
-                      }
-                    }}
-                    disabled={newCompForm.loading || compUploadLoading}
-                    className="w-full py-2.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-lg text-xs font-extrabold shadow-md flex items-center justify-center gap-1.5 transition-all"
-                  >
-                    {newCompForm.loading ? <RefreshCw size={14} className="animate-spin" /> : (editingCompId ? <Check size={14} /> : <Plus size={14} />)}
-                    {editingCompId ? 'Actualizar Comprobante' : 'Guardar Comprobante'}
-                  </button>
-
-                </div>
-              </div>
-
-              {/* Listado de comprobantes pendientes de vincular */}
-              <div className="lg:col-span-2 flex flex-col min-h-0 bg-white dark:bg-gray-955 border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden shadow-sm font-sans">
-                <div className="p-3 bg-gray-50/50 dark:bg-gray-900/40 border-b border-gray-200 dark:border-gray-800 flex justify-between items-center shrink-0">
-                  <h4 className="text-xs font-extrabold uppercase text-amber-500 flex items-center gap-1.5">
-                    <List size={14} /> Comprobantes Registrados y Conciliación
-                  </h4>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={exportComprobantesToExcel}
-                      className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[10px] font-extrabold shadow-sm flex items-center gap-1 transition-all"
-                      title="Exportar Comprobantes a Excel"
-                    >
-                      <FileSpreadsheet size={12} />
-                      Exportar Excel
-                    </button>
-                    <span className="bg-amber-500/10 text-amber-600 dark:text-amber-400 font-mono text-[10px] font-bold px-2 py-0.5 rounded-full">
-                      {comprobantes.filter(c => !isCompCuadrado(c)).length} sin cuadrar de {comprobantes.length} totales
-                    </span>
-                  </div>
-                </div>
-
-                <div className="flex-1 overflow-auto">
-                  <table className="w-full text-left border-collapse text-xs">
-                    <thead>
-                      <tr className="bg-gray-50 dark:bg-gray-900/50 border-b border-gray-200 dark:border-gray-800 text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
-                        <th className="p-3">Fecha</th>
-                        <th className="p-3">Tipo / Desglose</th>
-                        <th className="p-3">Banco Destino</th>
-                        <th className="p-3">Descripción</th>
-                        <th className="p-3 text-right">Monto</th>
-                        <th className="p-3 text-center">Ticket</th>
-                        <th className="p-3 text-center">Acciones</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100 dark:divide-gray-800/60 font-sans">
-                      {comprobantes
-                        .map((c) => {
-                          const isVentanilla = c.tipo === 'deposito_ventanilla';
-                          const linkedSum = (c.comprobantes_deposito_movimientos || []).reduce((acc, rel) => acc + Number(rel.monto_asociado), 0);
-                          const isCuadrado = isCompCuadrado(c);
-                          return (
-                            <tr key={c.id} className="hover:bg-gray-50/55 dark:hover:bg-gray-900/10 transition-colors">
-                              <td className="p-3 font-mono text-gray-500">{new Date(c.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })}</td>
-                              <td className="p-3 font-semibold text-gray-700 dark:text-gray-300">
-                                <div className="flex flex-col gap-1.5">
-                                  <div className="flex flex-wrap gap-1">
-                                    <span className={`px-2 py-0.5 rounded-full text-[9px] w-fit ${
-                                      isVentanilla
-                                        ? 'bg-blue-100 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400'
-                                        : 'bg-indigo-100 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-400'
-                                    }`}>
-                                      {isVentanilla ? 'Depósito Ventanilla' : 'Corte Tarjeta'}
-                                    </span>
-                                    {isCuadrado ? (
-                                      <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-emerald-100 dark:bg-emerald-950/20 text-emerald-700 dark:text-emerald-400">
-                                        Conciliado
-                                      </span>
-                                    ) : (
-                                      <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-amber-100 dark:bg-amber-955/20 text-amber-700 dark:text-amber-400">
-                                        Pendiente
-                                      </span>
-                                    )}
-                                  </div>
-                                  {!isVentanilla && (
-                                    <span className="text-[8px] text-gray-400 font-mono leading-tight block mt-1">
-                                      💳 D: {formatCurrency(c.monto_debito || 0)} (+{formatCurrency(c.propina_debito || 0)})<br />
-                                      💳 C: {formatCurrency(c.monto_credito || 0)} (+{formatCurrency(c.propina_credito || 0)})<br />
-                                      💳 A: {formatCurrency(c.monto_amex || 0)} (+{formatCurrency(c.propina_amex || 0)})
-                                    </span>
-                                  )}
-                                </div>
-                              </td>
-                              <td className="p-3 font-medium text-gray-700 dark:text-gray-300">
-                                {c.cuentas_bancarias?.nombre ? `🏦 ${c.cuentas_bancarias.nombre}` : <span className="text-gray-400 italic">No especificado</span>}
-                              </td>
-                              <td className="p-3 text-gray-650 dark:text-gray-400 font-medium max-w-[200px] truncate" title={c.descripcion || ''}>
-                                {c.descripcion || '-'}
-                              </td>
-                              <td className="p-3 text-right font-mono font-bold">
-                                <div className="flex flex-col items-end">
-                                  <span className="text-emerald-655 dark:text-emerald-400 font-black">{formatCurrency(c.monto)}</span>
-                                  {linkedSum > 0 && (
-                                    <span className="text-[9px] text-gray-400">Asoc: {formatCurrency(linkedSum)}</span>
-                                  )}
-                                </div>
-                              </td>
-                              <td className="p-3 text-center">
-                                {c.archivo_url ? (
-                                  <button
-                                    onClick={() => onDownloadFile(c.archivo_url!)}
-                                    className="p-1 rounded text-amber-500 hover:bg-amber-500/10 font-bold inline-flex items-center gap-0.5"
-                                    title="Descargar Ticket"
-                                  >
-                                    <FileText size={13} />
-                                    <span className="text-[9px]">Ver</span>
-                                  </button>
-                                ) : (
-                                  <span className="text-gray-300 italic text-[10px]">Sin archivo</span>
-                                )}
-                              </td>
-                              <td className="p-3 text-center">
-                                <div className="flex gap-2 justify-center items-center">
-                                  <button
-                                    onClick={() => {
-                                      setEditingCompId(c.id);
-                                      setNewCompForm({
-                                        tipo: c.tipo as any,
-                                        fecha: c.fecha.substring(0, 10),
-                                        monto: String(c.monto),
-                                        descripcion: c.descripcion || '',
-                                        archivoUrl: c.archivo_url || '',
-                                        storageProvider: (c.storage_provider as any) || 'Supabase',
-                                        cuentaBancariaId: c.cuenta_bancaria_id || '',
-                                        loading: false,
-                                        error: '',
-                                        montoDebito: String(c.monto_debito || ''),
-                                        montoCredito: String(c.monto_credito || ''),
-                                        propinaDebito: String(c.propina_debito || ''),
-                                        propinaCredito: String(c.propina_credito || ''),
-                                        montoAmex: String(c.monto_amex || ''),
-                                        propinaAmex: String(c.propina_amex || '')
-                                      });
-                                    }}
-                                    className="p-1 rounded text-blue-500 hover:bg-blue-500/10 font-bold inline-flex items-center gap-0.5 border border-blue-250 dark:border-blue-900/50 px-1.5 py-0.5 text-[10px]"
-                                    title="Editar Comprobante"
-                                  >
-                                    <Edit3 size={11} /> Editar
-                                  </button>
-                                  <button
-                                    onClick={() => setActiveCompToLink(c)}
-                                    className="p-1 rounded text-amber-500 hover:bg-amber-500/10 font-bold inline-flex items-center gap-0.5 border border-amber-200 dark:border-amber-900/50 px-1.5 py-0.5 text-[10px]"
-                                    title="Vincular con depósitos bancarios"
-                                  >
-                                    <ArrowRightLeft size={11} /> Vincular Banco
-                                  </button>
-                                  <button
-                                    onClick={async () => {
-                                      if (confirm('¿Deseas eliminar este comprobante de forma permanente?')) {
-                                        const res = await onEliminarComprobante?.(c.id);
-                                        if (res && !res.success) {
-                                          alert(res.error);
-                                        }
-                                      }
-                                    }}
-                                    className="p-1 rounded text-red-500 hover:bg-red-500/10 font-bold inline-flex items-center gap-0.5"
-                                    title="Eliminar Comprobante"
-                                  >
-                                    <Trash2 size={13} />
-                                  </button>
-                                </div>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      {comprobantes.length === 0 && (
-                        <tr>
-                          <td colSpan={7} className="p-8 text-center text-gray-400 italic">
-                            No hay comprobantes registrados.
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-            </div>
+        {/* ── SUB-TAB 4: CARGAS DE ESTADO DE CUENTA ───────────────────────── */}
+        {bancoSubTab === 'cargas' && (
+          <div className="flex-1 flex flex-col p-4 overflow-hidden min-h-0">
+            <CargasTab
+              token={token || ''}
+              cuentasBancarias={cuentasBancarias || []}
+              onStartSustituirCarga={onStartSustituirCarga || (() => {})}
+              onReloadMovimientos={onReloadMovimientos || (() => {})}
+              onOpenUploadModal={onOpenUploadModal || (() => {})}
+            />
           </div>
         )}
 
@@ -2667,6 +2627,26 @@ export default function BancoTab({
                 </select>
               </div>
 
+              {dif > 0.01 && isOutflow && (
+                <div className="p-3 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 rounded-xl flex items-center justify-between text-xs font-sans">
+                  <div>
+                    <span className="font-bold text-amber-900 dark:text-amber-300 block">Excedente de pago de {formatCurrency(dif)}</span>
+                    <p className="text-[11px] text-amber-700 dark:text-amber-400 mt-0.5">
+                      El pago bancario supera los comprobantes seleccionados. ¿Deseas guardar el excedente como Saldo a Favor del proveedor?
+                    </p>
+                  </div>
+                  <label className="flex items-center gap-1.5 cursor-pointer font-bold text-amber-800 dark:text-amber-300 shrink-0">
+                    <input
+                      type="checkbox"
+                      checked={guardarExcedenteComoSaldoFavor}
+                      onChange={(e) => setGuardarExcedenteComoSaldoFavor(e.target.checked)}
+                      className="w-4 h-4 accent-amber-600 rounded cursor-pointer"
+                    />
+                    <span>Guardar Saldo a Favor</span>
+                  </label>
+                </div>
+              )}
+
               {reconcileModal.error && (
                 <div className="text-xs text-red-500 bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800 p-3 rounded-lg">{reconcileModal.error}</div>
               )}
@@ -2681,7 +2661,7 @@ export default function BancoTab({
                     if (!handleSaveReconciliation) return;
                     const isExact = Math.abs(movMonto - totalComprobado) < 0.05;
                     let comentario = '';
-                    if (!isExact) {
+                    if (!isExact && !guardarExcedenteComoSaldoFavor) {
                       const resComment = prompt('La conciliación no es exacta. Por favor, introduce un comentario explicando el porqué de la diferencia:');
                       if (resComment === null) return; // User cancelled
                       if (!resComment.trim()) {
@@ -2689,8 +2669,24 @@ export default function BancoTab({
                         return;
                       }
                       comentario = resComment.trim();
+                    } else if (guardarExcedenteComoSaldoFavor) {
+                      comentario = `Excedente de ${formatCurrency(dif)} registrado como Saldo a Favor del proveedor.`;
                     }
                     handleSaveReconciliation(undefined, undefined, undefined, comentario);
+
+                    if (guardarExcedenteComoSaldoFavor && dif > 0.01 && reconcileModal.movimiento) {
+                      const firstG = gastosReconciliables.find(g => reconcileModal.gastosSeleccionados.includes(g.id));
+                      if (firstG?.proveedor_id) {
+                        generarSaldoFavorDesdeConciliacion(
+                          firstG.proveedor_id,
+                          reconcileModal.movimiento.id,
+                          dif,
+                          firstG.id,
+                          `Sobrante de conciliación bancaria (${reconcileModal.movimiento.concepto || 'Movimiento'})`,
+                          token || ''
+                        );
+                      }
+                    }
                   }} 
                   disabled={reconcileModal.loading || !reconcileModal.estatusClave}
                   className="flex-1 py-2.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-md flex items-center justify-center gap-2"
@@ -2890,12 +2886,12 @@ export default function BancoTab({
                           <label className="text-[9px] font-bold text-amber-500 uppercase tracking-wider block mb-0.5">Monto Calculado</label>
                           <div className="w-full bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-750 p-1.5 rounded-lg text-xs font-mono font-bold text-gray-900 dark:text-white">
                             {(() => {
-                              const tot = Number(newCompForm.montoDebito || 0) +
-                                          Number(newCompForm.montoCredito || 0) +
-                                          Number(newCompForm.propinaDebito || 0) +
-                                          Number(newCompForm.propinaCredito || 0) +
-                                          Number(newCompForm.montoAmex || 0) +
-                                          Number(newCompForm.propinaAmex || 0);
+                              const tot = parseInputNumber(newCompForm.montoDebito || 0) +
+                                          parseInputNumber(newCompForm.montoCredito || 0) +
+                                          parseInputNumber(newCompForm.propinaDebito || 0) +
+                                          parseInputNumber(newCompForm.propinaCredito || 0) +
+                                          parseInputNumber(newCompForm.montoAmex || 0) +
+                                          parseInputNumber(newCompForm.propinaAmex || 0);
                               return formatCurrency(tot);
                             })()}
                           </div>
@@ -3059,13 +3055,13 @@ export default function BancoTab({
                       type="button"
                       onClick={async () => {
                         const tot = newCompForm.tipo === 'deposito_ventanilla'
-                          ? Number(newCompForm.monto)
-                          : Number(newCompForm.montoDebito || 0) +
-                            Number(newCompForm.montoCredito || 0) +
-                            Number(newCompForm.propinaDebito || 0) +
-                            Number(newCompForm.propinaCredito || 0) +
-                            Number(newCompForm.montoAmex || 0) +
-                            Number(newCompForm.propinaAmex || 0);
+                          ? parseInputNumber(newCompForm.monto)
+                          : parseInputNumber(newCompForm.montoDebito || 0) +
+                            parseInputNumber(newCompForm.montoCredito || 0) +
+                            parseInputNumber(newCompForm.propinaDebito || 0) +
+                            parseInputNumber(newCompForm.propinaCredito || 0) +
+                            parseInputNumber(newCompForm.montoAmex || 0) +
+                            parseInputNumber(newCompForm.propinaAmex || 0);
 
                         if (!tot || tot <= 0) {
                           setNewCompForm(p => ({ ...p, error: 'Monto inválido.' }));
@@ -3082,12 +3078,10 @@ export default function BancoTab({
                             storage_provider: newCompForm.storageProvider,
                             cuenta_bancaria_id: activeDepositMov.cuenta_bancaria_id,
                             movimiento_bancario_id: activeDepositMov.id,
-                            monto_debito: Number(newCompForm.montoDebito || 0),
-                            monto_credito: Number(newCompForm.montoCredito || 0),
-                            propina_debito: Number(newCompForm.propinaDebito || 0),
-                            propina_credito: Number(newCompForm.propinaCredito || 0),
-                            monto_amex: Number(newCompForm.montoAmex || 0),
-                            propina_amex: Number(newCompForm.propinaAmex || 0)
+                            propina_debito: parseInputNumber(newCompForm.propinaDebito || 0),
+                            propina_credito: parseInputNumber(newCompForm.propinaCredito || 0),
+                            monto_amex: parseInputNumber(newCompForm.montoAmex || 0),
+                            propina_amex: parseInputNumber(newCompForm.propinaAmex || 0)
                           });
                           if (res && !res.success) throw new Error(res.error);
                           

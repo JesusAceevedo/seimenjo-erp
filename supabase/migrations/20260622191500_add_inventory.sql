@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS public.almacenes (
 -- Habilitar RLS
 ALTER TABLE public.almacenes ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "Aislamiento por empresa en almacenes" ON public.almacenes;
 CREATE POLICY "Aislamiento por empresa en almacenes" 
     ON public.almacenes FOR ALL TO authenticated 
     USING (empresa_id = public.get_auth_empresa_id()) 
@@ -36,6 +37,7 @@ CREATE TABLE IF NOT EXISTS public.inventario_stock (
 -- Habilitar RLS
 ALTER TABLE public.inventario_stock ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "Aislamiento por empresa en inventario_stock" ON public.inventario_stock;
 CREATE POLICY "Aislamiento por empresa en inventario_stock" 
     ON public.inventario_stock FOR ALL TO authenticated 
     USING (empresa_id = public.get_auth_empresa_id()) 
@@ -58,6 +60,7 @@ CREATE TABLE IF NOT EXISTS public.movimientos_inventario (
 -- Habilitar RLS
 ALTER TABLE public.movimientos_inventario ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "Aislamiento por empresa en movimientos_inventario" ON public.movimientos_inventario;
 CREATE POLICY "Aislamiento por empresa en movimientos_inventario" 
     ON public.movimientos_inventario FOR ALL TO authenticated 
     USING (empresa_id = public.get_auth_empresa_id()) 

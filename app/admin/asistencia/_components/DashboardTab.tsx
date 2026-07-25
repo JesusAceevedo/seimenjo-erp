@@ -126,35 +126,73 @@ export default function DashboardTab({
   const presentes = presenciaHoy.filter(p => p.status === 'PRESENTE').length;
   const ausentes = presenciaHoy.filter(p => p.status === 'AUSENTE').length;
 
+  // Toggle colapsable de filtros (por defecto ocultos como en Contabilidad)
+  const [showFilters, setShowFilters] = useState(false);
+
   return (
     <div className="space-y-6">
-      {/* Controls Row: Date Range + Filters */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white dark:bg-gray-950 p-5 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-sm">
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="flex items-center gap-2">
-            <input type="date" value={dashboardStartDate} onChange={e => onStartDateChange(e.target.value)}
-              className="px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-900 text-xs text-gray-700 dark:text-gray-200 focus:outline-none focus:ring-1 focus:ring-amber-500" />
-            <span className="text-gray-400 text-xs font-semibold">→</span>
-            <input type="date" value={dashboardEndDate} onChange={e => onEndDateChange(e.target.value)}
-              className="px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-900 text-xs text-gray-700 dark:text-gray-200 focus:outline-none focus:ring-1 focus:ring-amber-500" />
-          </div>
-          <div className="flex items-center gap-2 border-l border-gray-200 dark:border-gray-800 pl-3">
-            <Filter size={14} className="text-gray-400" />
-            <select value={filtroDepto} onChange={e => { setFiltroDepto(e.target.value); setFiltroPuesto(''); }}
-              className="px-2 py-1.5 rounded-lg border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-900 text-xs focus:outline-none focus:ring-1 focus:ring-amber-500">
-              <option value="">Todos los Departamentos</option>
-              {departamentos.map(d => <option key={d.id} value={d.id}>{d.nombre}</option>)}
-            </select>
-            <select value={filtroPuesto} onChange={e => setFiltroPuesto(e.target.value)}
-              className="px-2 py-1.5 rounded-lg border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-900 text-xs focus:outline-none focus:ring-1 focus:ring-amber-500">
-              <option value="">Todos los Puestos</option>
-              {puestos
-                .filter(p => !filtroDepto || p.departamento_id === filtroDepto)
-                .map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
-            </select>
+      {/* Barra de Acciones y Toggle de Filtros */}
+      <div className="flex items-center justify-between bg-white dark:bg-gray-950 p-4 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-sm">
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowFilters(!showFilters)}
+            className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all border ${
+              showFilters || filtroDepto || filtroPuesto
+                ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/30'
+                : 'bg-gray-50 dark:bg-gray-900 text-gray-700 dark:text-gray-200 border-gray-200 dark:border-gray-800 hover:bg-gray-100 dark:hover:bg-gray-800'
+            }`}
+          >
+            <Filter size={15} />
+            <span>{showFilters ? 'Ocultar Filtros' : 'Mostrar Filtros'}</span>
+            {(filtroDepto || filtroPuesto) && (
+              <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+            )}
+          </button>
+          <span className="text-[11px] text-gray-400 font-medium hidden sm:inline">
+            Período: <strong className="text-gray-700 dark:text-gray-200">{dashboardStartDate}</strong> a <strong className="text-gray-700 dark:text-gray-200">{dashboardEndDate}</strong>
+          </span>
+        </div>
+
+        {(filtroDepto || filtroPuesto) && (
+          <button
+            onClick={() => { setFiltroDepto(''); setFiltroPuesto(''); }}
+            className="text-[11px] text-amber-600 dark:text-amber-400 hover:underline font-semibold"
+          >
+            Restablecer Filtros
+          </button>
+        )}
+      </div>
+
+      {/* Panel de Filtros Colapsable */}
+      {showFilters && (
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white dark:bg-gray-950 p-5 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-sm animate-in fade-in duration-200">
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-2">
+              <label className="text-[10px] font-bold text-gray-400 uppercase">Rango Fechas:</label>
+              <input type="date" value={dashboardStartDate} onChange={e => onStartDateChange(e.target.value)}
+                className="px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-900 text-xs text-gray-700 dark:text-gray-200 focus:outline-none focus:ring-1 focus:ring-amber-500 font-bold" />
+              <span className="text-gray-400 text-xs font-semibold">→</span>
+              <input type="date" value={dashboardEndDate} onChange={e => onEndDateChange(e.target.value)}
+                className="px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-900 text-xs text-gray-700 dark:text-gray-200 focus:outline-none focus:ring-1 focus:ring-amber-500 font-bold" />
+            </div>
+            <div className="flex items-center gap-2 border-l border-gray-200 dark:border-gray-800 pl-3">
+              <Filter size={14} className="text-gray-400" />
+              <select value={filtroDepto} onChange={e => { setFiltroDepto(e.target.value); setFiltroPuesto(''); }}
+                className="px-2.5 py-1.5 rounded-lg border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-900 text-xs focus:outline-none focus:ring-1 focus:ring-amber-500 font-semibold">
+                <option value="">Todos los Departamentos</option>
+                {departamentos.map(d => <option key={d.id} value={d.id}>{d.nombre}</option>)}
+              </select>
+              <select value={filtroPuesto} onChange={e => setFiltroPuesto(e.target.value)}
+                className="px-2.5 py-1.5 rounded-lg border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-900 text-xs focus:outline-none focus:ring-1 focus:ring-amber-500 font-semibold">
+                <option value="">Todos los Puestos</option>
+                {puestos
+                  .filter(p => !filtroDepto || p.departamento_id === filtroDepto)
+                  .map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+              </select>
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       {/* Metrics Row: 8 cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">

@@ -3,10 +3,13 @@
 // app/admin/gastos/_components/ProveedoresTab.tsx
 // Tab de gestión de proveedores: listado, detalle y modal de alta/edición.
 
-import React from 'react';
-import { Plus, Search, RefreshCw, Users, ExternalLink, X, AlertTriangle } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Plus, Search, RefreshCw, Users, ExternalLink, X, AlertTriangle, Eye, DollarSign, History, ArrowDownRight, ArrowUpRight, CheckCircle2 } from 'lucide-react';
 import { formatCurrency } from '../../../lib/formatters';
 import type { Proveedor } from '../types';
+import { useCfdiViewer } from './CfdiViewerContext';
+import { obtenerHistorialSaldoFavor, registrarAbonoSaldoFavor, aplicarSaldoFavorAGasto } from '../proveedores/proveedoresActions';
+import { useSessionToken } from '../../../lib/hooks/useSessionToken';
 
 interface ProveedorModalState {
   open: boolean;
@@ -39,6 +42,8 @@ export interface ProveedoresTabProps {
   handleSaveProveedor: (e: React.FormEvent) => void;
   handleDeleteProveedor: (id: string) => void;
   onDownloadFile: (url: string) => void;
+  onViewCfdi?: (xmlUrl: string) => void;
+  onReloadProveedores?: () => void;
 }
 
 // ── Campos del formulario de proveedores ─────────────────────────────────────
@@ -81,7 +86,105 @@ export default function ProveedoresTab({
   handleSaveProveedor,
   handleDeleteProveedor,
   onDownloadFile,
+  onViewCfdi,
+  onReloadProveedores,
 }: ProveedoresTabProps) {
+  const { openCfdi } = useCfdiViewer();
+  const handleViewCfdi = onViewCfdi || openCfdi;
+  const getSessionToken = useSessionToken();
+
+  const [historialSaldoFavor, setHistorialSaldoFavor] = useState<any[]>([]);
+  const [cargandoHistorial, setCargandoHistorial] = useState(false);
+
+  // Modales de Saldo a Favor
+  const [showAbonoModal, setShowAbonoModal] = useState(false);
+  const [abonoMonto, setAbonoMonto] = useState('');
+  const [abonoConcepto, setAbonoConcepto] = useState('');
+  const [abonoLoading, setAbonoLoading] = useState(false);
+
+  const [showAplicarModal, setShowAplicarModal] = useState(false);
+  const [selectedGastoToApply, setSelectedGastoToApply] = useState('');
+  const [aplicarMonto, setAplicarMonto] = useState('');
+  const [aplicarLoading, setAplicarLoading] = useState(false);
+
+  const reloadHistorial = async () => {
+    if (!selectedProveedor?.id) return;
+    setCargandoHistorial(true);
+    try {
+      const token = await getSessionToken();
+      const res = await obtenerHistorialSaldoFavor(selectedProveedor.id, token);
+      if (res.success && res.data) {
+        setHistorialSaldoFavor(res.data);
+      } else {
+        setHistorialSaldoFavor([]);
+      }
+    } catch (e) {
+      console.error(e);
+      setHistorialSaldoFavor([]);
+    } finally {
+      setCargandoHistorial(false);
+    }
+  };
+
+  useEffect(() => {
+    if (selectedProveedor?.id) {
+      reloadHistorial();
+    }
+  }, [selectedProveedor?.id]);
+
+  const handleConfirmAbono = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedProveedor?.id) return;
+    const val = parseFloat(abonoMonto);
+    if (isNaN(val) || val <= 0) return alert('Por favor ingresa un monto válido mayor a 0.');
+
+    setAbonoLoading(true);
+    try {
+      const token = await getSessionToken();
+      const res = await registrarAbonoSaldoFavor(selectedProveedor.id, val, abonoConcepto, token);
+      if (res.success) {
+        setShowAbonoModal(false);
+        setAbonoMonto('');
+        setAbonoConcepto('');
+        if (onReloadProveedores) onReloadProveedores();
+        await reloadHistorial();
+      } else {
+        alert(res.error || 'Error al registrar abono.');
+      }
+    } catch (err: any) {
+      alert('Error: ' + err.message);
+    } finally {
+      setAbonoLoading(false);
+    }
+  };
+
+  const handleConfirmAplicar = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedProveedor?.id || !selectedGastoToApply) return;
+    const val = parseFloat(aplicarMonto);
+    if (isNaN(val) || val <= 0) return alert('Por favor ingresa un monto válido mayor a 0.');
+
+    setAplicarLoading(true);
+    try {
+      const token = await getSessionToken();
+      const res = await aplicarSaldoFavorAGasto(selectedProveedor.id, selectedGastoToApply, val, token);
+      if (res.success) {
+        setShowAplicarModal(false);
+        setAplicarMonto('');
+        setSelectedGastoToApply('');
+        if (onReloadProveedores) onReloadProveedores();
+        await reloadHistorial();
+      } else {
+        alert(res.error || 'Error al aplicar saldo.');
+      }
+    } catch (err: any) {
+      alert('Error: ' + err.message);
+    } finally {
+      setAplicarLoading(false);
+    }
+  };
+
+  const totalSaldoFavorGlobal = proveedores.reduce((s, p) => s + Number(p.saldo_favor || 0), 0);
 
   const nuevoProveedorVacio: Partial<Proveedor> = {
     nombre_comercial: '', razon_social: '', rfc: '', telefono: '', email: '',
@@ -105,13 +208,19 @@ export default function ProveedoresTab({
   return (
     <div className="flex flex-col flex-1 font-sans overflow-hidden min-h-0">
 
-      {/* BARRA DE ACCIONES */}
+      {/* BARRA DE ACCIONES Y MÉTRICA GLOBAL */}
       <div className="p-4 border-b border-gray-200 dark:border-gray-800 bg-gray-50/30 dark:bg-gray-900/20 flex flex-wrap gap-4 items-center justify-between shrink-0">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-3">
           <span className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Gestión de Proveedores</span>
-          <span className="bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 text-[10px] font-bold px-2 py-0.5 rounded-full">
+          <span className="bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 text-[10px] font-bold px-2.5 py-0.5 rounded-full">
             {proveedores.length} en total
           </span>
+          {totalSaldoFavorGlobal > 0 && (
+            <span className="bg-emerald-100 dark:bg-emerald-950/50 border border-emerald-300 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 text-xs font-extrabold px-3 py-1 rounded-xl flex items-center gap-1.5 shadow-sm">
+              <DollarSign size={14} className="text-emerald-500" />
+              Saldo a Favor Total: {formatCurrency(totalSaldoFavorGlobal)}
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-3">
           <div className="relative">
@@ -264,6 +373,42 @@ export default function ProveedoresTab({
                 </div>
               </div>
 
+              {/* Sección Destacada de Saldo a Favor del Proveedor */}
+              <div className="p-4 rounded-2xl bg-emerald-50/60 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800/60 flex flex-wrap gap-4 items-center justify-between shadow-sm">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-600 dark:text-emerald-400">
+                    <DollarSign size={22} />
+                  </div>
+                  <div>
+                    <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-wider block">Saldo a Favor Disponible</span>
+                    <span className="text-xl font-black font-mono text-emerald-700 dark:text-emerald-300">{formatCurrency(selectedProveedor.saldo_favor || 0)}</span>
+                  </div>
+                </div>
+
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowAbonoModal(true)}
+                    className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-xs shadow-sm transition-all flex items-center gap-1.5"
+                  >
+                    <Plus size={14} /> Registrar Abono A Favor
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!selectedProveedor.saldo_favor || selectedProveedor.saldo_favor <= 0) {
+                        return alert('El proveedor no tiene saldo a favor disponible.');
+                      }
+                      setShowAplicarModal(true);
+                    }}
+                    disabled={!selectedProveedor.saldo_favor || selectedProveedor.saldo_favor <= 0}
+                    className="px-3.5 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-200 dark:disabled:bg-gray-800 disabled:text-gray-400 text-white font-bold rounded-xl text-xs shadow-sm transition-all flex items-center gap-1.5 disabled:opacity-50"
+                  >
+                    <CheckCircle2 size={14} /> Aplicar a Factura/Gasto
+                  </button>
+                </div>
+              </div>
+
               {/* KPIs */}
               <div className="grid grid-cols-3 gap-4">
                 {[
@@ -315,10 +460,17 @@ export default function ProveedoresTab({
                             <td className="p-3">
                               <div className="flex justify-center gap-1.5">
                                 {f.xml_url ? (
-                                  <button onClick={() => onDownloadFile(f.xml_url!)}
-                                    className="p-1 bg-blue-50 dark:bg-blue-900/20 hover:bg-blue-100 dark:hover:bg-blue-900/40 rounded border border-blue-200 dark:border-blue-900/50 text-blue-500 font-bold text-[9px]">
-                                    XML
-                                  </button>
+                                  <>
+                                    <button onClick={() => handleViewCfdi(f.xml_url!)}
+                                      title="Ver representación impresa CFDI"
+                                      className="p-1 bg-indigo-50 dark:bg-indigo-900/20 hover:bg-indigo-100 dark:hover:bg-indigo-900/40 rounded border border-indigo-200 dark:border-indigo-900/50 text-indigo-600 font-bold text-[9px] flex items-center gap-0.5">
+                                      <Eye size={11} /> CFDI
+                                    </button>
+                                    <button onClick={() => onDownloadFile(f.xml_url!)}
+                                      className="p-1 bg-blue-50 dark:bg-blue-900/20 hover:bg-blue-100 dark:hover:bg-blue-900/40 rounded border border-blue-200 dark:border-blue-900/50 text-blue-500 font-bold text-[9px]">
+                                      XML
+                                    </button>
+                                  </>
                                 ) : <span className="text-[9px] text-gray-400 italic">No XML</span>}
                                 {f.pdf_url ? (
                                   <button onClick={() => onDownloadFile(f.pdf_url!)}
@@ -332,6 +484,62 @@ export default function ProveedoresTab({
                         ))}
                         {proveedorFacturas.length === 0 && (
                           <tr><td colSpan={4} className="p-8 text-center text-gray-400 italic">No hay facturas cargadas para este proveedor.</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              </div>
+
+              {/* Historial y Auditoría de Saldo a Favor */}
+              <div className="space-y-3 pt-4 border-t border-gray-100 dark:border-gray-800">
+                <h3 className="text-xs font-extrabold uppercase text-gray-500 tracking-wider flex items-center gap-2">
+                  <History size={14} className="text-emerald-500" /> Bitácora de Orígenes y Aplicaciones de Saldo a Favor
+                </h3>
+                <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl overflow-hidden shadow-sm">
+                  {cargandoHistorial ? (
+                    <div className="p-6 text-center text-gray-400 text-xs flex items-center justify-center gap-2">
+                      <RefreshCw size={14} className="animate-spin text-emerald-500" /> Cargando historial de saldo...
+                    </div>
+                  ) : (
+                    <table className="w-full text-left border-collapse">
+                      <thead>
+                        <tr className="bg-gray-50 dark:bg-gray-900/50 border-b border-gray-200 dark:border-gray-800 text-[10px] font-bold text-gray-400 uppercase">
+                          <th className="p-3">Fecha y Hora</th>
+                          <th className="p-3">Tipo</th>
+                          <th className="p-3">Concepto / Detalle de Origen</th>
+                          <th className="p-3 text-right">Monto</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100 dark:divide-gray-800/50 text-xs">
+                        {historialSaldoFavor.map((h) => {
+                          const isPositive = Number(h.monto) > 0;
+                          return (
+                            <tr key={h.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/10 transition-colors">
+                              <td className="p-3 text-gray-400 font-mono text-[10px]">
+                                {new Date(h.creado_en).toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' })}
+                              </td>
+                              <td className="p-3">
+                                <span className={`text-[9px] font-black px-2 py-0.5 rounded uppercase ${
+                                  h.tipo === 'abono' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300' :
+                                  h.tipo === 'excedente_conciliacion' ? 'bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300' :
+                                  'bg-blue-100 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300'
+                                }`}>
+                                  {h.tipo === 'abono' ? 'Abono Manual' : h.tipo === 'excedente_conciliacion' ? 'Sobrante Conciliación' : 'Aplicado a Gasto'}
+                                </span>
+                              </td>
+                              <td className="p-3">
+                                <span className="font-semibold text-gray-900 dark:text-white block">{h.concepto}</span>
+                                {h.origen_detalle && <span className="text-[10px] text-gray-400 block mt-0.5">{h.origen_detalle}</span>}
+                              </td>
+                              <td className={`p-3 text-right font-mono font-bold ${isPositive ? 'text-emerald-600 dark:text-emerald-400' : 'text-blue-600 dark:text-blue-400'}`}>
+                                {isPositive ? `+${formatCurrency(h.monto)}` : formatCurrency(h.monto)}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                        {historialSaldoFavor.length === 0 && (
+                          <tr><td colSpan={4} className="p-6 text-center text-gray-400 italic text-xs">No hay movimientos registrados en el saldo a favor de este proveedor.</td></tr>
                         )}
                       </tbody>
                     </table>
@@ -441,6 +649,132 @@ export default function ProveedoresTab({
                 <button type="submit" disabled={proveedorModal.loading}
                   className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-md">
                   {proveedorModal.loading ? 'Guardando...' : (proveedorModal.proveedor as any).id ? 'Actualizar Proveedor' : 'Registrar Proveedor'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+      {/* MODAL REGISTRAR ABONO A FAVOR */}
+      {showAbonoModal && selectedProveedor && (
+        <div className="fixed inset-0 bg-black/60 dark:bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-6 rounded-2xl w-full max-w-md shadow-2xl text-gray-900 dark:text-gray-100 flex flex-col font-sans">
+            <div className="flex justify-between items-center mb-4 pb-2 border-b border-gray-100 dark:border-gray-800">
+              <h3 className="text-base font-extrabold flex items-center gap-2 text-emerald-500">
+                <DollarSign size={18} /> Registrar Abono a Favor
+              </h3>
+              <button onClick={() => setShowAbonoModal(false)} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"><X size={18} /></button>
+            </div>
+
+            <p className="text-xs text-gray-500 mb-4">
+              Registra un saldo a favor directo para <strong>{selectedProveedor.nombre_comercial}</strong>.
+            </p>
+
+            <form onSubmit={handleConfirmAbono} className="space-y-4 text-xs">
+              <div>
+                <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Monto a Favor ($) *</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  required
+                  placeholder="0.00"
+                  value={abonoMonto}
+                  onChange={(e) => setAbonoMonto(e.target.value)}
+                  className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-xl text-sm font-mono text-gray-900 dark:text-white outline-none focus:ring-1 focus:ring-emerald-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Concepto / Origen del Saldo *</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Ej. Anticipo a proveedor, Nota de crédito #402, Pago excedente..."
+                  value={abonoConcepto}
+                  onChange={(e) => setAbonoConcepto(e.target.value)}
+                  className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-xl text-xs text-gray-900 dark:text-white outline-none focus:ring-1 focus:ring-emerald-500"
+                />
+              </div>
+
+              <div className="flex gap-3 pt-4 border-t border-gray-100 dark:border-gray-800">
+                <button type="button" onClick={() => setShowAbonoModal(false)} disabled={abonoLoading}
+                  className="flex-1 py-2.5 border border-gray-300 dark:border-gray-700 rounded-xl text-xs font-semibold hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-50">
+                  Cancelar
+                </button>
+                <button type="submit" disabled={abonoLoading}
+                  className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-md flex items-center justify-center gap-1.5">
+                  {abonoLoading ? <RefreshCw size={14} className="animate-spin" /> : null}
+                  Confirmar Abono
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL APLICAR SALDO A FAVOR A FACTURA */}
+      {showAplicarModal && selectedProveedor && (
+        <div className="fixed inset-0 bg-black/60 dark:bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-6 rounded-2xl w-full max-w-md shadow-2xl text-gray-900 dark:text-gray-100 flex flex-col font-sans">
+            <div className="flex justify-between items-center mb-4 pb-2 border-b border-gray-100 dark:border-gray-800">
+              <h3 className="text-base font-extrabold flex items-center gap-2 text-blue-500">
+                <CheckCircle2 size={18} /> Aplicar Saldo a Favor
+              </h3>
+              <button onClick={() => setShowAplicarModal(false)} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"><X size={18} /></button>
+            </div>
+
+            <p className="text-xs text-gray-500 mb-2">
+              Saldo a favor disponible de <strong>{selectedProveedor.nombre_comercial}</strong>: <span className="font-bold text-emerald-600 font-mono">{formatCurrency(selectedProveedor.saldo_favor || 0)}</span>
+            </p>
+
+            <form onSubmit={handleConfirmAplicar} className="space-y-4 text-xs mt-2">
+              <div>
+                <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Factura / Gasto de Destino *</label>
+                <select
+                  required
+                  value={selectedGastoToApply}
+                  onChange={(e) => {
+                    setSelectedGastoToApply(e.target.value);
+                    const selectedG = proveedorFacturas.find(f => f.id === e.target.value);
+                    if (selectedG) {
+                      const maxApp = Math.min(Number(selectedProveedor.saldo_favor || 0), Number(selectedG.monto || 0));
+                      setAplicarMonto(maxApp.toString());
+                    }
+                  }}
+                  className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-xl text-xs text-gray-900 dark:text-white outline-none focus:ring-1 focus:ring-blue-500"
+                >
+                  <option value="">-- Seleccionar Factura --</option>
+                  {proveedorFacturas.map(f => (
+                    <option key={f.id} value={f.id}>
+                      {f.fecha_gasto ? `${f.fecha_gasto} - ` : ''}{f.concepto} ({formatCurrency(f.monto)})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Monto a Aplicar ($) *</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  max={selectedProveedor.saldo_favor || 0}
+                  required
+                  placeholder="0.00"
+                  value={aplicarMonto}
+                  onChange={(e) => setAplicarMonto(e.target.value)}
+                  className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-xl text-sm font-mono text-gray-900 dark:text-white outline-none focus:ring-1 focus:ring-blue-500"
+                />
+              </div>
+
+              <div className="flex gap-3 pt-4 border-t border-gray-100 dark:border-gray-800">
+                <button type="button" onClick={() => setShowAplicarModal(false)} disabled={aplicarLoading}
+                  className="flex-1 py-2.5 border border-gray-300 dark:border-gray-700 rounded-xl text-xs font-semibold hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-50">
+                  Cancelar
+                </button>
+                <button type="submit" disabled={aplicarLoading || !selectedGastoToApply}
+                  className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-md flex items-center justify-center gap-1.5">
+                  {aplicarLoading ? <RefreshCw size={14} className="animate-spin" /> : null}
+                  Aplicar Descuento
                 </button>
               </div>
             </form>

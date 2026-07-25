@@ -120,7 +120,7 @@ export default function ContabilidadDashboard() {
         .select('*, clientes(nombre_local, rfc, email_facturacion), facturas_clientes(*)')
         .eq('empresa_id', empresaId)
         .neq('estatus_pago', 'Cancelado')
-        .order('created_at', { ascending: false });
+        .order('creado_en', { ascending: false });
       setVentasFacturadas(vAll || []);
 
       // 3. Pedidos pendientes de facturar (solo liquidados)
@@ -130,7 +130,7 @@ export default function ContabilidadDashboard() {
         .eq('empresa_id', empresaId)
         .is('folio_factura', null)
         .eq('estatus_pago', 'Liquidado')
-        .order('created_at', { ascending: false });
+        .order('creado_en', { ascending: false });
       setPedidosPendientes(pPend || []);
 
       // 4. Gastos pendientes de facturar/comprobar (egresos manuales sin comprobante)
@@ -204,7 +204,7 @@ export default function ContabilidadDashboard() {
 
   const filteredVentas = useMemo(() => {
     return ventasFacturadas.filter(v => {
-      const dateStr = v.fecha_pedido || v.created_at || '';
+      const dateStr = v.fecha_pedido || v.creado_en || '';
       return dateStr.substring(0, 7) === selectedMonth;
     });
   }, [ventasFacturadas, selectedMonth]);
@@ -361,7 +361,7 @@ export default function ContabilidadDashboard() {
         .eq('cliente_id', cId)
         .is('folio_factura', null)
         .eq('estatus_pago', 'Liquidado')
-        .order('created_at', { ascending: false });
+        .order('creado_en', { ascending: false });
 
       if (error) throw error;
       setFacturacionAcumuladaModal(prev => ({ ...prev, pedidos: pData || [], seleccionados: [], loading: false }));

@@ -70,7 +70,7 @@ export default function AdminMonitor() {
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(6);
   const [filtroCliente, setFiltroCliente] = useState('');
-  const [filtroRango, setFiltroRango] = useState('todo');
+  const [filtroRango, setFiltroRango] = useState('mes_actual');
   const [fechaInicio, setFechaInicio] = useState('');
   const [fechaFin, setFechaFin] = useState('');
   const [busquedaGlobal, setBusquedaGlobal] = useState('');
@@ -134,6 +134,17 @@ export default function AdminMonitor() {
     fetchPreciosEspeciales();
   }, [nuevoPedido.cliente_id]);
 
+  // Helper para obtener fecha de la orden en formato YYYY-MM-DD sin desfasamiento de zona horaria
+  const getFechaOrdenString = (p: any): string => {
+    if (p.fecha_pedido) {
+      return String(p.fecha_pedido).split('T')[0];
+    }
+    if (p.creado_en) {
+      return String(p.creado_en).split('T')[0];
+    }
+    return '';
+  };
+
   // --- CONSULTAS A BASE DE DATOS ---
   const fetchPedidos = useCallback(async () => {
     try {
@@ -141,22 +152,26 @@ export default function AdminMonitor() {
       let startDateStr: string | null = null;
       let endDateStr: string | null = null;
 
-      if (filtroRango === 'semana') {
+      if (filtroRango === 'mes_actual') {
+        startDateStr = `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, '0')}-01`;
+      } else if (filtroRango === 'semana') {
         const haceUnaSemana = new Date();
-        haceUnaSemana.setDate(hoy.getDate() - 7);
+        haceUnaSemana.setDate(hoy.getDate() - 14);
         startDateStr = haceUnaSemana.toISOString().split('T')[0];
       } else if (filtroRango === 'mes') {
         const haceUnMes = new Date();
-        haceUnMes.setMonth(hoy.getMonth() - 1);
+        haceUnMes.setDate(hoy.getDate() - 45);
         startDateStr = haceUnMes.toISOString().split('T')[0];
-      } else if (filtroRango === 'rango' && fechaInicio && fechaFin) {
+      } else if (filtroRango === 'rango' && fechaInicio) {
         startDateStr = fechaInicio;
-        endDateStr = fechaFin;
-      } else if (filtroRango === 'todo') {
-        // Por defecto si no aplica filtro, siempre el mes actual
-        const inicioMes = new Date(hoy.getFullYear(), hoy.getMonth(), 1);
-        startDateStr = inicioMes.toISOString().split('T')[0];
+        endDateStr = fechaFin || null;
       }
+      // 'todo': startDateStr = null (fetch all)
+
+      // DEBUG: verificar sesión activa
+      const { data: { session } } = await supabase.auth.getSession();
+      console.log('[DEBUG fetchPedidos] Session:', session ? `UID=${session.user.id}, role=${session.user.role}` : 'NO SESSION');
+      console.log('[DEBUG fetchPedidos] filtroRango:', filtroRango, 'startDate:', startDateStr, 'endDate:', endDateStr);
 
       let query = supabase
         .from('pedidos')
@@ -164,13 +179,16 @@ export default function AdminMonitor() {
         .order('numero_pedido', { ascending: false });
 
       if (startDateStr) {
-        query = query.gte('created_at', `${startDateStr}T00:00:00.000Z`);
+        query = query.or(`fecha_pedido.gte.${startDateStr},creado_en.gte.${startDateStr}`);
       }
       if (endDateStr) {
-        query = query.lte('created_at', `${endDateStr}T23:59:59.999Z`);
+        query = query.or(`fecha_pedido.lte.${endDateStr},creado_en.lte.${endDateStr}`);
       }
 
-      const { data, error } = await query;
+      const { data, error, status, statusText } = await query;
+      console.log('[DEBUG fetchPedidos] status:', status, statusText);
+      console.log('[DEBUG fetchPedidos] error:', error);
+      console.log('[DEBUG fetchPedidos] data count:', data?.length, 'first:', data?.[0]?.numero_pedido);
       if (error) throw error;
       setPedidos(data || []);
     } catch (err) {
@@ -221,21 +239,37 @@ export default function AdminMonitor() {
     let filtrados = [...pedidos];
     const hoy = new Date();
 
-    if (filtroRango === 'todo') {
-      const inicioMes = new Date(hoy.getFullYear(), hoy.getMonth(), 1);
-      filtrados = filtrados.filter(p => new Date(p.created_at || '') >= inicioMes);
-    } else if (filtroRango === 'semana') {
-      const haceUnaSemana = new Date(); haceUnaSemana.setDate(hoy.getDate() - 7);
-      filtrados = filtrados.filter(p => new Date(p.created_at || '') >= haceUnaSemana);
-    } else if (filtroRango === 'mes') {
-      const haceUnMes = new Date(); haceUnMes.setMonth(hoy.getMonth() - 1);
-      filtrados = filtrados.filter(p => new Date(p.created_at || '') >= haceUnMes);
-    } else if (filtroRango === 'rango' && fechaInicio && fechaFin) {
+    if (filtroRango === 'mes_actual') {
+      const inicioMesStr = `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, '0')}-01`;
       filtrados = filtrados.filter(p => {
-        const d = new Date(p.created_at || '');
-        return d >= new Date(fechaInicio) && d <= new Date(fechaFin);
+        const d = getFechaOrdenString(p);
+        return d >= inicioMesStr;
+      });
+    } else if (filtroRango === 'semana') {
+      const haceUnaSemana = new Date();
+      haceUnaSemana.setDate(hoy.getDate() - 7);
+      const semStr = haceUnaSemana.toISOString().split('T')[0];
+      filtrados = filtrados.filter(p => {
+        const d = getFechaOrdenString(p);
+        return d >= semStr;
+      });
+    } else if (filtroRango === 'mes') {
+      const haceUnMes = new Date();
+      haceUnMes.setDate(hoy.getDate() - 30);
+      const mesStr = haceUnMes.toISOString().split('T')[0];
+      filtrados = filtrados.filter(p => {
+        const d = getFechaOrdenString(p);
+        return d >= mesStr;
+      });
+    } else if (filtroRango === 'rango') {
+      filtrados = filtrados.filter(p => {
+        const d = getFechaOrdenString(p);
+        const matchStart = !fechaInicio || d >= fechaInicio;
+        const matchEnd = !fechaFin || d <= fechaFin;
+        return matchStart && matchEnd;
       });
     }
+    // 'todo': Muestra todos los pedidos sin restringir por fecha
 
     if (busquedaGlobal.trim()) {
       const term = busquedaGlobal.toLowerCase().trim();
@@ -254,7 +288,7 @@ export default function AdminMonitor() {
       if (numA !== numB) {
         return numB - numA;
       }
-      return new Date(b.created_at || '').getTime() - new Date(a.created_at || '').getTime();
+      return new Date(b.creado_en || '').getTime() - new Date(a.creado_en || '').getTime();
     });
   }, [pedidos, filtroRango, fechaInicio, fechaFin, busquedaGlobal]);
 
@@ -611,7 +645,7 @@ export default function AdminMonitor() {
             <div class="divider"></div>
             <div style="margin-bottom: 5px;">
               <p style="margin: 3px 0;"><strong>Pedido:</strong> #${pedido.numero_pedido || pedido.id.split('-')[0]}</p>
-              <p style="margin: 3px 0;"><strong>Fecha:</strong> ${new Date(pedido.created_at || '').toLocaleString()}</p>
+              <p style="margin: 3px 0;"><strong>Fecha:</strong> ${new Date(pedido.creado_en || '').toLocaleString()}</p>
               <p style="margin: 3px 0;"><strong>Cliente:</strong> ${pedido.clientes?.nombre_local || pedido.cliente_nombre || 'Ocasional'}</p>
               ${phoneHtml}
               ${billingHtml}
@@ -745,11 +779,12 @@ export default function AdminMonitor() {
           {/* FILTROS */}
           <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-4 rounded-xl shadow-md mb-6 flex gap-4 items-center flex-wrap compact-filter-bar">
             <Filter size={18} className="text-gray-400" />
-            <select className="border border-gray-200 dark:border-gray-800 p-2 rounded-lg text-sm bg-gray-50 dark:bg-gray-900 outline-none text-gray-900 dark:text-white" onChange={(e) => setFiltroRango(e.target.value)}>
-              <option value="todo">Todos los pedidos</option>
+            <select value={filtroRango} className="border border-gray-200 dark:border-gray-800 p-2 rounded-lg text-sm bg-gray-50 dark:bg-gray-900 outline-none text-gray-900 dark:text-white font-semibold" onChange={(e) => setFiltroRango(e.target.value)}>
+              <option value="mes_actual">Mes actual</option>
+              <option value="mes">Últimos 30 días</option>
               <option value="semana">Última semana</option>
-              <option value="mes">Último mes</option>
               <option value="rango">Rango personalizado</option>
+              <option value="todo">Todos los pedidos</option>
             </select>
 
             <div className="relative flex-1 min-w-[200px] font-sans">

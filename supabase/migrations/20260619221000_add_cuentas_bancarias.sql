@@ -15,18 +15,22 @@ ADD COLUMN IF NOT EXISTS cuenta_bancaria_id UUID REFERENCES public.cuentas_banca
 -- Actualizar permisos de RLS (Row Level Security)
 ALTER TABLE public.cuentas_bancarias ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "Enable read access for all users" ON public.cuentas_bancarias;
 CREATE POLICY "Enable read access for all users"
     ON public.cuentas_bancarias FOR SELECT
     USING (true);
 
+DROP POLICY IF EXISTS "Enable insert for authenticated users only" ON public.cuentas_bancarias;
 CREATE POLICY "Enable insert for authenticated users only"
     ON public.cuentas_bancarias FOR INSERT
     WITH CHECK (auth.role() = 'authenticated');
 
+DROP POLICY IF EXISTS "Enable update for authenticated users only" ON public.cuentas_bancarias;
 CREATE POLICY "Enable update for authenticated users only"
     ON public.cuentas_bancarias FOR UPDATE
     USING (auth.role() = 'authenticated');
 
+DROP POLICY IF EXISTS "Enable delete for authenticated users only" ON public.cuentas_bancarias;
 CREATE POLICY "Enable delete for authenticated users only"
     ON public.cuentas_bancarias FOR DELETE
     USING (auth.role() = 'authenticated');

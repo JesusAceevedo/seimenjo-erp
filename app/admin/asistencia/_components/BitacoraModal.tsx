@@ -15,7 +15,8 @@ export default function BitacoraModal({ data, onClose, onSaved }: Props) {
   const [form, setForm] = useState({
     tipo_incidencia: 'justificacion_falta',
     motivo: '',
-    soporte: ''
+    soporte: '',
+    hora: ''
   });
   const [saving, setSaving] = useState(false);
 
@@ -24,7 +25,13 @@ export default function BitacoraModal({ data, onClose, onSaved }: Props) {
     if (!justifyingDay || saving) return;
     setSaving(true);
     try {
-      const fullMotivo = `${form.motivo}${form.soporte ? ` (Soporte/Folio: ${form.soporte})` : ''}`;
+      let prefix = '';
+      if (form.tipo_incidencia === 'omision_entrada' && form.hora) {
+        prefix = `[Entrada: ${form.hora}] `;
+      } else if (form.tipo_incidencia === 'omision_salida' && form.hora) {
+        prefix = `[Salida: ${form.hora}] `;
+      }
+      const fullMotivo = `${prefix}${form.motivo}${form.soporte ? ` (Soporte/Folio: ${form.soporte})` : ''}`;
       await createIncidencia({
         empleado_id: data.empleado.id,
         tipo_incidencia: form.tipo_incidencia,
@@ -37,7 +44,7 @@ export default function BitacoraModal({ data, onClose, onSaved }: Props) {
       
       // Reset form
       setJustifyingDay(null);
-      setForm({ tipo_incidencia: 'justificacion_falta', motivo: '', soporte: '' });
+      setForm({ tipo_incidencia: 'justificacion_falta', motivo: '', soporte: '', hora: '' });
       
       // Trigger reload
       if (onSaved) onSaved();
@@ -125,7 +132,7 @@ export default function BitacoraModal({ data, onClose, onSaved }: Props) {
                   {justifyingDay && justifyingDay.date === day.date && (
                     <form onSubmit={handleSaveJustification} className="p-4 bg-gray-50 dark:bg-gray-900/60 rounded-xl border border-amber-500/20 text-xs space-y-3 mb-3">
                       <p className="font-bold text-amber-600 dark:text-amber-400">Crear Justificación para este día</p>
-                      <div className="grid grid-cols-2 gap-3">
+                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                         <div>
                           <label className="block text-[9px] font-bold text-gray-500 uppercase mb-1">Tipo de Justificación</label>
                           <select
@@ -140,6 +147,20 @@ export default function BitacoraModal({ data, onClose, onSaved }: Props) {
                             <option value="justificacion_omision">Omisión General / Otro</option>
                           </select>
                         </div>
+                        {(form.tipo_incidencia === 'omision_entrada' || form.tipo_incidencia === 'omision_salida') && (
+                          <div>
+                            <label className="block text-[9px] font-bold text-gray-500 uppercase mb-1">
+                              {form.tipo_incidencia === 'omision_entrada' ? 'Hora de Entrada' : 'Hora de Salida'} *
+                            </label>
+                            <input
+                              type="time"
+                              required
+                              value={form.hora}
+                              onChange={e => setForm({ ...form, hora: e.target.value })}
+                              className="w-full px-2.5 py-1.5 bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded focus:outline-none"
+                            />
+                          </div>
+                        )}
                         <div>
                           <label className="block text-[9px] font-bold text-gray-500 uppercase mb-1">Soporte (Folio / Enlace)</label>
                           <input
