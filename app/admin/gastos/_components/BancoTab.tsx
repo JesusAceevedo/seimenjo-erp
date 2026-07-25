@@ -2054,9 +2054,9 @@ export default function BancoTab({
                                   )}
                                 </td>
                                 <td className="p-3 text-center">
-                                  {c.ticket_url ? (
+                                  {c.archivo_url ? (
                                     <button
-                                      onClick={() => handleViewTicket(c.ticket_url!)}
+                                      onClick={() => handleViewTicket(c.archivo_url!)}
                                       className="p-1 bg-amber-50 dark:bg-amber-955/20 text-amber-600 hover:bg-amber-100 dark:hover:bg-amber-900/30 rounded border border-amber-200 dark:border-amber-900/40 text-[9px] font-bold inline-flex items-center gap-0.5"
                                     >
                                       <Eye size={10} /> Ver

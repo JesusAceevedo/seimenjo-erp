@@ -286,6 +286,7 @@ export interface ComprobanteDeposito {
   monto: number;
   descripcion?: string | null;
   archivo_url?: string | null;
+  ticket_url?: string | null;
   storage_provider?: 'Supabase' | 'GoogleDrive';
   cuenta_bancaria_id?: string | null;
   empresa_id?: string;
