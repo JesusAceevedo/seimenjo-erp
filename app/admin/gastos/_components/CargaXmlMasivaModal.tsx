@@ -517,7 +517,7 @@ export default function CargaXmlMasivaModal({ onClose, onSuccess, tipo }: CargaX
           nuevosResultados.push({
             nombre: file.name,
             estatus: 'ok',
-            mensaje: ambiguedadMensaje ? ambiguedadMensaje.trim() : (insertPayload.pedido_id ? 'Vinculado automáticamente al Pedido del cliente' : undefined)
+            mensaje: insertPayload?.pedido_id ? 'Vinculado automáticamente al Pedido del cliente' : undefined
           });
 
         } catch (err: any) {

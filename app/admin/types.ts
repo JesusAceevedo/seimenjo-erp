@@ -176,6 +176,7 @@ export interface GastoFacturado {
 export interface VentaFacturada {
   id: string;
   numero_pedido: string;
+  folio_factura?: string | null;
   precio_total: number;
   cliente_nombre?: string;
   fecha_pedido?: string;

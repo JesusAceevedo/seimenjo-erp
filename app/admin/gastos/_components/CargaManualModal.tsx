@@ -362,7 +362,7 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId 
   const procesarManual = async (e: React.FormEvent) => {
     e.preventDefault();
     setProcesando(true);
-    setErrorGlobal('');
+    let insertPayload: any = null;
 
     try {
       // Validaciones
@@ -659,7 +659,7 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId 
         }
       } else {
         // CREAR NUEVO REGISTRO
-        let insertPayload: any = {};
+        insertPayload = {};
 
         // Resolver forma_pago_id y metodo_pago para la base de datos (guardando solo código en metodo_pago)
         let formaPagoId: string | null = null;
@@ -695,9 +695,10 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId 
           throw new Error('No se pudo identificar la empresa activa en tu sesión.');
         }
 
+        let proveedorId: string | null = null;
+
         if (tipo === 'gasto') {
           // Buscar o crear proveedor por RFC
-          let proveedorId = null;
           const targetRfc = manualFields.rfc.trim();
           if (targetRfc) {
             const { data: prov } = await supabase
