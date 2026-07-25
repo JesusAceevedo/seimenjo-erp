@@ -11,6 +11,7 @@ import { enviarFacturaPorCorreo } from '../gastos/actions';
 import { eliminarDetallesPedido } from './actions';
 import { Pedido, Cliente, ProductoVariante, Repartidor, FormaPago, PrecioEspecialMap, DetallePedido } from '../types';
 import { SAT_FORMAS_PAGO, getMetodoPagoLabel } from '../../../lib/constants/sat';
+import { useEmpresaId } from '../../../lib/hooks/useEmpresaId';
 
 // --- ESTADOS INICIALES (Optimizados fuera del componente para no recrearlos en cada render) ---
 const getPedidoInicial = () => ({
@@ -28,6 +29,7 @@ const getPedidoInicial = () => ({
 export const dynamic = 'force-dynamic';
 export default function AdminMonitor() {
   const router = useRouter();
+  const getEmpresaId = useEmpresaId();
 
   const getSessionToken = async (): Promise<string> => {
     const { data: { session } } = await supabase.auth.getSession();
@@ -148,6 +150,9 @@ export default function AdminMonitor() {
   // --- CONSULTAS A BASE DE DATOS ---
   const fetchPedidos = useCallback(async () => {
     try {
+      const empresaId = await getEmpresaId();
+      if (!empresaId) return;
+
       const hoy = new Date();
       let startDateStr: string | null = null;
       let endDateStr: string | null = null;
@@ -176,6 +181,7 @@ export default function AdminMonitor() {
       let query = supabase
         .from('pedidos')
         .select('*, pedido_detalles(*, producto_variantes(id, gramaje, precio_base, productos(nombre))), clientes(nombre_local, telefono, rfc)')
+        .eq('empresa_id', empresaId)
         .order('numero_pedido', { ascending: false });
 
       if (startDateStr) {
@@ -194,7 +200,7 @@ export default function AdminMonitor() {
     } catch (err) {
       console.error('Error fetching orders:', err);
     }
-  }, [filtroRango, fechaInicio, fechaFin]);
+  }, [filtroRango, fechaInicio, fechaFin, getEmpresaId]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -215,10 +221,11 @@ export default function AdminMonitor() {
         if (!retryToken) return router.push('/admin/login');
       }
 
+      const empresaId = await getEmpresaId();
       const [prodsRes, clisRes, repsRes, formasRes] = await Promise.all([
         supabase.from('producto_variantes').select('id, gramaje, precio_base, productos(nombre)'),
-        supabase.from('clientes').select('id, nombre_local'),
-        supabase.from('repartidores').select('*').order('nombre', { ascending: true }),
+        empresaId ? supabase.from('clientes').select('id, nombre_local').eq('empresa_id', empresaId) : supabase.from('clientes').select('id, nombre_local'),
+        empresaId ? supabase.from('repartidores').select('*').or(`empresa_id.is.null,empresa_id.eq.${empresaId}`).order('nombre', { ascending: true }) : supabase.from('repartidores').select('*').order('nombre', { ascending: true }),
         supabase.from('formas_pago').select('*').order('nombre', { ascending: true })
       ]);
 
@@ -228,7 +235,7 @@ export default function AdminMonitor() {
       if (formasRes.data) setFormasPagoList(formasRes.data);
     };
     init();
-  }, [router]);
+  }, [router, getEmpresaId]);
 
   // --- LÓGICA DE FILTRADO OPTIMIZADA ---
   const clientesFiltrados = useMemo(() =>
@@ -400,8 +407,10 @@ export default function AdminMonitor() {
         alert('Pedido actualizado correctamente.');
       } else {
         // --- MODO CREACIÓN ---
+        const empresaId = await getEmpresaId();
         const insertPayload = {
           ...payload,
+          empresa_id: empresaId,
           estatus_pedido: 'Pendiente',
           estatus_pago: 'Pendiente',
           fecha_pedido: new Date().toISOString().split('T')[0]

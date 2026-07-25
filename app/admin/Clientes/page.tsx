@@ -9,6 +9,7 @@ import { useThemeMode } from '../../../lib/useThemeMode';
 import { Plus, Search, Sun, Moon, ChevronLeft, ChevronRight, Edit3, Trash2, Key, Users, Save } from 'lucide-react';
 import { habilitarPortalClienteAdmin } from '../actions/adminAuth';
 import { useSessionToken } from '../../../lib/hooks/useSessionToken';
+import { useEmpresaId } from '../../../lib/hooks/useEmpresaId';
 import {
   CATALOGO_REGIMEN_FISCAL,
   CATALOGO_USO_CFDI,
@@ -33,6 +34,7 @@ export default function AdminMonitor() {
   const router = useRouter();
   const pathname = usePathname(); // <-- NUEVO: Leemos la ruta de Next.js
   const getToken = useSessionToken();
+  const getEmpresaId = useEmpresaId();
 
   // Control de Navegación Interna basado en la URL del Layout
   // Si la ruta contiene "clientes" mostramos el módulo, si no, ventas.
@@ -93,20 +95,31 @@ export default function AdminMonitor() {
 
   // --- CONSULTAS A BASE DE DATOS ---
   const fetchPedidos = useCallback(async () => {
+    const empresaId = await getEmpresaId();
+    if (!empresaId) return;
+
     const from = page * pageSize;
     const to = from + pageSize - 1;
 
     const { data } = await supabase
       .from('pedidos')
       .select('*, pedido_detalles(*, producto_variantes(gramaje, precio_base, productos(nombre))), clientes(nombre_local)')
+      .eq('empresa_id', empresaId)
       .order('creado_en', { ascending: false })
       .range(from, to);
 
     setPedidos(data || []);
-  }, [page, pageSize]);
+  }, [page, pageSize, getEmpresaId]);
 
   const fetchClientesCompleto = async () => {
-    const { data } = await supabase.from('clientes').select('*').order('nombre_local', { ascending: true });
+    const empresaId = await getEmpresaId();
+    if (!empresaId) return;
+
+    const { data } = await supabase
+      .from('clientes')
+      .select('*')
+      .eq('empresa_id', empresaId)
+      .order('nombre_local', { ascending: true });
     setClientes(data || []);
   };
 
@@ -170,6 +183,7 @@ export default function AdminMonitor() {
 
     let pedidoId: string | null = null;
     try {
+      const empresaId = await getEmpresaId();
       const { data: pedido, error } = await supabase.from('pedidos').insert([{
         cliente_id: nuevoPedido.cliente_id || null,
         cliente_nombre: nuevoPedido.cliente_nombre,
@@ -182,7 +196,8 @@ export default function AdminMonitor() {
         fecha_entrega: nuevoPedido.fecha_entrega || null,
         entregado_por: nuevoPedido.entregado_por,
         costo_envio: nuevoPedido.costo_envio,
-        comentarios: nuevoPedido.comentarios_generales
+        comentarios: nuevoPedido.comentarios_generales,
+        empresa_id: empresaId
       }]).select().single();
 
       if (error) throw error;
@@ -226,7 +241,11 @@ export default function AdminMonitor() {
     setErrorClienteModal('');
 
     try {
-      const { error } = await supabase.from('clientes').insert([nuevoCliente]);
+      const empresaId = await getEmpresaId();
+      const { error } = await supabase.from('clientes').insert([{
+        ...nuevoCliente,
+        empresa_id: empresaId
+      }]);
       if (error) { throw error; }
 
       setIsClienteModalOpen(false);
