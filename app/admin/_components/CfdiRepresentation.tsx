@@ -2,6 +2,14 @@
 
 import React from 'react';
 import { QRCodeSVG } from 'qrcode.react';
+import { 
+  getMetodoPagoDescripcion, 
+  getFormaPagoDescripcion, 
+  getMonedaDescripcion, 
+  getTipoComprobanteDescripcion,
+  getUsoCfdiDescripcion,
+  getRegimenFiscalDescripcion
+} from '../../../lib/constants/sat';
 
 interface CfdiRepresentationProps {
   cfdiData: any;
@@ -123,7 +131,7 @@ export default function CfdiRepresentation({ cfdiData }: CfdiRepresentationProps
           <h1 className="text-2xl font-black uppercase tracking-wider">{emisorNombre}</h1>
           <p className="font-bold text-gray-600">RFC: {emisorRfc}</p>
           {emisorRegimen && (
-            <p className="text-gray-500 text-xs">Régimen Fiscal: {emisorRegimen}</p>
+            <p className="text-gray-500 text-xs">Régimen Fiscal: {getRegimenFiscalDescripcion(emisorRegimen)}</p>
           )}
         </div>
         <div className="text-right">
@@ -142,9 +150,9 @@ export default function CfdiRepresentation({ cfdiData }: CfdiRepresentationProps
         <p className="font-bold text-lg">{receptorNombre}</p>
         <p className="text-gray-600">RFC: {receptorRfc}</p>
         <p className="text-gray-600 text-xs">
-          Uso CFDI: {receptorUso} 
+          Uso CFDI: {getUsoCfdiDescripcion(receptorUso) || receptorUso || 'N/A'} 
           {receptorDomicilio && ` | Domicilio Fiscal: ${receptorDomicilio}`}
-          {receptorRegimen && ` | Régimen: ${receptorRegimen}`}
+          {receptorRegimen && ` | Régimen: ${getRegimenFiscalDescripcion(receptorRegimen)}`}
         </p>
       </div>
 
@@ -204,10 +212,10 @@ export default function CfdiRepresentation({ cfdiData }: CfdiRepresentationProps
       <div className="flex justify-between items-start mb-8 gap-4">
         {/* Metadatos de Pago */}
         <div className="text-xs text-gray-600 bg-gray-50 p-3 rounded-lg border flex-1">
-          <p className="mb-1"><strong>Método de Pago:</strong> {metodoPago || 'N/A'}</p>
-          <p className="mb-1"><strong>Forma de Pago:</strong> {formaPago || 'N/A'}</p>
-          <p className="mb-1"><strong>Moneda:</strong> {moneda} {tipoCambio ? `(TC: ${tipoCambio})` : ''}</p>
-          <p><strong>Tipo de Comprobante:</strong> {tipoComprobante}</p>
+          <p className="mb-1"><strong>Método de Pago:</strong> {getMetodoPagoDescripcion(metodoPago)}</p>
+          <p className="mb-1"><strong>Forma de Pago:</strong> {getFormaPagoDescripcion(formaPago)}</p>
+          <p className="mb-1"><strong>Moneda:</strong> {getMonedaDescripcion(moneda)} {tipoCambio ? `(TC: ${tipoCambio})` : ''}</p>
+          <p><strong>Tipo de Comprobante:</strong> {getTipoComprobanteDescripcion(tipoComprobante)}</p>
         </div>
 
         {/* Cuentas Totales */}

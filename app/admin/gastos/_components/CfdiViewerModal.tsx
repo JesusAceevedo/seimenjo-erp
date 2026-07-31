@@ -30,9 +30,10 @@ export default function CfdiViewerModal({ xmlUrl, onClose }: CfdiViewerModalProp
         setError(null);
 
         // 1. Get Signed URL
+        const cleanUrl = xmlUrl.trim().split(',')[0].trim();
         const { data: { session } } = await supabase.auth.getSession();
         const token = session?.access_token || '';
-        const res = await obtenerSignedUrl(xmlUrl, token);
+        const res = await obtenerSignedUrl(cleanUrl, token);
 
         if (!res.success || !res.url) {
           throw new Error(res.error || 'No se pudo obtener el archivo XML.');

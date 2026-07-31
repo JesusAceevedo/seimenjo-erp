@@ -11,7 +11,7 @@ import React from 'react';
 import {
   FileCode, FileText, CreditCard, List, Scale, Settings,
   ArrowRightLeft, Play, RefreshCw, FileSpreadsheet, Plus, Trash2, Edit3,
-  Layers, Check, X, UploadCloud, Paperclip, AlertTriangle, Filter, Eye
+  Layers, Check, X, UploadCloud, Paperclip, AlertTriangle, Filter, Eye, Link
 } from 'lucide-react';
 import { formatCurrency } from '../../../../lib/formatters';
 import type { MovimientoBancario, EstatusConciliacion, GastoReconciliable, FormaPago, ComprobanteDeposito } from '../../types';
@@ -303,6 +303,7 @@ export default function BancoTab({
   const [showFiltrosAvanzados, setShowFiltrosAvanzados] = React.useState<boolean>(false);
   const [guardarExcedenteComoSaldoFavor, setGuardarExcedenteComoSaldoFavor] = React.useState<boolean>(false);
   const [ingresosSubSeccion, setIngresosSubSeccion] = React.useState<'comprobantes' | 'global'>('comprobantes');
+  const [modoConciliacionIngreso, setModoConciliacionIngreso] = React.useState<'pedidos' | 'fichas'>('pedidos');
 
   const parseInputNumber = (val: any): number => {
     if (val === undefined || val === null) return 0;
@@ -955,7 +956,7 @@ export default function BancoTab({
         })}
       </div>
 
-      <div className="flex-1 overflow-hidden flex flex-col min-h-0">
+      <div className="flex-1 overflow-y-auto flex flex-col min-h-0">
 
         {/* ── SUB-TAB 1: MOVIMIENTOS ───────────────────────────────────────── */}
         {bancoSubTab === 'movimientos' && (
@@ -1374,76 +1375,163 @@ export default function BancoTab({
                               )}
                             </div>
 
-                            {/* Mostrar detalles de la conciliación si existen */}
-                            {m.conciliaciones_bancarias && m.conciliaciones_bancarias.length > 0 && (
-                              <div className="mt-2 space-y-1.5">
-                                {m.conciliaciones_bancarias.map((link: any, idx: number) => {
-                                  const isGasto = !!link.gasto;
-                                  const item = isGasto ? link.gasto : link.pedido;
-                                  if (!item) return null;
-                                  
-                                  const dateDocStr = item.fecha_gasto || item.fecha_pedido
-                                    ? new Date(item.fecha_gasto || item.fecha_pedido).toLocaleDateString('es-MX', { timeZone: 'UTC' })
-                                    : 'Sin fecha';
-                                    
-                                  const rfc = isGasto 
-                                    ? item.proveedores?.rfc 
-                                    : item.clientes?.rfc;
-                                    
-                                  const nombre = isGasto 
-                                    ? item.proveedores?.nombre_comercial 
-                                    : (item.cliente_nombre || item.clientes?.nombre_local);
-                                    
-                                  const metodo = isGasto && item.metodo_pago 
-                                    ? getMetodoPagoLabel(item.metodo_pago) 
-                                    : null;
+                             {/* Mostrar Fichas / Comprobantes de Depósito vinculados */}
+                             {(() => {
+                               const associatedComps = (comprobantes || []).filter(c => 
+                                 c.comprobantes_deposito_movimientos?.some(rel => rel.movimiento_id === m.id)
+                               );
+                               if (associatedComps.length === 0) return null;
+                               return (
+                                 <div className="mt-2 space-y-1">
+                                   {associatedComps.map(c => {
+                                     const isVentanilla = c.tipo === 'deposito_ventanilla';
+                                     const rel = c.comprobantes_deposito_movimientos?.find(r => r.movimiento_id === m.id);
+                                     return (
+                                       <div key={c.id} className="p-2 rounded-xl bg-amber-50/70 dark:bg-amber-955/20 border border-amber-200/80 dark:border-amber-900/40 text-[10px] text-gray-700 dark:text-gray-300 font-sans flex justify-between items-center gap-2 shadow-xs">
+                                         <div className="flex items-center gap-1.5 min-w-0">
+                                           <span className={`px-1.5 py-0.2 rounded text-[8px] font-black uppercase ${
+                                             isVentanilla ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'
+                                           }`}>
+                                             {isVentanilla ? 'Ventanilla' : 'Tarjeta'}
+                                           </span>
+                                           <span className="font-bold truncate">{c.descripcion || 'Ficha de Depósito'}</span>
+                                           <span className="font-mono text-[9px] text-gray-400">({new Date(c.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })})</span>
+                                         </div>
+                                         <div className="flex items-center gap-1.5 shrink-0">
+                                           <span className="font-mono font-black text-emerald-600 dark:text-emerald-400">
+                                             {formatCurrency(rel?.monto_asociado || c.monto)}
+                                           </span>
+                                           {c.archivo_url && (
+                                             <button
+                                               type="button"
+                                               onClick={() => onDownloadFile(c.archivo_url!)}
+                                               className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-500 hover:bg-amber-600 text-white flex items-center gap-0.5"
+                                               title="Ver Ticket / Comprobante"
+                                             >
+                                               <Eye size={10} /> Ticket
+                                             </button>
+                                           )}
+                                         </div>
+                                       </div>
+                                     );
+                                   })}
+                                 </div>
+                               );
+                             })()}
 
-                                  return (
-                                    <div key={idx} className="p-2.5 rounded-xl bg-emerald-50/60 dark:bg-emerald-950/20 border border-emerald-100 dark:border-emerald-900/40 text-[10px] text-gray-600 dark:text-gray-300 font-sans space-y-1 shadow-sm">
-                                      <div className="flex justify-between items-center font-semibold text-emerald-800 dark:text-emerald-400 gap-2 flex-wrap">
-                                        <span>🔗 {isGasto ? 'Egreso (Gasto)' : 'Venta (Pedido)'}: {isGasto ? item.concepto : `Pedido #${item.numero_pedido}`}</span>
-                                        <div className="flex items-center gap-2">
-                                          <span className="font-mono bg-emerald-100/60 dark:bg-emerald-900/50 px-1.5 py-0.5 rounded text-[9px] font-bold">
-                                            Asoc: {formatCurrency(link.monto_asociado)}
-                                          </span>
-                                          {handleUnlinkReconciliation && (
-                                            <button
-                                              type="button"
-                                              onClick={() => handleUnlinkReconciliation(m.id)}
-                                              className="text-red-550 hover:text-white hover:bg-red-500 dark:hover:bg-red-650 px-1.5 py-0.5 rounded text-[9px] font-bold border border-red-200 dark:border-red-900/50 transition-all flex items-center gap-0.5"
-                                              title="Desvincular o quitar conciliación"
-                                            >
-                                              <X size={10} /> Desvincular
-                                            </button>
+                            {/* Mostrar detalles de la conciliación si existen */}
+                            {m.conciliaciones_bancarias && m.conciliaciones_bancarias.length > 0 && (() => {
+                              const totalAcumuladoGasto = m.conciliaciones_bancarias.reduce((sum: number, link: any) => {
+                                return sum + Number(link.monto_asociado || (link.gasto ? link.gasto.monto : link.pedido ? link.pedido.precio_total : 0));
+                              }, 0);
+                              const montoMov = Math.abs(Number(m.monto));
+                              const difMonto = montoMov - totalAcumuladoGasto;
+                              const esCoincidente = Math.abs(difMonto) < 0.05;
+
+                              return (
+                                <div className="mt-2 space-y-1.5 font-sans">
+                                  {/* Encabezado con el ACUMULADO DEL GASTO (Suma de Facturas) */}
+                                  <div className="flex items-center justify-between bg-emerald-100/80 dark:bg-emerald-950/40 p-2 rounded-xl border border-emerald-200 dark:border-emerald-800 text-[11px]">
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                      <span className="font-extrabold text-emerald-900 dark:text-emerald-300">
+                                        📊 Acumulado Gasto: <span className="font-mono text-xs">{formatCurrency(totalAcumuladoGasto)}</span>
+                                      </span>
+                                      <span className="text-[10px] text-emerald-700 dark:text-emerald-400 font-semibold">
+                                        ({m.conciliaciones_bancarias.length} factura{m.conciliaciones_bancarias.length > 1 ? 's' : ''})
+                                      </span>
+                                    </div>
+                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                      {!esCoincidente ? (
+                                        <span className="text-[9px] font-black bg-amber-200 dark:bg-amber-900/60 text-amber-800 dark:text-amber-300 px-2 py-0.5 rounded-full">
+                                          ⚠️ Dif: {formatCurrency(Math.abs(difMonto))}
+                                        </span>
+                                      ) : (
+                                        <span className="text-[9px] font-black bg-emerald-200 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-300 px-2 py-0.5 rounded-full">
+                                          ✓ Cubierto 100%
+                                        </span>
+                                      )}
+                                      {handleOpenReconcileModal && (
+                                        <button
+                                          type="button"
+                                          onClick={() => handleOpenReconcileModal(m)}
+                                          className="px-2 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-bold transition-all shadow-sm flex items-center gap-1 shrink-0"
+                                          title="Asignar más facturas a este movimiento"
+                                        >
+                                          <Plus size={12} /> Asignar más Facturas
+                                        </button>
+                                      )}
+                                    </div>
+                                  </div>
+
+                                  {/* Lista de facturas vinculadas */}
+                                  {m.conciliaciones_bancarias.map((link: any, idx: number) => {
+                                    const isGasto = !!link.gasto;
+                                    const item = isGasto ? link.gasto : link.pedido;
+                                    if (!item) return null;
+                                    
+                                    const dateDocStr = item.fecha_gasto || item.fecha_pedido
+                                      ? new Date(item.fecha_gasto || item.fecha_pedido).toLocaleDateString('es-MX', { timeZone: 'UTC' })
+                                      : 'Sin fecha';
+                                      
+                                    const rfc = isGasto 
+                                      ? item.proveedores?.rfc 
+                                      : item.clientes?.rfc;
+                                      
+                                    const nombre = isGasto 
+                                      ? item.proveedores?.nombre_comercial 
+                                      : (item.cliente_nombre || item.clientes?.nombre_local);
+                                      
+                                    const metodo = isGasto && item.metodo_pago 
+                                      ? getMetodoPagoLabel(item.metodo_pago) 
+                                      : null;
+
+                                    return (
+                                      <div key={idx} className="p-2.5 rounded-xl bg-emerald-50/60 dark:bg-emerald-950/20 border border-emerald-100 dark:border-emerald-900/40 text-[10px] text-gray-600 dark:text-gray-300 font-sans space-y-1 shadow-sm">
+                                        <div className="flex justify-between items-center font-semibold text-emerald-800 dark:text-emerald-400 gap-2 flex-wrap">
+                                          <span>🔗 {isGasto ? 'Egreso (Gasto)' : 'Venta (Pedido)'}: {isGasto ? item.concepto : `Pedido #${item.numero_pedido}`}</span>
+                                          <div className="flex items-center gap-2">
+                                            <span className="font-mono bg-emerald-100/60 dark:bg-emerald-900/50 px-1.5 py-0.5 rounded text-[9px] font-bold">
+                                              Asoc: {formatCurrency(link.monto_asociado)}
+                                            </span>
+                                            {handleUnlinkReconciliation && (
+                                              <button
+                                                type="button"
+                                                onClick={() => handleUnlinkReconciliation(m.id)}
+                                                className="text-red-550 hover:text-white hover:bg-red-500 dark:hover:bg-red-650 px-1.5 py-0.5 rounded text-[9px] font-bold border border-red-200 dark:border-red-900/50 transition-all flex items-center gap-0.5"
+                                                title="Desvincular o quitar conciliación"
+                                              >
+                                                <X size={10} /> Desvincular
+                                              </button>
+                                            )}
+                                          </div>
+                                        </div>
+                                        <div className="flex flex-wrap gap-x-2 gap-y-0.5 text-gray-550 dark:text-gray-400 text-[9px] font-medium">
+                                          {dateDocStr && <span><strong>Fecha XML:</strong> {dateDocStr}</span>}
+                                          {nombre && (
+                                            <>
+                                              <span>•</span>
+                                              <span><strong>Asignado a:</strong> {nombre} {rfc && <span className="font-mono text-[8px] bg-gray-200/55 dark:bg-gray-800 px-1 py-0.2 rounded text-gray-500">({rfc})</span>}</span>
+                                            </>
+                                          )}
+                                          {metodo && (
+                                            <>
+                                              <span>•</span>
+                                              <span><strong>Método Pago:</strong> {metodo}</span>
+                                            </>
+                                          )}
+                                          {item.monto !== undefined && (
+                                            <>
+                                              <span>•</span>
+                                              <span><strong>Importe Total:</strong> {formatCurrency(isGasto ? item.monto : item.precio_total)}</span>
+                                            </>
                                           )}
                                         </div>
                                       </div>
-                                      <div className="flex flex-wrap gap-x-2 gap-y-0.5 text-gray-550 dark:text-gray-400 text-[9px] font-medium">
-                                        {dateDocStr && <span><strong>Fecha XML:</strong> {dateDocStr}</span>}
-                                        {nombre && (
-                                          <>
-                                            <span>•</span>
-                                            <span><strong>Asignado a:</strong> {nombre} {rfc && <span className="font-mono text-[8px] bg-gray-200/55 dark:bg-gray-800 px-1 py-0.2 rounded text-gray-500">({rfc})</span>}</span>
-                                          </>
-                                        )}
-                                        {metodo && (
-                                          <>
-                                            <span>•</span>
-                                            <span><strong>Método Pago:</strong> {metodo}</span>
-                                          </>
-                                        )}
-                                        {item.monto !== undefined && (
-                                          <>
-                                            <span>•</span>
-                                            <span><strong>Importe Total:</strong> {formatCurrency(isGasto ? item.monto : item.precio_total)}</span>
-                                          </>
-                                        )}
-                                      </div>
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            )}
+                                    );
+                                  })}
+                                </div>
+                              );
+                            })()}
 
                             {m.movimiento_reembolso_id && (() => {
                               const otherMov = movimientos.find(x => x.id === m.movimiento_reembolso_id);
@@ -1537,10 +1625,30 @@ export default function BancoTab({
                             )}
                           </td>
                           <td className="p-3 text-center">
-                            <span className="px-2 py-0.5 rounded-full text-[9px] font-bold border"
-                              style={{ backgroundColor: `${color}15`, borderColor: `${color}40`, color }}>
-                              {m.estatus_conciliacion_bancaria?.nombre || 'Pendiente'}
-                            </span>
+                            {(() => {
+                              const associatedComps = (comprobantes || []).filter(c => 
+                                c.comprobantes_deposito_movimientos?.some(rel => rel.movimiento_id === m.id)
+                              );
+                              const compsSum = associatedComps.reduce((acc, c) => {
+                                const rel = c.comprobantes_deposito_movimientos?.find(r => r.movimiento_id === m.id);
+                                return acc + (rel ? Number(rel.monto_asociado) : 0);
+                              }, 0);
+                              const isFullyLinked = !isRetiro && associatedComps.length > 0 && Math.abs(compsSum - Number(m.deposito)) < 0.05;
+
+                              if (isFullyLinked) {
+                                return (
+                                  <span className="px-2 py-0.5 rounded-full text-[9px] font-extrabold border bg-emerald-500/10 border-emerald-500/30 text-emerald-600 dark:text-emerald-400">
+                                    Conciliado
+                                  </span>
+                                );
+                              }
+                              return (
+                                <span className="px-2 py-0.5 rounded-full text-[9px] font-bold border"
+                                  style={{ backgroundColor: `${color}15`, borderColor: `${color}40`, color }}>
+                                  {m.estatus_conciliacion_bancaria?.nombre || 'Pendiente'}
+                                </span>
+                              );
+                            })()}
                           </td>
                           <td className="p-3 text-center">
                             {isRetiro ? (
@@ -1585,12 +1693,24 @@ export default function BancoTab({
                                 <button disabled className="p-1 rounded text-[10px] text-gray-300 cursor-not-allowed"><FileText size={13} /></button>
                               )}
                               {/* Ticket */}
-                              {m.pdf_ticket_url ? m.pdf_ticket_url.split(',').filter(Boolean).map((url, i, a) => (
-                                <button key={i} onClick={() => onDownloadFile(url)}
-                                  className="p-1 rounded text-[10px] text-amber-500 hover:bg-amber-500/10 flex items-center gap-0.5" title={`Ticket ${i + 1}`}>
-                                  <CreditCard size={13} />{a.length > 1 && <span className="text-[8px] font-bold font-mono">{i + 1}</span>}
-                                </button>
-                              )) : <button disabled className="p-1 rounded text-[10px] text-gray-300 cursor-not-allowed"><CreditCard size={13} /></button>}
+                              {(() => {
+                                const associatedComps = (comprobantes || []).filter(c => 
+                                  c.comprobantes_deposito_movimientos?.some(rel => rel.movimiento_id === m.id)
+                                );
+                                const compTicketUrls = associatedComps.map(c => c.archivo_url).filter(Boolean) as string[];
+                                const directTicketUrls = m.pdf_ticket_url ? m.pdf_ticket_url.split(',').filter(Boolean) : [];
+                                const allTicketUrls = Array.from(new Set([...directTicketUrls, ...compTicketUrls]));
+
+                                if (allTicketUrls.length > 0) {
+                                  return allTicketUrls.map((url, i) => (
+                                    <button key={i} onClick={() => onDownloadFile(url)}
+                                      className="p-1 rounded text-[10px] text-amber-500 hover:bg-amber-500/10 flex items-center gap-0.5" title={`Ticket / Comprobante ${i + 1}`}>
+                                      <CreditCard size={13} />{allTicketUrls.length > 1 && <span className="text-[8px] font-bold font-mono">{i + 1}</span>}
+                                    </button>
+                                  ));
+                                }
+                                return <button disabled className="p-1 rounded text-[10px] text-gray-300 cursor-not-allowed"><CreditCard size={13} /></button>;
+                              })()}
                               
                               {/* Soporte Reembolso */}
                               {m.soporte_reembolso_url && m.soporte_reembolso_url.split(',').filter(Boolean).map((url, i, a) => (
@@ -1648,7 +1768,7 @@ export default function BancoTab({
 
         {/* ── SUB-TAB 2: INGRESOS Y COMPROBANTES (UNIFICADO) ───────────────── */}
         {(bancoSubTab === 'ingresos_comprobantes' || bancoSubTab === 'global' || bancoSubTab === 'comprobantes') && (
-          <div className="flex-1 flex flex-col p-4 overflow-hidden min-h-0">
+          <div className="flex-1 flex flex-col p-4 overflow-y-auto min-h-0">
             {/* Control de Sub-sección interna */}
             <div className="flex items-center gap-2 mb-4 bg-gray-100 dark:bg-gray-900 p-1.5 rounded-2xl w-fit shrink-0 border border-gray-200 dark:border-gray-800">
               <button
@@ -2172,13 +2292,34 @@ export default function BancoTab({
                   </div>
                 </div>
 
-                {/* Pedidos pendientes */}
+                {/* Pedidos y Fichas pendientes */}
                 <div className="flex flex-col min-h-0 bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden shadow-sm">
-                  <div className="p-3 bg-gray-50/50 dark:bg-gray-900/40 border-b border-gray-200 dark:border-gray-800 shrink-0 flex justify-between items-center">
-                    <h4 className="text-xs font-extrabold uppercase text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5">
-                      <Layers size={14} /> 2. Selecciona las Ventas a Asociar
-                    </h4>
-                    {selectedGlobalDepositId && (
+                  <div className="p-3 bg-gray-50/50 dark:bg-gray-900/40 border-b border-gray-200 dark:border-gray-800 shrink-0 flex justify-between items-center flex-wrap gap-2">
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setModoConciliacionIngreso('pedidos')}
+                        className={`px-2 py-1 rounded-lg text-[10px] font-extrabold uppercase transition-all ${
+                          modoConciliacionIngreso === 'pedidos'
+                            ? 'bg-emerald-500 text-white shadow-sm'
+                            : 'bg-gray-100 dark:bg-gray-800 text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'
+                        }`}
+                      >
+                        <Layers size={11} className="inline mr-1" /> 2a. Ventas / Pedidos
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setModoConciliacionIngreso('fichas')}
+                        className={`px-2 py-1 rounded-lg text-[10px] font-extrabold uppercase transition-all ${
+                          modoConciliacionIngreso === 'fichas'
+                            ? 'bg-amber-500 text-white shadow-sm'
+                            : 'bg-gray-100 dark:bg-gray-800 text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'
+                        }`}
+                      >
+                        <CreditCard size={11} className="inline mr-1" /> 2b. Fichas / Comprobantes
+                      </button>
+                    </div>
+                    {selectedGlobalDepositId && modoConciliacionIngreso === 'pedidos' && (
                       <button
                         onClick={() => {
                           const allIds = pedidosPendientes.map((p) => p.id);
@@ -2195,9 +2336,9 @@ export default function BancoTab({
                       <div className="h-full flex flex-col items-center justify-center p-8 text-center">
                         <CreditCard size={32} className="text-amber-500 mb-2.5 opacity-50" />
                         <p className="text-xs font-semibold text-gray-500">Ningún depósito seleccionado</p>
-                        <p className="text-[10px] text-gray-400 mt-1 max-w-[250px]">Selecciona un depósito bancario para desplegar los pedidos.</p>
+                        <p className="text-[10px] text-gray-400 mt-1 max-w-[250px]">Selecciona un depósito bancario a la izquierda para desplegar los elementos a vincular.</p>
                       </div>
-                    ) : (
+                    ) : modoConciliacionIngreso === 'pedidos' ? (
                       <table className="w-full text-left border-collapse text-xs">
                         <thead>
                           <tr className="bg-gray-50 dark:bg-gray-900/50 border-b border-gray-200 dark:border-gray-800 text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
@@ -2246,6 +2387,129 @@ export default function BancoTab({
                           )}
                         </tbody>
                       </table>
+                    ) : (
+                      /* VISTA DE FICHAS Y COMPROBANTES DE DEPÓSITO (VINCULADOS Y PENDIENTES) */
+                      <table className="w-full text-left border-collapse text-xs">
+                        <thead>
+                          <tr className="bg-gray-50 dark:bg-gray-900/50 border-b border-gray-200 dark:border-gray-800 text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+                            <th className="p-3">Fecha</th>
+                            <th className="p-3">Tipo / Ficha</th>
+                            <th className="p-3">Descripción</th>
+                            <th className="p-3 text-right">Monto</th>
+                            <th className="p-3 text-right">Acción / Estado</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100 dark:divide-gray-800/60 font-sans">
+                          {/* 1. Comprobantes YA vinculados a este depósito seleccionado */}
+                          {comprobantes
+                            .filter(c => c.comprobantes_deposito_movimientos?.some(rel => rel.movimiento_id === selectedGlobalDepositId))
+                            .map((c) => {
+                              const isVentanilla = c.tipo === 'deposito_ventanilla';
+                              const rel = c.comprobantes_deposito_movimientos?.find(r => r.movimiento_id === selectedGlobalDepositId);
+                              return (
+                                <tr key={c.id} className="bg-emerald-500/10 dark:bg-emerald-950/20 hover:bg-emerald-500/15 transition-all border-l-4 border-l-emerald-500">
+                                  <td className="p-3 font-mono text-gray-500">{new Date(c.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })}</td>
+                                  <td className="p-3 font-bold">
+                                    <div className="flex items-center gap-1.5">
+                                      <span className={`text-[9px] px-1.5 py-0.5 rounded font-black uppercase ${isVentanilla ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'}`}>
+                                        {isVentanilla ? 'Ventanilla' : 'Tarjeta'}
+                                      </span>
+                                      <span className="text-[9px] font-black text-emerald-600 dark:text-emerald-400 bg-emerald-100 dark:bg-emerald-900/40 px-1.5 py-0.5 rounded">
+                                        ✓ Vinculado
+                                      </span>
+                                    </div>
+                                  </td>
+                                  <td className="p-3 font-bold text-gray-800 dark:text-gray-200">{c.descripcion || 'Ficha de Depósito'}</td>
+                                  <td className="p-3 text-right font-mono font-bold text-emerald-600 dark:text-emerald-400">
+                                    {formatCurrency(rel?.monto_asociado || c.monto)}
+                                  </td>
+                                  <td className="p-3 text-right">
+                                    <div className="flex justify-end items-center gap-1.5">
+                                      {c.archivo_url && (
+                                        <button
+                                          type="button"
+                                          onClick={() => onDownloadFile(c.archivo_url!)}
+                                          className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500 hover:bg-amber-600 text-white flex items-center gap-0.5"
+                                          title="Ver Ticket"
+                                        >
+                                          <Eye size={10} /> Ticket
+                                        </button>
+                                      )}
+                                      {onDesvincularComprobante && (
+                                        <button
+                                          type="button"
+                                          onClick={async () => {
+                                            if (confirm('¿Deseas desvincular esta ficha del depósito seleccionado?')) {
+                                              await onDesvincularComprobante(c.id, selectedGlobalDepositId);
+                                            }
+                                          }}
+                                          className="px-2 py-0.5 rounded text-[10px] font-bold text-red-500 hover:bg-red-500/10 border border-red-200 dark:border-red-900/30"
+                                        >
+                                          Desvincular
+                                        </button>
+                                      )}
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+
+                          {/* 2. Comprobantes PENDIENTES de vincular */}
+                          {comprobantes
+                            .filter(c => {
+                              const sumAsoc = c.comprobantes_deposito_movimientos?.reduce((s, r) => s + Number(r.monto_asociado || 0), 0) || 0;
+                              const isLinkedToThis = c.comprobantes_deposito_movimientos?.some(rel => rel.movimiento_id === selectedGlobalDepositId);
+                              return !isLinkedToThis && Math.abs(Number(c.monto) - sumAsoc) >= 0.05;
+                            })
+                            .map((c) => {
+                              const isVentanilla = c.tipo === 'deposito_ventanilla';
+                              const selMov = movimientos.find(m => m.id === selectedGlobalDepositId);
+                              const matchMonto = selMov && Math.abs(Number(selMov.deposito || selMov.monto) - Number(c.monto)) < 0.05;
+                              return (
+                                <tr key={c.id} className={`hover:bg-gray-50/40 dark:hover:bg-gray-900/20 transition-all ${matchMonto ? 'bg-amber-500/10' : ''}`}>
+                                  <td className="p-3 font-mono text-gray-500">{new Date(c.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })}</td>
+                                  <td className="p-3 font-bold">
+                                    <span className={`text-[9px] px-1.5 py-0.5 rounded ${isVentanilla ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'}`}>
+                                      {isVentanilla ? 'Ventanilla' : 'Tarjeta'}
+                                    </span>
+                                  </td>
+                                  <td className="p-3 text-gray-600 dark:text-gray-300">{c.descripcion || '-'}</td>
+                                  <td className="p-3 text-right font-mono font-bold text-gray-900 dark:text-white">{formatCurrency(c.monto)}</td>
+                                  <td className="p-3 text-right">
+                                    <button
+                                      type="button"
+                                      onClick={async () => {
+                                        if (selectedGlobalDepositId) {
+                                          const res = await onVincularComprobante?.(c.id, selectedGlobalDepositId, Number(c.monto));
+                                          if (res && !res.success) {
+                                            alert(res.error);
+                                          }
+                                        }
+                                      }}
+                                      className={`px-2.5 py-1 rounded text-[10px] font-extrabold transition-all shadow ${
+                                        matchMonto 
+                                          ? 'bg-amber-500 hover:bg-amber-600 text-white animate-pulse'
+                                          : 'bg-amber-500 hover:bg-amber-600 text-white'
+                                      }`}
+                                    >
+                                      Vincular con Depósito
+                                    </button>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          {comprobantes.filter(c => {
+                            const sumAsoc = c.comprobantes_deposito_movimientos?.reduce((s, r) => s + Number(r.monto_asociado || 0), 0) || 0;
+                            return Math.abs(Number(c.monto) - sumAsoc) >= 0.05 || c.comprobantes_deposito_movimientos?.some(rel => rel.movimiento_id === selectedGlobalDepositId);
+                          }).length === 0 && (
+                            <tr>
+                              <td colSpan={5} className="p-8 text-center text-gray-400 italic">
+                                No hay fichas o comprobantes para este depósito
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
                     )}
                   </div>
                 </div>
@@ -2256,7 +2520,7 @@ export default function BancoTab({
 
         {/* ── SUB-TAB 4: CARGAS DE ESTADO DE CUENTA ───────────────────────── */}
         {bancoSubTab === 'cargas' && (
-          <div className="flex-1 flex flex-col p-4 overflow-hidden min-h-0">
+          <div className="flex-1 flex flex-col p-4 overflow-y-auto min-h-0">
             <CargasTab
               token={token || ''}
               cuentasBancarias={cuentasBancarias || []}
@@ -2318,16 +2582,21 @@ export default function BancoTab({
 
               {/* Lista de egresos o pedidos reconciliables */}
               <div>
-                <label className="text-xs font-bold text-gray-500 block mb-2">
-                  {isOutflow ? 'Egresos del Sistema' : 'Pedidos/Ventas del Sistema'}
-                </label>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-xs font-bold text-gray-500">
+                    {isOutflow ? 'Egresos del Sistema (Facturas / Gastos)' : 'Pedidos/Ventas del Sistema'}
+                  </label>
+                  <span className="text-xs font-extrabold text-emerald-600 dark:text-emerald-400 font-mono">
+                    Acumulado: {formatCurrency(totalEgresosSistema)} ({isOutflow ? reconcileModal.gastosSeleccionados.length : reconcileModal.pedidosSeleccionados.length} facturas)
+                  </span>
+                </div>
                 <div className="space-y-1 max-h-80 overflow-y-auto border border-gray-200 dark:border-gray-800 rounded-xl">
                   {isOutflow ? (
                     gastosReconciliables
                       .filter((g) => {
-                        // Excluir egresos en efectivo
+                        // Excluir egresos en efectivo a menos que ya estén seleccionados
                         const metodo = String(g.metodo_pago || '').toLowerCase();
-                        if (metodo.includes('efectivo') || metodo.includes('01')) {
+                        if ((metodo.includes('efectivo') || metodo.includes('01')) && !reconcileModal.gastosSeleccionados.includes(g.id)) {
                           return false;
                         }
 

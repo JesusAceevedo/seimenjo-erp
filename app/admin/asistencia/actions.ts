@@ -473,11 +473,13 @@ export async function calcularNominaCompleta(
   fechaInicio: string,
   fechaFin: string,
   montoPropinas: number = 0,
-  utilidadFiscalAnual: number = 0
+  utilidadFiscalAnual: number = 0,
+  modalidadHorasExtra: 'lft' | 'proporcional' = 'lft',
+  incluirHoyEnFaltas: boolean = false
 ) {
   const { calcularNomina } = await import('./_lib/lft');
 
-  const [empleadosRes, checadasRes, incidenciasRes, horariosRes, turnosRes] = await Promise.all([
+  const [empleadosRes, checadasRes, incidenciasRes, horariosRes, turnosRes, descansosMensualesRes] = await Promise.all([
     getServerSupabase()
       .from('empleados_detalle')
       .select('*, puestos_trabajo(salario_diario_base, puntos_propina)')
@@ -502,6 +504,11 @@ export async function calcularNominaCompleta(
       .from('turnos')
       .select('*')
       .eq('empresa_id', empresaId),
+    getServerSupabase()
+      .from('descansos_mensuales')
+      .select('*')
+      .gte('fecha', fechaInicio)
+      .lte('fecha', fechaFin),
   ]);
 
   const empleados = empleadosRes.data || [];
@@ -509,6 +516,7 @@ export async function calcularNominaCompleta(
   const absences = incidenciasRes.data || [];
   const horariosList = horariosRes.data || [];
   const turnosList = turnosRes.data || [];
+  const descansosMensualesList = descansosMensualesRes.data || [];
   if (!empleados.length) return [];
 
   const dateArray: string[] = [];
@@ -521,65 +529,119 @@ export async function calcularNominaCompleta(
 
   const resultados = empleados.map((emp: any) => {
     const todayLocalStr = new Date().toLocaleDateString('en-CA');
-    const diasTrabajadosPeriodo = dateArray.filter(d => {
-      if (d > todayLocalStr) return false;
+    const isExentoReloj = !!emp.exento_reloj_checador;
+
+    let faltasNoJustificadasCount = 0;
+    const detallesDias = dateArray.map(d => {
       const dateObj = new Date(d + 'T12:00:00');
       const dow = dateObj.getDay();
       const schedule = horariosList.find((h: any) => h.empleado_id === emp.id && h.dia_semana === dow);
-      if (!schedule || schedule.es_dia_descanso) return false;
-      const tieneIncidencia = absences.some((a: any) =>
+      const descansoMensual = descansosMensualesList.find((dm: any) => dm.empleado_id === emp.id && dm.fecha === d);
+      
+      // El día es de descanso si se asignó en el Calendario Mensual o en el Horario Semanal por defecto
+      const esDescanso = descansoMensual
+        ? !!descansoMensual.es_descanso
+        : !!(schedule && schedule.es_dia_descanso);
+
+      const incidenciaObj = absences.find((a: any) =>
         a.empleado_id === emp.id && d >= a.fecha_inicio && d <= a.fecha_fin
       );
-      if (tieneIncidencia) return false;
-      const logsDia = logs.filter((l: any) =>
-        l.zkteco_user_id === emp.zkteco_user_id &&
-        new Date(l.timestamp).toLocaleDateString('en-CA') === d
-      );
-      return logsDia.length >= 1;
-    });
-
-    let horasDobles = 0;
-    let horasTriples = 0;
-    let minutosRetardo = 0;
-    let domingosTrabajados = 0;
-
-    for (const d of dateArray) {
-      const dateObj = new Date(d + 'T12:00:00');
-      const dow = dateObj.getDay();
-      const schedule = horariosList.find((h: any) => h.empleado_id === emp.id && h.dia_semana === dow);
-      if (!schedule || schedule.es_dia_descanso) continue;
+      const tieneIncidencia = !!incidenciaObj;
 
       const logsDia = logs
         .filter((l: any) => l.zkteco_user_id === emp.zkteco_user_id &&
           new Date(l.timestamp).toLocaleDateString('en-CA') === d)
         .sort((a: any, b: any) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 
-      if (logsDia.length >= 2) {
-        const entrada = new Date(logsDia[0].timestamp);
-        const salida = new Date(logsDia[logsDia.length - 1].timestamp);
-        const horasTrabajadas = (salida.getTime() - entrada.getTime()) / (1000 * 60 * 60);
+      const tieneChecadas = logsDia.length >= 1;
+      const esFuturo = d > todayLocalStr;
 
-        if (horasTrabajadas > 8) {
-          const extras = horasTrabajadas - 8;
-          horasDobles += Math.min(extras, 1.5);
-          horasTriples += Math.max(0, extras - 1.5);
-        }
+    let estado: 'asistencia' | 'descanso' | 'justificado' | 'exento' | 'falta' | 'futuro' = 'asistencia';
+    if (esFuturo) estado = 'futuro';
+    else if (d === todayLocalStr && !incluirHoyEnFaltas && !tieneChecadas && !esDescanso && !isExentoReloj && !tieneIncidencia) {
+      // Si d es HOY y aún no ha terminado la jornada o se eligió no contabilizar hoy como falta antes de tiempo
+      estado = 'futuro';
+    }
+    else if (tieneIncidencia) estado = 'justificado';
+    else if (esDescanso) estado = 'descanso';
+    else if (isExentoReloj) estado = 'exento';
+    else if (tieneChecadas) estado = 'asistencia';
+    else {
+      estado = 'falta';
+      faltasNoJustificadasCount++;
+    }
 
-        const turno = schedule?.turno_id ? turnosList.find((t: any) => t.id === schedule.turno_id) : null;
-        if (turno) {
-          const [hIn, mIn] = turno.hora_entrada_1.split(':').map(Number);
-          const entradaHora = entrada.getHours() * 60 + entrada.getMinutes();
-          const turnoHora = hIn * 60 + mIn + (turno.tolerancia_minutos || 0);
-          if (entradaHora > turnoHora) {
-            minutosRetardo += entradaHora - turnoHora;
+      return {
+        fecha: d,
+        diaSemana: dateObj.toLocaleDateString('es-MX', { weekday: 'short' }),
+        esDescanso,
+        tieneIncidencia,
+        incidenciaNombre: incidenciaObj ? (incidenciaObj.tipo || 'Justificación') : null,
+        tieneChecadas,
+        entradas: logsDia.map((l: any) => new Date(l.timestamp).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })),
+        estado
+      };
+    });
+
+    // En quincena LFT el pago base es de 15 días. El día 31 NO se paga extra por LFT.
+    const esQuincena = dateArray.length >= 13 && dateArray.length <= 16;
+    const baseDiasQuincena = esQuincena ? 15 : dateArray.length;
+    const diasPagados = Math.max(0, baseDiasQuincena - faltasNoJustificadasCount);
+
+    let horasDobles = 0;
+    let horasTriples = 0;
+    let minutosRetardo = 0;
+    let countRetardos = 0;
+    let domingosTrabajados = 0;
+
+    if (!isExentoReloj) {
+      for (const d of dateArray) {
+        const dateObj = new Date(d + 'T12:00:00');
+        const dow = dateObj.getDay();
+        const schedule = horariosList.find((h: any) => h.empleado_id === emp.id && h.dia_semana === dow);
+        const descansoMensual = descansosMensualesList.find((dm: any) => dm.empleado_id === emp.id && dm.fecha === d);
+        const esDescanso = descansoMensual
+          ? !!descansoMensual.es_descanso
+          : !!(schedule && schedule.es_dia_descanso);
+
+        if (esDescanso) continue;
+
+        const logsDia = logs
+          .filter((l: any) => l.zkteco_user_id === emp.zkteco_user_id &&
+            new Date(l.timestamp).toLocaleDateString('en-CA') === d)
+          .sort((a: any, b: any) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+        if (logsDia.length >= 2) {
+          const entrada = new Date(logsDia[0].timestamp);
+          const salida = new Date(logsDia[logsDia.length - 1].timestamp);
+          const horasTrabajadas = (salida.getTime() - entrada.getTime()) / (1000 * 60 * 60);
+
+          if (horasTrabajadas > 8) {
+            const extras = horasTrabajadas - 8;
+            horasDobles += Math.min(extras, 1.5);
+            horasTriples += Math.max(0, extras - 1.5);
           }
-        }
 
-        if (dow === 0) domingosTrabajados++;
+          const turno = schedule?.turno_id ? turnosList.find((t: any) => t.id === schedule.turno_id) : null;
+          if (turno) {
+            const [hIn, mIn] = turno.hora_entrada_1.split(':').map(Number);
+            const entradaHora = entrada.getHours() * 60 + entrada.getMinutes();
+            const turnoHora = hIn * 60 + mIn + (turno.tolerancia_minutos || 0);
+            if (entradaHora > turnoHora) {
+              minutosRetardo += entradaHora - turnoHora;
+              countRetardos++;
+            }
+          }
+
+          if (dow === 0) domingosTrabajados++;
+        }
       }
     }
 
     const sueldoDiario = emp.sueldo_diario || emp.puestos_trabajo?.salario_diario_base || 250;
+    const sueldoMensual = emp.sueldo_mensual !== undefined && emp.sueldo_mensual !== null
+      ? emp.sueldo_mensual
+      : emp.puestos_trabajo?.salario_mensual_base || Math.round(sueldoDiario * 30);
     const sdi = emp.salario_diario_integrado || sueldoDiario * 1.045;
 
     let antiguedadAnios = 0;
@@ -593,15 +655,17 @@ export async function calcularNominaCompleta(
 
     const resultado = calcularNomina({
       sueldoDiario,
+      sueldoMensual,
       salarioDiarioIntegrado: sdi,
-      diasTrabajados: diasTrabajadosPeriodo.length,
+      diasTrabajados: diasPagados,
       horasDobles: Math.round(horasDobles * 10) / 10,
       horasTriples: Math.round(horasTriples * 10) / 10,
       minutosRetardo,
       domingosTrabajados,
       antiguedadAnios,
-      diasTrabajadosAnio: Math.min(diasAnio, diasTrabajadosPeriodo.length > 0 ? 365 : 0),
+      diasTrabajadosAnio: Math.min(diasAnio, diasPagados > 0 ? 365 : 0),
       montoPropina: 0,
+      modalidadHorasExtra,
     });
 
     return {
@@ -609,7 +673,17 @@ export async function calcularNominaCompleta(
       nombre: emp.nombre_completo,
       puesto: emp.puestos_trabajo?.nombre || 'General',
       sueldoDiario,
-      diasTrabajados: diasTrabajadosPeriodo.length,
+      sueldoMensual,
+      exentoReloj: isExentoReloj,
+      diasTrabajados: diasPagados,
+      diasTotalesPeriodo: baseDiasQuincena,
+      faltasNoJustificadas: faltasNoJustificadasCount,
+      retardosMinutos: minutosRetardo,
+      retardosConteo: countRetardos,
+      horasDobles,
+      horasTriples,
+      domingosTrabajados,
+      detallesDias,
       propinaAsignada: 0,
       ...resultado,
     };

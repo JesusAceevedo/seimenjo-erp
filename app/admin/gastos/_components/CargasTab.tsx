@@ -127,7 +127,7 @@ export function CargasTab({
   const totalRetirosSum = cargas.reduce((acc, curr) => acc + Number(curr.total_retiros || 0), 0);
 
   return (
-    <div className="space-y-6 font-sans">
+    <div className="space-y-6 font-sans pb-12 overflow-y-auto">
       {/* Tarjetas de Métricas de Cargas */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 p-4 rounded-2xl shadow-sm">
@@ -259,15 +259,22 @@ export function CargasTab({
                     </td>
 
                     <td className="p-4 whitespace-nowrap">
-                      <div className="flex items-center gap-1.5 text-gray-700 dark:text-gray-300">
-                        <Calendar size={13} className="text-gray-400" />
-                        {carga.fecha_carga ? new Date(carga.fecha_carga).toLocaleString('es-MX', {
-                          day: '2-digit',
-                          month: 'short',
-                          year: 'numeric',
-                          hour: '2-digit',
-                          minute: '2-digit'
-                        }) : 'N/A'}
+                      <div className="space-y-0.5">
+                        <div className="flex items-center gap-1.5 text-xs font-bold text-gray-800 dark:text-gray-200">
+                          <Calendar size={13} className="text-amber-500 shrink-0" />
+                          <span>
+                            {carga.fecha_carga 
+                              ? (carga.fecha_carga.length === 10 || !carga.fecha_carga.includes('T')
+                                  ? carga.fecha_carga 
+                                  : new Date(carga.fecha_carga).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' }))
+                              : 'N/A'}
+                          </span>
+                        </div>
+                        {carga.creado_en && (
+                          <div className="text-[10px] text-gray-400 pl-4">
+                            Cargado: {new Date(carga.creado_en).toLocaleString('es-MX', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                          </div>
+                        )}
                       </div>
                     </td>
 
@@ -337,9 +344,22 @@ export function CargasTab({
                   <FileSpreadsheet className="text-amber-500" size={18} />
                   Detalle de Carga: {selectedCargaDetail.nombre_archivo}
                 </h3>
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                  Cargado el {new Date(selectedCargaDetail.fecha_carga).toLocaleString('es-MX')} • {cargaMovimientos.length} movimientos
-                </p>
+                <div className="flex items-center gap-2 mt-1 flex-wrap">
+                  {(() => {
+                    const docFechas = cargaMovimientos.map(m => m.fecha).filter(Boolean).sort();
+                    const minF = docFechas[0];
+                    const maxF = docFechas[docFechas.length - 1];
+                    const label = minF ? (minF === maxF ? minF : `${minF} al ${maxF}`) : (selectedCargaDetail.fecha_carga ? selectedCargaDetail.fecha_carga.substring(0, 10) : 'N/A');
+                    return (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-bold bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800/60">
+                        <Calendar size={12} /> Fecha del Documento: {label}
+                      </span>
+                    );
+                  })()}
+                  <span className="text-xs text-gray-500 dark:text-gray-400">
+                    • Cargado el {new Date(selectedCargaDetail.creado_en || selectedCargaDetail.fecha_carga).toLocaleString('es-MX')} • {cargaMovimientos.length} movimientos
+                  </span>
+                </div>
               </div>
               <button
                 onClick={() => setSelectedCargaDetail(null)}

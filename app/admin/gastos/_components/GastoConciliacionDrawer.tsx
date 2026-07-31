@@ -343,6 +343,34 @@ export default function GastoConciliacionDrawer({
                     </span>
                   </div>
                 </div>
+
+                {mov.conciliaciones_bancarias && mov.conciliaciones_bancarias.length > 0 && (() => {
+                  const acum = mov.conciliaciones_bancarias.reduce((sum: number, c: any) => sum + Number(c.monto_asociado || (c.gasto ? c.gasto.monto : 0)), 0);
+                  const otros = mov.conciliaciones_bancarias.filter((c: any) => c.gasto && c.gasto.id !== gasto.id);
+                  return (
+                    <div className="border-t border-gray-200 dark:border-gray-800 pt-2.5 space-y-1.5 font-sans">
+                      <div className="flex items-center justify-between text-xs bg-emerald-50 dark:bg-emerald-950/30 p-2 rounded-lg border border-emerald-200 dark:border-emerald-800">
+                        <span className="font-extrabold text-emerald-900 dark:text-emerald-300">
+                          📊 Acumulado del Gasto:
+                        </span>
+                        <span className="font-mono font-black text-emerald-600 dark:text-emerald-400">
+                          {formatCurrency(acum)} ({mov.conciliaciones_bancarias.length} facturas)
+                        </span>
+                      </div>
+                      {otros.length > 0 && (
+                        <div className="space-y-1 mt-1">
+                          <span className="text-[10px] text-gray-500 font-semibold block">Otras facturas asociadas a este movimiento:</span>
+                          {otros.map((c: any, idx: number) => (
+                            <div key={idx} className="flex justify-between items-center bg-gray-100 dark:bg-gray-900 p-1.5 rounded-md text-[10px]">
+                              <span className="truncate max-w-[220px] text-gray-700 dark:text-gray-300">{c.gasto.concepto || 'Factura'}</span>
+                              <span className="font-mono font-bold text-gray-900 dark:text-white">{formatCurrency(c.monto_asociado || c.gasto.monto)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
               </>
             ) : (
               <div className="text-center py-5 text-gray-400 dark:text-gray-500 space-y-1">

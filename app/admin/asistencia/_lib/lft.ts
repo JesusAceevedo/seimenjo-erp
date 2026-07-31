@@ -22,11 +22,9 @@ const TABLA_ISR_MENSUAL: IsrBracket[] = [
   { inferior: 3_000_000.01, superior: Infinity, cuota_fija: 862_689.12, porcentaje: 35.00 },
 ];
 
-// Subsidio al empleo mensual 2025-2026 (para ingresos bajos)
+// Subsidio al empleo mensual 2025-2026 (Decreto SAT: aplica a ingresos mensuales <= $9,081.00)
 function calcularSubsidio(ingresoMensual: number): number {
-  if (ingresoMensual <= 10_000) return 400;
-  if (ingresoMensual <= 15_000) return 200;
-  if (ingresoMensual <= 20_000) return 100;
+  if (ingresoMensual <= 9_081.00) return 390.00;
   return 0;
 }
 
@@ -99,13 +97,10 @@ function calcularPrimaVacacional(sueldoDiario: number, aniosAntiguedad: number, 
 // --- CÁLCULO DE AGUINALDO (Art. 87 LFT) ---
 // 15 días de salario mínimo, proporcional si no trabajó el año completo
 function calcularAguinaldo(sueldoDiario: number, diasTrabajadosAnio: number): number {
-  if (diasTrabajadosAnio <= 0) return 0;
-  const proporcion = Math.min(diasTrabajadosAnio / 365, 1);
-  return sueldoDiario * 15 * proporcion;
+  const proporcionAnio = Math.min(1, diasTrabajadosAnio / 365);
+  return 15 * sueldoDiario * proporcionAnio;
 }
 
-// --- PRIMA DOMINICAL (Art. 71 LFT) ---
-// 25% adicional sobre el salario diario por trabajar en domingo
 function calcularPrimaDominical(sueldoDiario: number, domingosTrabajados: number): number {
   return sueldoDiario * domingosTrabajados * 0.25;
 }
@@ -113,8 +108,23 @@ function calcularPrimaDominical(sueldoDiario: number, domingosTrabajados: number
 // --- HORAS EXTRA (Art. 66-68 LFT) ---
 // Dobles: primeras 9 horas a la semana
 // Triples: excedentes de 9 horas
-function calcularHorasExtra(sueldoDiario: number, horasDobles: number, horasTriples: number) {
+// Proporcional: hora sencilla (sueldoDiario / 8 * totalHoras)
+function calcularHorasExtra(
+  sueldoDiario: number,
+  horasDobles: number,
+  horasTriples: number,
+  modalidad: 'lft' | 'proporcional' = 'lft'
+) {
   const horaNormal = sueldoDiario / 8;
+  if (modalidad === 'proporcional') {
+    const totalHoras = horasDobles + horasTriples;
+    const pagoSencillo = horaNormal * totalHoras;
+    return {
+      pagoDoble: pagoSencillo,
+      pagoTriple: 0,
+      total: pagoSencillo,
+    };
+  }
   return {
     pagoDoble: horaNormal * horasDobles * 2,
     pagoTriple: horaNormal * horasTriples * 3,
@@ -130,22 +140,39 @@ function calcularDescuentoRetardos(sueldoDiario: number, minutosRetardo: number)
 }
 
 // --- ISR (Art. 96 LISR) ---
-function calcularIsr(ingresoGravableMensual: number): { isr: number; subsidio: number } {
-  // Trim or round to avoid floating point edge cases
-  const ingreso = Math.round(ingresoGravableMensual * 100) / 100;
+// Calcula el ISR basado en el salario mensual gravable y lo divide proporcionalmente (ej. en dos quincenas = / 2)
+function calcularIsr(
+  ingresoPeriodo: number,
+  diasPeriodo: number = 15,
+  sueldoMensualDirecto?: number
+): { isr: number; subsidio: number } {
+  // 1. Proyectar ingreso mensual gravable
+  const ingresoMensual = sueldoMensualDirecto && sueldoMensualDirecto > 0
+    ? sueldoMensualDirecto
+    : Math.round((ingresoPeriodo * (30 / Math.max(1, diasPeriodo))) * 100) / 100;
 
-  let bracket = TABLA_ISR_MENSUAL.find(b => ingreso >= b.inferior && ingreso <= b.superior);
+  // 2. Buscar en la tabla mensual de ISR (Art. 96 LISR)
+  let bracket = TABLA_ISR_MENSUAL.find(b => ingresoMensual >= b.inferior && ingresoMensual <= b.superior);
   if (!bracket) {
     bracket = TABLA_ISR_MENSUAL[TABLA_ISR_MENSUAL.length - 1];
   }
 
-  const isrBase = bracket.cuota_fija + ((ingreso - bracket.inferior) * bracket.porcentaje) / 100;
-  const subsidio = calcularSubsidio(ingreso);
-  const isrNeto = Math.max(0, isrBase - subsidio);
+  // 3. Impuesto mensual base
+  const impuestoMarginal = ((ingresoMensual - bracket.inferior) * bracket.porcentaje) / 100;
+  const isrBaseMensual = bracket.cuota_fija + impuestoMarginal;
+
+  // 4. Subsidio al Empleo (Decreto SAT: aplica para ingresos mensuales <= $9,081.00)
+  const subsidioMensual = calcularSubsidio(ingresoMensual);
+  const isrNetoMensual = Math.max(0, isrBaseMensual - subsidioMensual);
+
+  // 5. División proporcional del ISR para la quincena/período actual (ej. quincena = 15/30 = 0.5 o /2)
+  const factorProporcional = Math.min(1, Math.max(0.1, diasPeriodo / 30));
+  const isrPeriodo = Math.round((isrNetoMensual * factorProporcional) * 100) / 100;
+  const subsidioPeriodo = Math.round((subsidioMensual * factorProporcional) * 100) / 100;
 
   return {
-    isr: Math.round(isrNeto * 100) / 100,
-    subsidio: Math.round(subsidio * 100) / 100,
+    isr: isrPeriodo,
+    subsidio: subsidioPeriodo,
   };
 }
 
@@ -179,6 +206,7 @@ function calcularPtu(utilidadFiscalAnual: number, empleados: { id: string; dias:
 // --- FUNCIÓN PRINCIPAL DE CÁLCULO DE NÓMINA ---
 export interface NominaInput {
   sueldoDiario: number;
+  sueldoMensual?: number;
   salarioDiarioIntegrado: number;
   diasTrabajados: number;
   horasDobles: number;
@@ -189,6 +217,7 @@ export interface NominaInput {
   diasTrabajadosAnio: number; // Para aguinaldo
   esNominaAguinaldo?: boolean;
   montoPropina?: number;
+  modalidadHorasExtra?: 'lft' | 'proporcional';
 }
 
 export interface NominaOutput {
@@ -218,24 +247,27 @@ export interface NominaOutput {
 
 export function calcularNomina(input: NominaInput): NominaOutput {
   const {
-    sueldoDiario, salarioDiarioIntegrado, diasTrabajados,
+    sueldoDiario, sueldoMensual, salarioDiarioIntegrado, diasTrabajados,
     horasDobles, horasTriples, minutosRetardo,
     domingosTrabajados, antiguedadAnios, diasTrabajadosAnio,
-    esNominaAguinaldo = false, montoPropina = 0
+    esNominaAguinaldo = false, montoPropina = 0,
+    modalidadHorasExtra = 'lft'
   } = input;
 
   // Percepciones
-  const sueldoOrdinario = sueldoDiario * diasTrabajados;
-  const { pagoDoble, pagoTriple } = calcularHorasExtra(sueldoDiario, horasDobles, horasTriples);
+  const sueldoOrdinario = sueldoMensual && sueldoMensual > 0
+    ? Math.round((sueldoMensual * (diasTrabajados / 30)) * 100) / 100
+    : Math.round((sueldoDiario * diasTrabajados) * 100) / 100;
+  const { pagoDoble, pagoTriple } = calcularHorasExtra(sueldoDiario, horasDobles, horasTriples, modalidadHorasExtra);
   const primaDominical = calcularPrimaDominical(sueldoDiario, domingosTrabajados);
-  const primaVacacional = calcularPrimaVacacional(sueldoDiario, antiguedadAnios, diasTrabajados);
-  const aguinaldo = esNominaAguinaldo ? 0 : calcularAguinaldo(sueldoDiario, diasTrabajadosAnio);
+  const primaVacacional = 0; // Prima vacacional se otorga cuando el trabajador toma sus días de vacaciones
+  const aguinaldo = esNominaAguinaldo ? calcularAguinaldo(sueldoDiario, diasTrabajadosAnio) : 0;
   const propina = montoPropina;
 
   const totalPercepciones = sueldoOrdinario + pagoDoble + pagoTriple + primaDominical + primaVacacional + aguinaldo + propina;
 
-  // Deducciones
-  const { isr, subsidio } = calcularIsr(totalPercepciones);
+  // Deducciones (ISR basado en salario mensual y divididos los pagos en 2 partes quincenales)
+  const { isr, subsidio } = calcularIsr(totalPercepciones, diasTrabajados, sueldoMensual);
   const { obrero: imssObrero, patronal: imssPatronal } = calcularImss(salarioDiarioIntegrado);
   const descuentoRetardos = calcularDescuentoRetardos(sueldoDiario, minutosRetardo);
 

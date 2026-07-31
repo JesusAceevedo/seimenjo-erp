@@ -1,9 +1,9 @@
 'use client';
 
 import { useState, useMemo } from 'react';
-import { DollarSign, Sliders, CheckCircle, RefreshCw, Info, Calendar, Award, AlertTriangle, Settings, ChevronRight, X, Clock } from 'lucide-react';
+import { DollarSign, Sliders, CheckCircle, RefreshCw, Info, Calendar, Award, AlertTriangle, Settings, ChevronRight, X, Clock, Eye, ShieldCheck, FileText, Check, Download, Printer } from 'lucide-react';
 import type { EmpleadoDetalle, Puesto, ChecadaRaw, Turno, Incidencia } from '../types';
-import { calcularNominaCompleta } from '../actions';
+import { calcularNominaCompleta, createIncidencia } from '../actions';
 
 interface Props {
   empleados: EmpleadoDetalle[];
@@ -35,6 +35,7 @@ export default function NominaTab({
 
   const [resultados, setResultados] = useState<any[]>([]);
   const [calculando, setCalculando] = useState(false);
+  const [modalidadHorasExtra, setModalidadHorasExtra] = useState<'lft' | 'proporcional'>('lft');
 
   // Parámetros de Propina Diaria (Configurables)
   const [descontarFaltas, setDescontarFaltas] = useState(true);
@@ -44,6 +45,40 @@ export default function NominaTab({
   const [montoPropinasDiarias, setMontoPropinasDiarias] = useState(1000);
 
   const [selectedEmpDetail, setSelectedEmpDetail] = useState<any | null>(null);
+  const [justificarDate, setJustificarDate] = useState<string | null>(null);
+  const [justificarForm, setJustificarForm] = useState({ tipo: 'falta_justificada', motivo: '' });
+  const [guardandoIncidencia, setGuardandoIncidencia] = useState(false);
+
+  const handleGuardarJustificacion = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedEmpDetail || !justificarDate || !empresaId) return;
+    setGuardandoIncidencia(true);
+    try {
+      await createIncidencia({
+        empresa_id: empresaId,
+        empleado_id: selectedEmpDetail.empleado_id,
+        tipo: justificarForm.tipo,
+        fecha_inicio: justificarDate,
+        fecha_fin: justificarDate,
+        motivo: justificarForm.motivo || 'Justificado desde nómina',
+        estatus: 'aprobado'
+      });
+      setJustificarDate(null);
+      setJustificarForm({ tipo: 'falta_justificada', motivo: '' });
+      // Recalcular nómina automáticamente
+      const res = await calcularNominaCompleta(
+        empresaId, periodo.fecha_inicio, periodo.fecha_fin, periodo.monto_propinas, 0, modalidadHorasExtra
+      );
+      setResultados(res);
+      const empActualizado = res.find(r => r.empleado_id === selectedEmpDetail.empleado_id);
+      if (empActualizado) setSelectedEmpDetail(empActualizado);
+      alert('Día justificado/incidencia aplicada correctamente.');
+    } catch (err: any) {
+      alert('Error al justificar: ' + err.message);
+    } finally {
+      setGuardandoIncidencia(false);
+    }
+  };
 
   const parseInputNumber = (val: any): number => {
     if (val === undefined || val === null) return 0;
@@ -65,7 +100,7 @@ export default function NominaTab({
     return isNaN(num) ? 0 : num;
   };
 
-  // Estado para selector quincenal
+  const [incluirHoyEnFaltas, setIncluirHoyEnFaltas] = useState<boolean>(false);
   const now = new Date();
   const currentMonthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
   const [quincenaNum, setQuincenaNum] = useState<1 | 2>(now.getDate() <= 15 ? 1 : 2);
@@ -113,7 +148,7 @@ export default function NominaTab({
     setCalculando(true);
     try {
       const res = await calcularNominaCompleta(
-        empresaId, periodo.fecha_inicio, periodo.fecha_fin, periodo.monto_propinas
+        empresaId, periodo.fecha_inicio, periodo.fecha_fin, periodo.monto_propinas, 0, modalidadHorasExtra, incluirHoyEnFaltas
       );
       setResultados(res);
     } catch (err: any) {
@@ -121,6 +156,71 @@ export default function NominaTab({
     } finally {
       setCalculando(false);
     }
+  };
+
+  const exportToCsv = () => {
+    if (!resultados || resultados.length === 0) {
+      alert('Primero debes calcular la nómina para exportar los datos a Excel.');
+      return;
+    }
+
+    const headers = [
+      'Empleado',
+      'Puesto',
+      'Salario Mensual',
+      'Sueldo Diario',
+      'SDI',
+      'Días Pagados',
+      'Faltas',
+      'Sueldo Ordinario',
+      'Horas Extra',
+      'Prima Dominical',
+      'Propina',
+      'Total Percepciones',
+      'ISR (Art. 96)',
+      'IMSS Obrero',
+      'Descuento Retardos',
+      'Total Deducciones',
+      'Sueldo Neto'
+    ];
+
+    const rows = resultados.map((r: any) => [
+      `"${(r.empleado?.nombre_completo || '').replace(/"/g, '""')}"`,
+      `"${(r.puesto || '').replace(/"/g, '""')}"`,
+      (r.empleado?.sueldo_mensual || (r.sueldoDiario * 30)).toFixed(2),
+      r.sueldoDiario.toFixed(2),
+      r.sdi.toFixed(2),
+      r.diasTrabajados,
+      r.faltasNoJustificadas || 0,
+      r.percepciones.sueldoOrdinario.toFixed(2),
+      (r.percepciones.horasExtraDobles + r.percepciones.horasExtraTriples).toFixed(2),
+      r.percepciones.primaDominical.toFixed(2),
+      r.percepciones.propina.toFixed(2),
+      r.percepciones.total.toFixed(2),
+      r.deducciones.isr.toFixed(2),
+      r.deducciones.imssObrero.toFixed(2),
+      r.deducciones.descuentoRetardos.toFixed(2),
+      r.deducciones.total.toFixed(2),
+      r.neto.toFixed(2)
+    ]);
+
+    const csvString = '\uFEFF' + [headers.join(','), ...rows.map(row => row.join(','))].join('\n');
+    const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', `Reporte_Nomina_${periodo.fecha_inicio}_al_${periodo.fecha_fin}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const exportToPdfPrint = () => {
+    if (!resultados || resultados.length === 0) {
+      alert('Primero debes calcular la nómina para generar el reporte en PDF.');
+      return;
+    }
+    window.print();
   };
 
   const totalOrdinario = resultados.reduce((s, r) => s + r.percepciones.sueldoOrdinario, 0);
@@ -337,66 +437,53 @@ export default function NominaTab({
             <Award size={16} /> Submódulo: Propina Diaria
           </button>
         </div>
-
         <div className="flex items-center gap-2">
-          <span className="text-[11px] text-gray-400 font-medium hidden lg:inline">
-            Período: <strong className="text-gray-700 dark:text-gray-200">{periodo.fecha_inicio}</strong> al <strong className="text-gray-700 dark:text-gray-200">{periodo.fecha_fin}</strong>
+          <span className="text-[11px] font-bold text-amber-600 dark:text-amber-400 bg-amber-500/10 px-3 py-1 rounded-xl border border-amber-500/20">
+            Período Activo: <strong>{periodo.fecha_inicio}</strong> al <strong>{periodo.fecha_fin}</strong>
           </span>
-          <button
-            onClick={() => setShowFilters(!showFilters)}
-            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all border ${
-              showFilters
-                ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/30'
-                : 'bg-gray-50 dark:bg-gray-900 text-gray-700 dark:text-gray-200 border-gray-200 dark:border-gray-800 hover:bg-gray-100 dark:hover:bg-gray-800'
-            }`}
-          >
-            <Sliders size={14} />
-            <span>{showFilters ? 'Ocultar Filtros' : 'Filtros y Período'}</span>
-          </button>
         </div>
       </div>
 
-      {/* Selector de Modo de Período y Filtros (Colapsable) */}
-      {showFilters && (
-        <div className="bg-white dark:bg-gray-950 p-5 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-sm space-y-4 animate-in fade-in duration-200">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-gray-100 dark:border-gray-800 pb-3">
-            <h3 className="text-xs font-bold text-gray-800 dark:text-gray-100 uppercase tracking-wide flex items-center gap-2">
-              <Calendar className="text-amber-500" size={16} /> Configuración de Período y Rango de Fechas
-            </h3>
-            {/* Botones Selector de Modo */}
-            <div className="flex bg-gray-100 dark:bg-gray-900 p-1 rounded-xl gap-1">
-              <button
-                onClick={() => handlePeriodoModeChange('diario')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                  periodoMode === 'diario'
-                    ? 'bg-amber-600 text-white shadow-sm'
-                    : 'text-gray-500 hover:text-gray-900 dark:hover:text-white'
-                }`}
-              >
-                🎯 Diario (Hoy)
-              </button>
-              <button
-                onClick={() => handlePeriodoModeChange('quincena')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                  periodoMode === 'quincena'
-                    ? 'bg-amber-600 text-white shadow-sm'
-                    : 'text-gray-500 hover:text-gray-900 dark:hover:text-white'
-                }`}
-              >
-                🗓️ Quincena Actual
-              </button>
-              <button
-                onClick={() => handlePeriodoModeChange('personalizado')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                  periodoMode === 'personalizado'
-                    ? 'bg-amber-600 text-white shadow-sm'
-                    : 'text-gray-500 hover:text-gray-900 dark:hover:text-white'
-                }`}
-              >
-                📅 Rango Personalizado
-              </button>
-            </div>
+      {/* Selector de Modo de Período y Filtros (Siempre Visible) */}
+      <div className="bg-white dark:bg-gray-950 p-5 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-sm space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-gray-100 dark:border-gray-800 pb-3">
+          <h3 className="text-xs font-bold text-gray-800 dark:text-gray-100 uppercase tracking-wide flex items-center gap-2">
+            <Calendar className="text-amber-500" size={16} /> Configuración de Período y Rango de Fechas
+          </h3>
+          {/* Botones Selector de Modo */}
+          <div className="flex bg-gray-100 dark:bg-gray-900 p-1 rounded-xl gap-1">
+            <button
+              onClick={() => handlePeriodoModeChange('diario')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                periodoMode === 'diario'
+                  ? 'bg-amber-600 text-white shadow-sm'
+                  : 'text-gray-500 hover:text-gray-900 dark:hover:text-white'
+              }`}
+            >
+              🎯 Diario (Hoy)
+            </button>
+            <button
+              onClick={() => handlePeriodoModeChange('quincena')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                periodoMode === 'quincena'
+                  ? 'bg-amber-600 text-white shadow-sm'
+                  : 'text-gray-500 hover:text-gray-900 dark:hover:text-white'
+              }`}
+            >
+              🗓️ Quincena Actual
+            </button>
+            <button
+              onClick={() => handlePeriodoModeChange('personalizado')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                periodoMode === 'personalizado'
+                  ? 'bg-amber-600 text-white shadow-sm'
+                  : 'text-gray-500 hover:text-gray-900 dark:hover:text-white'
+              }`}
+            >
+              📅 Rango Personalizado
+            </button>
           </div>
+        </div>
 
         <div className="grid grid-cols-1 md:grid-cols-5 gap-4 text-xs items-end">
           {periodoMode === 'diario' && (
@@ -470,15 +557,39 @@ export default function NominaTab({
             </>
           )}
           {subTab === 'general' ? (
-            <div>
-              <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Bolsa Propinas ($)</label>
-              <input
-                type="number"
-                value={periodo.monto_propinas}
-                onChange={e => setPeriodo({ ...periodo, monto_propinas: parseInputNumber(e.target.value) })}
-                className="w-full px-3 py-2 rounded-lg bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 text-gray-900 dark:text-white"
-              />
-            </div>
+            <>
+              <div>
+                <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Bolsa Propinas ($)</label>
+                <input
+                  type="number"
+                  value={periodo.monto_propinas}
+                  onChange={e => setPeriodo({ ...periodo, monto_propinas: parseInputNumber(e.target.value) })}
+                  className="w-full px-3 py-2 rounded-lg bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 text-gray-900 dark:text-white font-bold"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Pago Horas Extra</label>
+                <select
+                  value={modalidadHorasExtra}
+                  onChange={e => setModalidadHorasExtra(e.target.value as 'lft' | 'proporcional')}
+                  className="w-full px-3 py-2 rounded-lg bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 text-gray-900 dark:text-white font-bold text-xs"
+                >
+                  <option value="lft">Conforme LFT (Dobles / Triples)</option>
+                  <option value="proporcional">Proporcional Directo (Hora Sencilla = Sueldo ÷ 8)</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-amber-600 dark:text-amber-400 uppercase mb-1">📅 Día de Hoy</label>
+                <select
+                  value={incluirHoyEnFaltas ? 'si' : 'no'}
+                  onChange={e => setIncluirHoyEnFaltas(e.target.value === 'si')}
+                  className="w-full px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-700 dark:text-amber-300 font-bold text-xs"
+                >
+                  <option value="no">Excluir HOY de Faltas (En curso)</option>
+                  <option value="si">Contabilizar HOY como Falta</option>
+                </select>
+              </div>
+            </>
           ) : (
             <div>
               <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Bolsa Propinas Período ($)</label>
@@ -492,15 +603,29 @@ export default function NominaTab({
           )}
 
           {subTab === 'general' ? (
-            <div className="flex items-end col-span-2 gap-2">
+            <div className="flex items-end col-span-5 md:col-span-5 gap-2 pt-2 border-t border-gray-100 dark:border-gray-800 mt-2">
               <button
                 onClick={handleCalcular}
                 disabled={calculando}
-                className="flex-1 bg-amber-600 hover:bg-amber-500 disabled:bg-amber-600/50 text-white font-bold py-2 rounded-lg transition-colors flex items-center justify-center gap-2 h-9"
+                className="flex-1 bg-amber-600 hover:bg-amber-500 disabled:bg-amber-600/50 text-white font-bold py-2 rounded-xl transition-colors flex items-center justify-center gap-2 h-10 shadow-sm"
               >
-                {calculando ? <><RefreshCw size={14} className="animate-spin" /> Calculando...</> : <><DollarSign size={14} /> Calcular Nómina</>}
+                {calculando ? <><RefreshCw size={15} className="animate-spin" /> Calculando...</> : <><DollarSign size={15} /> Calcular Nómina</>}
               </button>
-              <button onClick={() => window.location.reload()} className="px-4 bg-gray-200 hover:bg-gray-300 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 font-bold py-2 rounded-lg transition-colors text-xs h-9">
+              <button
+                onClick={exportToCsv}
+                title="Exportar a Excel (CSV)"
+                className="px-4 bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2 rounded-xl transition-colors flex items-center gap-2 text-xs h-10 shadow-sm"
+              >
+                <Download size={15} /> Exportar Excel (.csv)
+              </button>
+              <button
+                onClick={exportToPdfPrint}
+                title="Imprimir o Guardar Reporte PDF"
+                className="px-4 bg-blue-600 hover:bg-blue-500 text-white font-bold py-2 rounded-xl transition-colors flex items-center gap-2 text-xs h-10 shadow-sm"
+              >
+                <Printer size={15} /> Exportar PDF
+              </button>
+              <button onClick={() => window.location.reload()} className="px-4 bg-gray-200 hover:bg-gray-300 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 font-bold py-2 rounded-xl transition-colors text-xs h-10">
                 Limpiar
               </button>
             </div>
@@ -513,7 +638,6 @@ export default function NominaTab({
           )}
         </div>
       </div>
-    )}
 
       {subTab === 'general' ? (
         <>
@@ -561,6 +685,8 @@ export default function NominaTab({
                       <tr className="bg-gray-100/60 dark:bg-gray-900/40 border-b border-gray-200 dark:border-gray-800 text-gray-500 font-semibold">
                         <th className="p-2">Empleado</th>
                         <th className="p-2">Puesto</th>
+                        <th className="p-2 text-right">Salario Mensual</th>
+                        <th className="p-2 text-right">Sueldo Diario</th>
                         <th className="p-2 text-center">Días</th>
                         <th className="p-2 text-right">Ordinario</th>
                         <th className="p-2 text-right">H.Extra</th>
@@ -570,13 +696,23 @@ export default function NominaTab({
                         <th className="p-2 text-right">ISR</th>
                         <th className="p-2 text-right">IMSS</th>
                         <th className="p-2 text-right">Neto</th>
+                        <th className="p-2 text-center">Acciones</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100 dark:divide-gray-800/40">
                       {resultados.map((r, idx) => (
                         <tr key={idx} className="hover:bg-gray-50 dark:hover:bg-gray-900/10">
-                          <td className="p-2 font-semibold text-gray-900 dark:text-white">{r.nombre}</td>
+                          <td className="p-2 font-semibold text-gray-900 dark:text-white flex items-center gap-1.5">
+                            <span>{r.nombre}</span>
+                            {r.exentoReloj && (
+                              <span className="px-1.5 py-0.5 bg-blue-500/10 text-blue-600 dark:text-blue-400 rounded text-[9px] font-bold border border-blue-500/20">
+                                Sueldo Fijo
+                              </span>
+                            )}
+                          </td>
                           <td className="p-2 text-gray-500">{r.puesto}</td>
+                          <td className="p-2 text-right font-bold text-emerald-600 dark:text-emerald-400">${(r.sueldoMensual || Math.round((r.sueldoDiario || 0) * 30)).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                          <td className="p-2 text-right text-gray-500 font-mono">${(r.sueldoDiario || 0).toFixed(2)}</td>
                           <td className="p-2 text-center font-mono font-bold text-gray-700 dark:text-gray-300">{r.diasTrabajados}</td>
                           <td className="p-2 text-right text-gray-700 dark:text-gray-300">${r.percepciones.sueldoOrdinario.toFixed(2)}</td>
                           <td className="p-2 text-right text-amber-600">${(r.percepciones.horasExtraDobles + r.percepciones.horasExtraTriples).toFixed(2)}</td>
@@ -586,12 +722,20 @@ export default function NominaTab({
                           <td className="p-2 text-right text-rose-600">-${r.deducciones.isr.toFixed(2)}</td>
                           <td className="p-2 text-right text-rose-500">-${r.deducciones.imssObrero.toFixed(2)}</td>
                           <td className="p-2 text-right text-gray-900 dark:text-white font-extrabold">${r.neto.toFixed(2)}</td>
+                          <td className="p-2 text-center">
+                            <button
+                              onClick={() => setSelectedEmpDetail(r)}
+                              className="px-2.5 py-1 bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20 rounded font-bold text-[10px] transition-colors flex items-center gap-1 mx-auto"
+                            >
+                              <Eye size={12} /> Detalle
+                            </button>
+                          </td>
                         </tr>
                       ))}
                     </tbody>
                     <tfoot>
                       <tr className="bg-gray-50 dark:bg-gray-900 font-bold border-t-2 border-gray-300 dark:border-gray-700">
-                        <td className="p-2 text-gray-900 dark:text-white" colSpan={3}>Totales</td>
+                        <td className="p-2 text-gray-900 dark:text-white" colSpan={5}>Totales</td>
                         <td className="p-2 text-right">${totalOrdinario.toFixed(2)}</td>
                         <td className="p-2 text-right text-amber-600">${totalExtras.toFixed(2)}</td>
                         <td className="p-2 text-right text-blue-600">${resultados.reduce((s, r) => s + r.percepciones.primaDominical, 0).toFixed(2)}</td>
@@ -600,6 +744,7 @@ export default function NominaTab({
                         <td className="p-2 text-right text-rose-600">-${totalIsr.toFixed(2)}</td>
                         <td className="p-2 text-right text-rose-500">-${totalImss.toFixed(2)}</td>
                         <td className="p-2 text-right text-emerald-600">${totalNeto.toFixed(2)}</td>
+                        <td className="p-2"></td>
                       </tr>
                     </tfoot>
                   </table>
@@ -830,7 +975,7 @@ export default function NominaTab({
           </div>
 
           {/* Modal / Bitácora Diaria del Empleado */}
-          {selectedEmpDetail && (
+          {selectedEmpDetail && selectedEmpDetail.dailyDetails && (
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
               <div className="bg-white dark:bg-gray-950 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col">
                 <div className="p-5 border-b border-gray-200 dark:border-gray-800 flex justify-between items-center">
@@ -894,6 +1039,220 @@ export default function NominaTab({
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* MODAL DE DETALLE DEL EMPLEADO Y JUSTIFICACIONES EN NÓMINA GENERAL */}
+      {selectedEmpDetail && selectedEmpDetail.percepciones && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white dark:bg-gray-950 w-full max-w-4xl rounded-3xl border border-gray-200 dark:border-gray-800 shadow-2xl overflow-hidden my-8">
+            {/* Modal Header */}
+            <div className="p-6 bg-gradient-to-r from-amber-500/10 via-amber-500/5 to-transparent border-b border-gray-100 dark:border-gray-800 flex justify-between items-start">
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-lg font-black text-gray-900 dark:text-white">{selectedEmpDetail.nombre}</h3>
+                  {selectedEmpDetail.exentoReloj && (
+                    <span className="px-2 py-0.5 bg-blue-500/10 text-blue-600 dark:text-blue-400 rounded text-xs font-bold border border-blue-500/20">
+                      Sueldo Fijo
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-gray-500 font-semibold">{selectedEmpDetail.puesto} · Período del {periodo.fecha_inicio} al {periodo.fecha_fin}</p>
+              </div>
+              <button onClick={() => setSelectedEmpDetail(null)} className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-white rounded-full transition-colors">
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Content */}
+            <div className="p-6 space-y-6 max-h-[75vh] overflow-y-auto">
+              {/* Tarjetas Metricas */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <div className="p-3.5 bg-gray-50 dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800">
+                  <span className="text-[10px] font-bold text-gray-400 uppercase">Salario Mensual</span>
+                  <p className="text-base font-black text-emerald-600 dark:text-emerald-400">${(selectedEmpDetail.sueldoMensual || Math.round((selectedEmpDetail.sueldoDiario || 0) * 30)).toLocaleString('es-MX', { minimumFractionDigits: 2 })}</p>
+                  <span className="text-[10px] text-gray-400">${(selectedEmpDetail.sueldoDiario || 0).toFixed(2)}/día</span>
+                </div>
+                <div className="p-3.5 bg-gray-50 dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800">
+                  <span className="text-[10px] font-bold text-gray-400 uppercase">Días Pagados</span>
+                  <p className="text-base font-black text-gray-900 dark:text-white">{selectedEmpDetail.diasTrabajados || 0} / {selectedEmpDetail.diasTotalesPeriodo || 15} días</p>
+                  <span className="text-[10px] text-emerald-600 font-bold">Base 15 días LFT</span>
+                </div>
+                <div className="p-3.5 bg-gray-50 dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800">
+                  <span className="text-[10px] font-bold text-gray-400 uppercase">Faltas No Justificadas</span>
+                  <p className={`text-base font-black ${selectedEmpDetail.faltasNoJustificadas > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
+                    {selectedEmpDetail.faltasNoJustificadas || 0} faltas
+                  </p>
+                  <span className="text-[10px] text-gray-400">Descontadas en período</span>
+                </div>
+                <div className="p-3.5 bg-gray-50 dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800">
+                  <span className="text-[10px] font-bold text-gray-400 uppercase">Horas Extra / Retardos</span>
+                  <p className="text-base font-black text-amber-600 font-mono">
+                    {(selectedEmpDetail.horasDobles || 0) + (selectedEmpDetail.horasTriples || 0)}h extra
+                  </p>
+                  <span className="text-[10px] text-gray-400">{selectedEmpDetail.retardosMinutos || 0} mins retardo</span>
+                </div>
+              </div>
+
+              {/* Desglose Día por Día con opción de Justificar */}
+              {selectedEmpDetail.detallesDias && (
+                <div className="space-y-3">
+                  <div className="flex justify-between items-center">
+                    <h4 className="text-xs font-bold text-gray-800 dark:text-gray-200 uppercase tracking-wide flex items-center gap-1.5">
+                      <Calendar size={14} className="text-amber-500" /> Detalle Diario del Período
+                    </h4>
+                    <span className="text-[10px] text-gray-400">Presiona "Justificar" en cualquier día para autorizar permiso o quitar falta</span>
+                  </div>
+                  <div className="overflow-hidden rounded-2xl border border-gray-200 dark:border-gray-800">
+                    <table className="w-full text-left text-xs">
+                      <thead>
+                        <tr className="bg-gray-100/60 dark:bg-gray-900/60 text-gray-500 font-bold border-b border-gray-200 dark:border-gray-800">
+                          <th className="p-2.5">Fecha</th>
+                          <th className="p-2.5">Día</th>
+                          <th className="p-2.5">Estatus</th>
+                          <th className="p-2.5">Checadas Biométricas</th>
+                          <th className="p-2.5 text-right">Acción</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100 dark:divide-gray-800/40 text-xs">
+                        {selectedEmpDetail.detallesDias.map((d: any, idx: number) => (
+                          <tr key={idx} className="hover:bg-gray-50 dark:hover:bg-gray-900/10">
+                            <td className="p-2.5 font-bold text-gray-800 dark:text-gray-200 font-mono">{d.fecha}</td>
+                            <td className="p-2.5 capitalize text-gray-600 dark:text-gray-400">{d.diaSemana}</td>
+                            <td className="p-2.5">
+                              {d.estado === 'asistencia' && <span className="px-2 py-0.5 bg-emerald-500/10 text-emerald-600 rounded text-[10px] font-bold">✅ Asistencia</span>}
+                              {d.estado === 'descanso' && <span className="px-2 py-0.5 bg-blue-500/10 text-blue-600 rounded text-[10px] font-bold">🏖️ Descanso (Pagado LFT)</span>}
+                              {d.estado === 'exento' && <span className="px-2 py-0.5 bg-purple-500/10 text-purple-600 rounded text-[10px] font-bold">⭐ Sueldo Fijo</span>}
+                              {d.estado === 'justificado' && <span className="px-2 py-0.5 bg-amber-500/10 text-amber-600 rounded text-[10px] font-bold">📋 {d.incidenciaNombre || 'Justificado'}</span>}
+                              {d.estado === 'falta' && <span className="px-2 py-0.5 bg-rose-500/10 text-rose-600 rounded text-[10px] font-bold">❌ Falta No Justificada</span>}
+                              {d.estado === 'futuro' && <span className="px-2 py-0.5 bg-gray-100 text-gray-400 rounded text-[10px]">⚪ Fecha Futura</span>}
+                            </td>
+                            <td className="p-2.5 text-gray-500 font-mono text-[11px]">
+                              {d.entradas && d.entradas.length > 0 ? d.entradas.join(' - ') : '-'}
+                            </td>
+                            <td className="p-2.5 text-right">
+                              {d.estado === 'falta' && (
+                                <button
+                                  onClick={() => setJustificarDate(d.fecha)}
+                                  className="px-2.5 py-1 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-[10px] font-bold transition-colors shadow-sm"
+                                >
+                                  Justificar Día
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* Percepciones vs Deducciones */}
+              {selectedEmpDetail.percepciones && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="p-4 bg-emerald-500/5 rounded-2xl border border-emerald-500/20 space-y-2">
+                    <h5 className="text-xs font-black text-emerald-700 dark:text-emerald-300 uppercase">Percepciones (+)</h5>
+                    <div className="space-y-1.5 text-xs text-gray-700 dark:text-gray-300">
+                      <div className="flex justify-between"><span>Sueldo Ordinario ({selectedEmpDetail.diasTrabajados} días):</span><span className="font-bold">${selectedEmpDetail.percepciones.sueldoOrdinario.toFixed(2)}</span></div>
+                      {(selectedEmpDetail.percepciones.horasExtraDobles + selectedEmpDetail.percepciones.horasExtraTriples) > 0 && (
+                        <div className="flex justify-between"><span>Horas Extra:</span><span className="font-bold">${(selectedEmpDetail.percepciones.horasExtraDobles + selectedEmpDetail.percepciones.horasExtraTriples).toFixed(2)}</span></div>
+                      )}
+                      {selectedEmpDetail.percepciones.primaDominical > 0 && (
+                        <div className="flex justify-between"><span>Prima Dominical:</span><span className="font-bold">${selectedEmpDetail.percepciones.primaDominical.toFixed(2)}</span></div>
+                      )}
+                      {selectedEmpDetail.percepciones.primaVacacional > 0 && (
+                        <div className="flex justify-between"><span>Prima Vacacional:</span><span className="font-bold">${selectedEmpDetail.percepciones.primaVacacional.toFixed(2)}</span></div>
+                      )}
+                      {selectedEmpDetail.percepciones.aguinaldo > 0 && (
+                        <div className="flex justify-between"><span>Aguinaldo:</span><span className="font-bold">${selectedEmpDetail.percepciones.aguinaldo.toFixed(2)}</span></div>
+                      )}
+                      {(selectedEmpDetail.percepciones.propina || selectedEmpDetail.propinaAsignada || 0) > 0 && (
+                        <div className="flex justify-between"><span>Propina:</span><span className="font-bold">${(selectedEmpDetail.percepciones.propina || selectedEmpDetail.propinaAsignada || 0).toFixed(2)}</span></div>
+                      )}
+                      <div className="flex justify-between pt-2 border-t border-emerald-500/20 font-black text-emerald-700 dark:text-emerald-300"><span>Total Percepciones:</span><span>${selectedEmpDetail.percepciones.total.toFixed(2)}</span></div>
+                    </div>
+                  </div>
+
+                  <div className="p-4 bg-rose-500/5 rounded-2xl border border-rose-500/20 space-y-2">
+                    <h5 className="text-xs font-black text-rose-700 dark:text-rose-300 uppercase">Deducciones (-)</h5>
+                    <div className="space-y-1.5 text-xs text-gray-700 dark:text-gray-300">
+                      <div className="flex justify-between"><span>ISR (Art. 96 LISR):</span><span className="font-bold">-${selectedEmpDetail.deducciones.isr.toFixed(2)}</span></div>
+                      <div className="flex justify-between"><span>IMSS Obrero:</span><span className="font-bold">-${selectedEmpDetail.deducciones.imssObrero.toFixed(2)}</span></div>
+                      <div className="flex justify-between"><span>Descuento Retardos:</span><span className="font-bold">-${(selectedEmpDetail.deducciones.descuentoRetardos || 0).toFixed(2)}</span></div>
+                      <div className="flex justify-between pt-2 border-t border-rose-500/20 font-black text-rose-700 dark:text-rose-300"><span>Total Deducciones:</span><span>-${selectedEmpDetail.deducciones.total.toFixed(2)}</span></div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="p-4 bg-gray-50 dark:bg-gray-900 border-t border-gray-200 dark:border-gray-800 flex justify-between items-center">
+              <div>
+                <span className="text-[10px] text-gray-400 uppercase font-bold block">Neto a Recibir</span>
+                <span className="text-xl font-black text-emerald-600 dark:text-emerald-400">${(selectedEmpDetail.neto || 0).toFixed(2)}</span>
+              </div>
+              <button onClick={() => setSelectedEmpDetail(null)} className="px-5 py-2.5 bg-gray-900 hover:bg-gray-800 dark:bg-gray-100 dark:hover:bg-white text-white dark:text-gray-900 text-xs font-bold rounded-xl transition-colors">
+                Cerrar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL MINI PARA JUSTIFICAR DÍA */}
+      {justificarDate && selectedEmpDetail && (
+        <div className="fixed inset-0 z-[60] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-gray-950 w-full max-w-md rounded-2xl border border-gray-200 dark:border-gray-800 shadow-2xl p-6 space-y-4">
+            <div className="flex justify-between items-center border-b border-gray-100 dark:border-gray-800 pb-3">
+              <h4 className="text-sm font-black text-gray-900 dark:text-white uppercase flex items-center gap-2">
+                <ShieldCheck className="text-amber-500" size={18} /> Justificar Día ({justificarDate})
+              </h4>
+              <button onClick={() => setJustificarDate(null)} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
+            </div>
+            <form onSubmit={handleGuardarJustificacion} className="space-y-4 text-xs">
+              <div>
+                <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Empleado</label>
+                <input type="text" disabled value={selectedEmpDetail.nombre} className="w-full p-2 bg-gray-100 dark:bg-gray-900 rounded-lg font-bold text-gray-700 dark:text-gray-300" />
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Tipo de Incidencia / Justificación *</label>
+                <select
+                  value={justificarForm.tipo}
+                  onChange={e => setJustificarForm({ ...justificarForm, tipo: e.target.value })}
+                  className="w-full p-2.5 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl font-bold"
+                >
+                  <option value="falta_justificada">Falta Justificada (Sin Descuento)</option>
+                  <option value="permiso">Permiso con Goce de Sueldo</option>
+                  <option value="incapacidad">Incapacidad Médica</option>
+                  <option value="vacaciones">Día de Vacaciones</option>
+                  <option value="retardo_justificado">Retardo Justificado</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Motivo / Observaciones</label>
+                <textarea
+                  rows={2}
+                  placeholder="Ej. Permiso médico o trámite administrativo justificado por gerencia"
+                  value={justificarForm.motivo}
+                  onChange={e => setJustificarForm({ ...justificarForm, motivo: e.target.value })}
+                  className="w-full p-2.5 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl"
+                />
+              </div>
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="submit"
+                  disabled={guardandoIncidencia}
+                  className="flex-1 bg-amber-600 hover:bg-amber-500 disabled:bg-amber-600/50 text-white font-bold py-2.5 rounded-xl transition-colors"
+                >
+                  {guardandoIncidencia ? 'Guardando...' : 'Aplicar Justificación'}
+                </button>
+                <button type="button" onClick={() => setJustificarDate(null)} className="px-4 bg-gray-200 dark:bg-gray-800 text-gray-700 dark:text-gray-300 font-bold rounded-xl">
+                  Cancelar
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
       )}
     </div>

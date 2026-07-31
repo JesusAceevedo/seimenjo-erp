@@ -166,6 +166,103 @@ function detectarDiscrepanciaPago(conceptoBanco: string, metodoPagoGasto: string
   return { tieneDiscrepancia: false };
 }
 
+function parseFechaClean(rawFecha: any, concepto?: string): string {
+  let str = rawFecha !== undefined && rawFecha !== null ? String(rawFecha).trim() : '';
+
+  // 1. Parsear primero la fecha explícita recibida del Excel (Columna de fecha)
+  if (str && str !== 'undefined' && str !== 'null') {
+    // 1a. Si es serial de Excel (ej: 45498 o 45498.5)
+    if (/^\d{4,5}(\.\d+)?$/.test(str)) {
+      const serial = parseFloat(str);
+      const date = new Date(Math.round((serial - 25569) * 86400 * 1000));
+      if (!isNaN(date.getTime())) {
+        const yyyy = date.getUTCFullYear();
+        const mm = String(date.getUTCMonth() + 1).padStart(2, '0');
+        const dd = String(date.getUTCDate()).padStart(2, '0');
+        if (yyyy >= 2020 && yyyy <= 2040) {
+          return `${yyyy}-${mm}-${dd}`;
+        }
+      }
+    }
+
+    const dateOnly = str.split('T')[0].split(' ')[0].trim();
+
+    // 1b. Si contiene '-' (ej: 2026-07-29 o 29-07-2026 o 29-07-26)
+    if (dateOnly.includes('-')) {
+      const parts = dateOnly.split('-');
+      if (parts[0] && parts[0].length === 4) {
+        const yyyy = parts[0];
+        const mm = parts[1].padStart(2, '0');
+        const dd = parts[2].padStart(2, '0');
+        const yNum = parseInt(yyyy, 10);
+        if (yNum >= 2020 && yNum <= 2040) {
+          return `${yyyy}-${mm}-${dd}`;
+        }
+      } else if (parts[2] && parts[2].trim().length >= 2) {
+        const yr = parts[2].trim().substring(0, 4);
+        const yyyy = yr.length === 2 ? `20${yr}` : yr;
+        const mm = parts[1].padStart(2, '0');
+        const dd = parts[0].padStart(2, '0');
+        const yNum = parseInt(yyyy, 10);
+        if (yNum >= 2020 && yNum <= 2040) {
+          return `${yyyy}-${mm}-${dd}`;
+        }
+      }
+    }
+
+    // 1c. Si contiene '/' (ej: 29/07/2026 o 29/07/26 o 2026/07/29)
+    if (dateOnly.includes('/')) {
+      const parts = dateOnly.split('/');
+      if (parts[0] && parts[0].length === 4) {
+        const yyyy = parts[0];
+        const mm = parts[1].padStart(2, '0');
+        const dd = parts[2].padStart(2, '0');
+        const yNum = parseInt(yyyy, 10);
+        if (yNum >= 2020 && yNum <= 2040) {
+          return `${yyyy}-${mm}-${dd}`;
+        }
+      } else if (parts[2] && parts[2].trim().length >= 2) {
+        const yr = parts[2].trim().substring(0, 4);
+        const yyyy = yr.length === 2 ? `20${yr}` : yr;
+        const mm = parts[1].padStart(2, '0');
+        const dd = parts[0].padStart(2, '0');
+        const yNum = parseInt(yyyy, 10);
+        if (yNum >= 2020 && yNum <= 2040) {
+          return `${yyyy}-${mm}-${dd}`;
+        }
+      }
+    }
+
+    // 1d. Intentar Date.parse normal
+    const parsedDate = new Date(str);
+    if (!isNaN(parsedDate.getTime())) {
+      const yyyy = parsedDate.getFullYear();
+      const mm = String(parsedDate.getMonth() + 1).padStart(2, '0');
+      const dd = String(parsedDate.getDate()).padStart(2, '0');
+      if (yyyy >= 2020 && yyyy <= 2040) {
+        return `${yyyy}-${mm}-${dd}`;
+      }
+    }
+  }
+
+  // 2. SOLO SI la fecha de la columna no vino o fue inválida: intentar extraer de referencia SPEI en el concepto
+  if (concepto) {
+    const speiMatch = concepto.match(/\b(\d{2})(\d{2})(\d{2})\d(?=[A-Za-z0-9]|$)/);
+    if (speiMatch) {
+      const dd = speiMatch[1];
+      const mm = speiMatch[2];
+      const yy = speiMatch[3];
+      const mNum = parseInt(mm, 10);
+      const dNum = parseInt(dd, 10);
+      if (mNum >= 1 && mNum <= 12 && dNum >= 1 && dNum <= 31) {
+        return `20${yy}-${mm}-${dd}`;
+      }
+    }
+  }
+
+  return new Date().toISOString().substring(0, 10);
+}
+
 // 1. IMPORTAR MOVIMIENTOS BANCARIOS DESDE EXCEL / CSV
 export async function importarMovimientosBancarios(
   movements: {
@@ -231,51 +328,7 @@ export async function importarMovimientosBancarios(
 
       const montoVal = d - r;
       const tipo = d > 0 ? 'Deposito' : 'Retiro';
-
-      // Parse date format DD-MM-YYYY, YYYY-MM-DD, or Excel serial number
-      let fechaFormatted = m.fecha;
-      if (m.fecha && /^\d+(\.\d+)?$/.test(m.fecha)) {
-        const serial = parseFloat(m.fecha);
-        const date = new Date((serial - 25569) * 86400 * 1000);
-        const yyyy = date.getUTCFullYear();
-        const mm = String(date.getUTCMonth() + 1).padStart(2, '0');
-        const dd = String(date.getUTCDate()).padStart(2, '0');
-        fechaFormatted = `${yyyy}-${mm}-${dd}`;
-      } else if (m.fecha && m.fecha.includes('-')) {
-        const parts = m.fecha.split('-');
-        if (parts[2] && parts[2].length === 4) {
-          fechaFormatted = `${parts[2]}-${parts[1]}-${parts[0]}`;
-        } else {
-          const parsedDate = new Date(m.fecha);
-          if (!isNaN(parsedDate.getTime())) {
-            const yyyy = parsedDate.getFullYear();
-            const mm = String(parsedDate.getMonth() + 1).padStart(2, '0');
-            const dd = String(parsedDate.getDate()).padStart(2, '0');
-            fechaFormatted = `${yyyy}-${mm}-${dd}`;
-          }
-        }
-      } else if (m.fecha && m.fecha.includes('/')) {
-        const parts = m.fecha.split('/');
-        if (parts[2] && parts[2].length === 4) {
-          fechaFormatted = `${parts[2]}-${parts[1]}-${parts[0]}`;
-        } else {
-          const parsedDate = new Date(m.fecha);
-          if (!isNaN(parsedDate.getTime())) {
-            const yyyy = parsedDate.getFullYear();
-            const mm = String(parsedDate.getMonth() + 1).padStart(2, '0');
-            const dd = String(parsedDate.getDate()).padStart(2, '0');
-            fechaFormatted = `${yyyy}-${mm}-${dd}`;
-          }
-        }
-      } else if (m.fecha) {
-        const parsedDate = new Date(m.fecha);
-        if (!isNaN(parsedDate.getTime())) {
-          const yyyy = parsedDate.getFullYear();
-          const mm = String(parsedDate.getMonth() + 1).padStart(2, '0');
-          const dd = String(parsedDate.getDate()).padStart(2, '0');
-          fechaFormatted = `${yyyy}-${mm}-${dd}`;
-        }
-      }
+      const fechaFormatted = parseFechaClean(m.fecha, m.concepto);
 
       return {
         fecha: fechaFormatted,
@@ -294,15 +347,24 @@ export async function importarMovimientosBancarios(
       };
     });
 
-    // Registrar o actualizar la carga_id
+    // Registrar o actualizar la carga_id usando la fecha real del documento
     let totalDepositos = 0;
     let totalRetiros = 0;
     formattedMovements.forEach(m => {
-      totalDepositos += m.deposito || 0;
-      totalRetiros += m.retiro || 0;
+      if (m.deposito > 0) totalDepositos += m.deposito;
+      if (m.retiro > 0) totalRetiros += m.retiro;
     });
 
-    let currentCargaId = cargaIdToReplace;
+    const fechesSorted = formattedMovements
+      .map(m => m.fecha)
+      .filter(f => /^\d{4}-\d{2}-\d{2}$/.test(f))
+      .sort();
+
+    const minFecha = fechesSorted[0] || new Date().toISOString().substring(0, 10);
+    const maxFecha = fechesSorted[fechesSorted.length - 1] || minFecha;
+    const fechaDocumentoStr = minFecha === maxFecha ? minFecha : `${minFecha} al ${maxFecha}`;
+
+    let currentCargaId = cargaIdToReplace || null;
 
     if (cargaIdToReplace) {
       // Eliminar registros anteriores de la carga si estamos sustituyendo
@@ -324,11 +386,12 @@ export async function importarMovimientosBancarios(
         .from('cargas_estados_cuenta')
         .update({
           nombre_archivo: nombreArchivo,
-          fecha_carga: new Date().toISOString(),
+          fecha_carga: minFecha,
           cuenta_bancaria_id: cuentaBancariaId || null,
           total_registros: formattedMovements.length,
           total_depositos: totalDepositos,
-          total_retiros: totalRetiros
+          total_retiros: totalRetiros,
+          notas: `Fecha del documento: ${fechaDocumentoStr}`
         })
         .eq('id', cargaIdToReplace);
     } else {
@@ -336,12 +399,13 @@ export async function importarMovimientosBancarios(
         .from('cargas_estados_cuenta')
         .insert({
           nombre_archivo: nombreArchivo,
-          fecha_carga: new Date().toISOString(),
+          fecha_carga: minFecha,
           cuenta_bancaria_id: cuentaBancariaId || null,
           empresa_id: empresaId,
           total_registros: formattedMovements.length,
           total_depositos: totalDepositos,
-          total_retiros: totalRetiros
+          total_retiros: totalRetiros,
+          notas: `Fecha del documento: ${fechaDocumentoStr}`
         })
         .select('id')
         .maybeSingle();
@@ -425,7 +489,7 @@ export async function importarMovimientosBancarios(
       }));
 
     if (newMovements.length === 0) {
-      return { success: true, count: 0, cargaId: currentCargaId };
+      return { success: true, count: 0, cargaId: currentCargaId || undefined };
     }
 
     const { data, error } = await supabaseAdmin
@@ -435,7 +499,7 @@ export async function importarMovimientosBancarios(
 
     if (error) throw error;
 
-    return { success: true, count: data?.length || 0, cargaId: currentCargaId };
+    return { success: true, count: data?.length || 0, cargaId: currentCargaId || undefined };
   } catch (err: any) {
     return { success: false, error: err.message || 'Error al importar movimientos' };
   }

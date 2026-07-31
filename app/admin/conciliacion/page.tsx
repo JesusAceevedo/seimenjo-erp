@@ -434,21 +434,72 @@ export default function BankReconciliationModule() {
 
     try {
       const dataRows = rawExcelRows.slice(selectedHeaderRowIndex + 1).filter((row: any) => row && row.length > 0);
+      const fechaColIdx = excelHeaders.indexOf(columnMapping.fecha);
+
       const parsedMovements = dataRows.map((rowArr: any) => {
         const rowObj: any = {};
         excelHeaders.forEach((h: string, idx: number) => {
           rowObj[h] = rowArr[idx];
         });
 
-        const fechaStr = rowObj[columnMapping.fecha];
+        let fechaRaw = rowObj[columnMapping.fecha];
+
+        // Failsafe 1: Buscar por índice de columna si el objeto de encabezado falló
+        if ((fechaRaw === undefined || fechaRaw === null || fechaRaw === '') && fechaColIdx >= 0 && rowArr) {
+          fechaRaw = rowArr[fechaColIdx];
+        }
+
+        // Failsafe 2: Inspeccionar la fila para encontrar la celda con la fecha si la columna no se mapeó
+        if ((fechaRaw === undefined || fechaRaw === null || fechaRaw === '') && rowArr) {
+          const foundDateCell = rowArr.find((c: any) => {
+            const str = String(c || '').trim();
+            return /^\d{1,2}[-/]\d{1,2}[-/]\d{2,4}$/.test(str) || /^\d{4}[-/]\d{1,2}[-/]\d{1,2}$/.test(str) || /^\d{5}$/.test(str);
+          });
+          if (foundDateCell) fechaRaw = foundDateCell;
+        }
+
+        const fechaStr = String(fechaRaw || '').trim();
         let fecha = new Date().toISOString().substring(0, 10);
-        if (fechaStr !== undefined && fechaStr !== null) {
-          if (typeof fechaStr === 'number') {
-            const jsDate = new Date((fechaStr - (25567 + 2)) * 86400 * 1000);
-            if (!isNaN(jsDate.getTime())) fecha = jsDate.toISOString().substring(0, 10);
+
+        if (fechaStr) {
+          if (/^\d{4,5}(\.\d+)?$/.test(fechaStr)) {
+            const serial = parseFloat(fechaStr);
+            const date = new Date(Math.round((serial - 25569) * 86400 * 1000));
+            if (!isNaN(date.getTime())) {
+              const yyyy = date.getUTCFullYear();
+              const mm = String(date.getUTCMonth() + 1).padStart(2, '0');
+              const dd = String(date.getUTCDate()).padStart(2, '0');
+              fecha = `${yyyy}-${mm}-${dd}`;
+            }
           } else {
-            const parsedDate = new Date(String(fechaStr));
-            if (!isNaN(parsedDate.getTime())) fecha = parsedDate.toISOString().substring(0, 10);
+            const dateOnly = fechaStr.split('T')[0].split(' ')[0].trim();
+            if (dateOnly.includes('-')) {
+              const parts = dateOnly.split('-');
+              if (parts[0] && parts[0].length === 4) {
+                fecha = `${parts[0]}-${parts[1].padStart(2, '0')}-${parts[2].padStart(2, '0')}`;
+              } else if (parts[2] && parts[2].trim().length >= 2) {
+                const yr = parts[2].trim().substring(0, 4);
+                const yyyy = yr.length === 2 ? `20${yr}` : yr;
+                fecha = `${yyyy}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+              }
+            } else if (dateOnly.includes('/')) {
+              const parts = dateOnly.split('/');
+              if (parts[0] && parts[0].length === 4) {
+                fecha = `${parts[0]}-${parts[1].padStart(2, '0')}-${parts[2].padStart(2, '0')}`;
+              } else if (parts[2] && parts[2].trim().length >= 2) {
+                const yr = parts[2].trim().substring(0, 4);
+                const yyyy = yr.length === 2 ? `20${yr}` : yr;
+                fecha = `${yyyy}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+              }
+            } else {
+              const d = new Date(fechaStr);
+              if (!isNaN(d.getTime())) {
+                const yyyy = d.getFullYear();
+                const mm = String(d.getMonth() + 1).padStart(2, '0');
+                const dd = String(d.getDate()).padStart(2, '0');
+                fecha = `${yyyy}-${mm}-${dd}`;
+              }
+            }
           }
         }
 

@@ -23,7 +23,8 @@ export default function EmpleadosTab({ empleados, puestos, staffList, departamen
   const [form, setForm] = useState({
     usuario_staff_id: '', primer_apellido: '', segundo_apellido: '', primer_nombre: '', segundo_nombre: '',
     curp: '', rfc: '', nss: '', telefono: '', banco: '', cuenta_clabe: '',
-    sueldo_diario: 250, salario_diario_integrado: 260, zkteco_user_id: '',
+    sueldo_mensual: 7500, sueldo_diario: 250, salario_diario_integrado: 261.30, zkteco_user_id: '',
+    exento_reloj_checador: false,
     tipo_contrato: 'indeterminado', fecha_ingreso: new Date().toISOString().split('T')[0], puesto_id: ''
   });
 
@@ -32,25 +33,44 @@ export default function EmpleadosTab({ empleados, puestos, staffList, departamen
     setForm({
       usuario_staff_id: '', primer_apellido: '', segundo_apellido: '', primer_nombre: '', segundo_nombre: '',
       curp: '', rfc: '', nss: '', telefono: '', banco: '', cuenta_clabe: '',
-      sueldo_diario: 250, salario_diario_integrado: 260, zkteco_user_id: '',
+      sueldo_mensual: 7500, sueldo_diario: 250, salario_diario_integrado: 261.30, zkteco_user_id: '',
+      exento_reloj_checador: false,
       tipo_contrato: 'indeterminado', fecha_ingreso: new Date().toISOString().split('T')[0], puesto_id: ''
     });
   };
 
   const handleEdit = (emp: EmpleadoDetalle) => {
     setSelected(emp);
+    const diario = emp.sueldo_diario || 250;
+    const mensual = emp.sueldo_mensual !== undefined && emp.sueldo_mensual !== null
+      ? emp.sueldo_mensual
+      : Math.round(diario * 30);
+    const sdi = emp.salario_diario_integrado || Math.round(diario * 1.0452 * 100) / 100;
     setForm({
       usuario_staff_id: emp.usuario_staff_id || '',
       primer_apellido: emp.primer_apellido || '', segundo_apellido: emp.segundo_apellido || '',
       primer_nombre: emp.primer_nombre || '', segundo_nombre: emp.segundo_nombre || '',
       curp: emp.curp || '', rfc: emp.rfc || '', nss: emp.nss || '',
       telefono: emp.telefono || '', banco: emp.banco || '', cuenta_clabe: emp.cuenta_clabe || '',
-      sueldo_diario: emp.sueldo_diario || 250, salario_diario_integrado: emp.salario_diario_integrado || 260,
+      sueldo_mensual: mensual, sueldo_diario: diario, salario_diario_integrado: sdi,
       zkteco_user_id: emp.zkteco_user_id || '',
+      exento_reloj_checador: !!emp.exento_reloj_checador,
       tipo_contrato: emp.tipo_contrato || 'indeterminado',
       fecha_ingreso: emp.fecha_ingreso || new Date().toISOString().split('T')[0],
       puesto_id: emp.puesto_id || ''
     });
+  };
+
+  const handlePuestoSelect = (puestoId: string) => {
+    const puesto = puestos.find(p => p.id === puestoId);
+    if (puesto) {
+      const diario = puesto.salario_diario_base || 250;
+      const mensual = puesto.salario_mensual_base || Math.round(diario * 30);
+      const sdi = Math.round(diario * 1.0452 * 100) / 100;
+      setForm(f => ({ ...f, puesto_id: puestoId, sueldo_diario: diario, sueldo_mensual: mensual, salario_diario_integrado: sdi }));
+    } else {
+      setForm(f => ({ ...f, puesto_id: puestoId }));
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -63,8 +83,8 @@ export default function EmpleadosTab({ empleados, puestos, staffList, departamen
         primer_nombre: form.primer_nombre, segundo_nombre: form.segundo_nombre || null,
         curp: form.curp || null, rfc: form.rfc || null, nss: form.nss || null,
         telefono: form.telefono || null, banco: form.banco || null, cuenta_clabe: form.cuenta_clabe || null,
-        sueldo_diario: form.sueldo_diario, salario_diario_integrado: form.salario_diario_integrado,
-        zkteco_user_id: form.zkteco_user_id || null, tipo_contrato: form.tipo_contrato,
+        sueldo_mensual: form.sueldo_mensual, sueldo_diario: form.sueldo_diario, salario_diario_integrado: form.salario_diario_integrado,
+        zkteco_user_id: form.zkteco_user_id || null, exento_reloj_checador: form.exento_reloj_checador, tipo_contrato: form.tipo_contrato,
         fecha_ingreso: form.fecha_ingreso, puesto_id: form.puesto_id || null, activo: true
       };
       await saveEmpleado(payload, !!selected, selected?.id);
@@ -94,6 +114,18 @@ export default function EmpleadosTab({ empleados, puestos, staffList, departamen
           <FileText className="text-amber-500" size={18} /> {selected ? 'Modificar Empleado' : 'Nuevo Expediente'}
         </h3>
         <form onSubmit={handleSubmit} className="space-y-4 text-xs">
+          <div className="flex items-center gap-2 p-2.5 bg-blue-500/5 dark:bg-blue-500/10 rounded-xl border border-blue-500/20">
+            <input
+              type="checkbox"
+              id="exento_reloj_checador"
+              checked={form.exento_reloj_checador}
+              onChange={e => setForm({ ...form, exento_reloj_checador: e.target.checked })}
+              className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500 cursor-pointer"
+            />
+            <label htmlFor="exento_reloj_checador" className="text-xs font-bold text-blue-700 dark:text-blue-300 cursor-pointer select-none">
+              Exento de Reloj Checador (Sueldo Fijo)
+            </label>
+          </div>
           <div className="grid grid-cols-2 gap-3">
             <div><label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Primer Apellido *</label>
               <input type="text" required value={form.primer_apellido} onChange={e => setForm({ ...form, primer_apellido: e.target.value })}
@@ -112,22 +144,51 @@ export default function EmpleadosTab({ empleados, puestos, staffList, departamen
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div><label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Puesto *</label>
-              <select value={form.puesto_id} onChange={e => setForm({ ...form, puesto_id: e.target.value })}
+              <select value={form.puesto_id} onChange={e => handlePuestoSelect(e.target.value)}
                 className="w-full px-3 py-2 rounded-lg bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 focus:outline-none focus:ring-1 focus:ring-amber-500">
                 <option value="">Seleccionar...</option>
                 {puestos.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
               </select></div>
-            <div><label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">ID Biométrico (PIN) *</label>
-              <input type="text" required value={form.zkteco_user_id} onChange={e => setForm({ ...form, zkteco_user_id: e.target.value })}
+            <div><label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">ID Biométrico (PIN) {form.exento_reloj_checador ? '(Opcional)' : '*'}</label>
+              <input type="text" required={!form.exento_reloj_checador} value={form.zkteco_user_id} onChange={e => setForm({ ...form, zkteco_user_id: e.target.value })}
                 className="w-full px-3 py-2 rounded-lg bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 focus:outline-none focus:ring-1 focus:ring-amber-500" /></div>
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div><label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Sueldo Diario ($)</label>
-              <input type="number" value={form.sueldo_diario} onChange={e => setForm({ ...form, sueldo_diario: Number(e.target.value) })}
-                className="w-full px-3 py-2 rounded-lg bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 focus:outline-none focus:ring-1 focus:ring-amber-500" /></div>
-            <div><label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">SDI</label>
-              <input type="number" value={form.salario_diario_integrado} onChange={e => setForm({ ...form, salario_diario_integrado: Number(e.target.value) })}
-                className="w-full px-3 py-2 rounded-lg bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 focus:outline-none focus:ring-1 focus:ring-amber-500" /></div>
+          {/* SECCIÓN DE SALARIO / NÓMINA */}
+          <div className="p-3 bg-amber-500/5 dark:bg-amber-500/10 rounded-xl border border-amber-500/20 space-y-2">
+            <label className="block text-[10px] font-extrabold text-amber-600 dark:text-amber-400 uppercase tracking-wider">Configuración Salarial</label>
+            <div className="grid grid-cols-3 gap-2">
+              <div>
+                <label className="block text-[9px] font-bold text-amber-700 dark:text-amber-300 uppercase mb-1">Salario Mensual ($) *</label>
+                <input type="number" step="0.01" value={form.sueldo_mensual}
+                  onChange={e => {
+                    const valMensual = Number(e.target.value);
+                    const valDiario = Math.round((valMensual / 30) * 100) / 100;
+                    const valSdi = Math.round((valDiario * 1.0452) * 100) / 100;
+                    setForm({ ...form, sueldo_mensual: valMensual, sueldo_diario: valDiario, salario_diario_integrado: valSdi });
+                  }}
+                  className="w-full px-2.5 py-1.5 rounded-lg bg-white dark:bg-gray-900 border border-amber-400 dark:border-amber-600 focus:outline-none focus:ring-2 focus:ring-amber-500 font-bold text-amber-700 dark:text-amber-300 text-xs" />
+              </div>
+              <div>
+                <label className="block text-[9px] font-bold text-gray-500 uppercase mb-1">Sueldo Diario (/30)</label>
+                <input type="number" step="0.01" value={form.sueldo_diario}
+                  onChange={e => {
+                    const valDiario = Number(e.target.value);
+                    const valMensual = Math.round((valDiario * 30) * 100) / 100;
+                    const valSdi = Math.round((valDiario * 1.0452) * 100) / 100;
+                    setForm({ ...form, sueldo_diario: valDiario, sueldo_mensual: valMensual, salario_diario_integrado: valSdi });
+                  }}
+                  className="w-full px-2.5 py-1.5 rounded-lg bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 focus:outline-none focus:ring-1 focus:ring-amber-500 text-gray-700 dark:text-gray-300 text-xs" />
+              </div>
+              <div>
+                <label className="block text-[9px] font-bold text-gray-500 uppercase mb-1">SDI ($)</label>
+                <input type="number" step="0.01" value={form.salario_diario_integrado}
+                  onChange={e => setForm({ ...form, salario_diario_integrado: Number(e.target.value) })}
+                  className="w-full px-2.5 py-1.5 rounded-lg bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 focus:outline-none focus:ring-1 focus:ring-amber-500 text-gray-700 dark:text-gray-300 text-xs" />
+              </div>
+            </div>
+            <p className="text-[9px] text-amber-600/80 dark:text-amber-400/80 italic font-mono">
+              * Ingrese el salario mensual estimado y el sistema calculará automáticamente el sueldo diario (÷ 30) y SDI (x 1.0452).
+            </p>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div><label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">RFC</label>
@@ -177,7 +238,7 @@ export default function EmpleadosTab({ empleados, puestos, staffList, departamen
                 <th className="p-3">Nombre</th>
                 <th className="p-3">Puesto</th>
                 <th className="p-3">PIN</th>
-                <th className="p-3">Sueldo</th>
+                <th className="p-3">Sueldo Mensual / Diario</th>
                 <th className="p-3">Depto</th>
                 <th className="p-3 text-right">Acciones</th>
               </tr>
@@ -186,12 +247,19 @@ export default function EmpleadosTab({ empleados, puestos, staffList, departamen
               {empleados.filter(e => e.activo !== false).map(emp => {
                 const puesto = puestos.find(p => p.id === emp.puesto_id);
                 const depto = departamentos.find(d => d.id === puesto?.departamento_id);
+                const diario = emp.sueldo_diario || 250;
+                const mensual = emp.sueldo_mensual !== undefined && emp.sueldo_mensual !== null
+                  ? emp.sueldo_mensual
+                  : Math.round(diario * 30);
                 return (
                   <tr key={emp.id} className="hover:bg-gray-50 dark:hover:bg-gray-900/10">
                     <td className="p-3 font-semibold text-gray-900 dark:text-white">{emp.nombre_completo}</td>
                     <td className="p-3 text-gray-600 dark:text-gray-300">{puesto?.nombre || 'Sin Puesto'}</td>
                     <td className="p-3 font-mono text-gray-500">{emp.zkteco_user_id || 'N/A'}</td>
-                    <td className="p-3 font-semibold text-emerald-600 dark:text-emerald-400">${emp.sueldo_diario}</td>
+                    <td className="p-3">
+                      <div className="font-bold text-emerald-600 dark:text-emerald-400">${mensual.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}/mes</div>
+                      <div className="text-[10px] text-gray-400">${diario}/día</div>
+                    </td>
                     <td className="p-3 text-gray-400 text-[10px]">{depto?.nombre || '-'}</td>
                     <td className="p-3 text-right space-x-1">
                       <button onClick={() => handleEdit(emp)} className="px-2.5 py-1 bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20 rounded font-semibold text-[10px] transition-colors">Editar</button>

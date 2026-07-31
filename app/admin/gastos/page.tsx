@@ -339,12 +339,11 @@ export default function AdvancedBillingModule() {
       const empresaId = await getEmpresaId();
       if (!empresaId) return;
 
-      // 1. Gastos facturados y no deducibles (con XML o marcados como no deducibles/solo ticket)
+      // 1. Todos los Gastos y Egresos de la Empresa (con o sin XML, deducibles y no deducibles)
       const { data: gFac } = await supabase
         .from('gastos')
         .select('*, proveedores(nombre_comercial, rfc), categorias_gasto(nombre), padre:gastos!gasto_padre_id(concepto), movimientos_bancarios(*, estatus_conciliacion_bancaria(*), cuentas_bancarias(*))')
         .eq('empresa_id', empresaId)
-        .or('uuid_fiscal.not.is.null,es_deducible.eq.false')
         .order('fecha_gasto', { ascending: false });
       setGastosFacturados(gFac || []);
 
@@ -528,10 +527,10 @@ export default function AdvancedBillingModule() {
       try {
         const bstr = evt.target?.result;
         const XLSX = await import('xlsx');
-        const workbook = XLSX.read(bstr, { type: 'binary' });
+        const workbook = XLSX.read(bstr, { type: 'binary', cellDates: true, dateNF: 'yyyy-mm-dd' });
         const sheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[sheetName];
-        const rawData = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as any[];
+        const rawData = XLSX.utils.sheet_to_json(worksheet, { header: 1, raw: false, dateNF: 'yyyy-mm-dd' }) as any[];
         
         if (rawData.length === 0) {
           alert('El archivo está vacío.');
@@ -548,13 +547,16 @@ export default function AdvancedBillingModule() {
           }
         }
 
-        const headers = (rawData[headerIndex] || []).map((h: any) => String(h || '').trim());
+        const headers = (rawData[headerIndex] || []).map((h: any, idx: number) => {
+          const str = String(h || '').trim();
+          return str || `Columna_${idx + 1}`;
+        });
         const rows = rawData.slice(headerIndex + 1).filter((row: any) => row && row.length > 0);
 
         setExcelHeaders(headers);
 
         const objectsData = rows.map((row: any) => {
-          const obj: any = {};
+          const obj: any = { _rawRow: row };
           headers.forEach((h: string, idx: number) => {
             obj[h] = row[idx];
           });
@@ -566,13 +568,37 @@ export default function AdvancedBillingModule() {
         // Auto-detect columns mapping
         const mapping = { fecha: '', concepto: '', retiro: '', deposito: '', referencia: '' };
         headers.forEach((h: string) => {
-          const hl = h.toLowerCase();
-          if (hl.includes('fecha') || hl.includes('date')) mapping.fecha = h;
-          else if (hl.includes('concepto') || hl.includes('descrip') || hl.includes('detalle')) mapping.concepto = h;
-          else if (hl.includes('retiro') || hl.includes('cargo') || hl.includes('egreso') || hl.includes('salida')) mapping.retiro = h;
-          else if (hl.includes('deposito') || hl.includes('abono') || hl.includes('ingreso') || hl.includes('entrada')) mapping.deposito = h;
-          else if (hl.includes('ref') || hl.includes('nota') || hl.includes('id')) mapping.referencia = h;
+          const hl = h.toLowerCase().trim();
+          if (!mapping.fecha && (
+            hl.includes('fecha') || hl.includes('date') || hl.includes('d/m') || hl.includes('d-m') || 
+            hl.startsWith('f.') || hl.startsWith('f_') || hl === 'd' || hl.includes('día') || hl.includes('dia') ||
+            hl.includes('d微') || hl.includes('operacion') || hl.includes('valor')
+          )) {
+            mapping.fecha = h;
+          } else if (!mapping.concepto && (hl.includes('concepto') || hl.includes('descrip') || hl.includes('detalle') || hl.includes('leyenda') || hl.includes('movimiento'))) {
+            mapping.concepto = h;
+          } else if (!mapping.retiro && (hl.includes('retiro') || hl.includes('cargo') || hl.includes('egreso') || hl.includes('salida') || hl.includes('debito'))) {
+            mapping.retiro = h;
+          } else if (!mapping.deposito && (hl.includes('deposito') || hl.includes('abono') || hl.includes('ingreso') || hl.includes('entrada') || hl.includes('credito'))) {
+            mapping.deposito = h;
+          } else if (!mapping.referencia && (hl.includes('ref') || hl.includes('nota') || hl.includes('folio') || hl.includes('consecutivo') || hl.includes('id'))) {
+            mapping.referencia = h;
+          }
         });
+
+        // Inspeccionar primera fila de datos si la columna de fecha no fue detectada por encabezado
+        if (!mapping.fecha && objectsData.length > 0) {
+          const firstRow = objectsData[0];
+          for (const key of Object.keys(firstRow)) {
+            if (key === '_rawRow') continue;
+            const val = String(firstRow[key] || '').trim();
+            if (/^\d{1,2}[-/]\d{1,2}[-/]\d{2,4}$/.test(val) || /^\d{4}[-/]\d{1,2}[-/]\d{1,2}$/.test(val) || /^\d{5}$/.test(val)) {
+              mapping.fecha = key;
+              break;
+            }
+          }
+        }
+
         setColumnMapping(mapping);
         setShowMappingModal(true);
       } catch (err) {
@@ -594,15 +620,35 @@ export default function AdvancedBillingModule() {
     setShowMappingModal(false);
 
     try {
+      const fechaColIdx = excelHeaders.indexOf(columnMapping.fecha);
+
       const formatted = excelData.map(row => {
+        let fechaRaw = row[columnMapping.fecha];
+
+        // Failsafe 1: Si no vino por objeto de encabezado, buscar por índice de columna
+        if ((fechaRaw === undefined || fechaRaw === null || fechaRaw === '') && fechaColIdx >= 0 && row._rawRow) {
+          fechaRaw = row._rawRow[fechaColIdx];
+        }
+
+        // Failsafe 2: Si aún es vacío o undefined, buscar la celda en la fila que contenga un patrón de fecha
+        if ((fechaRaw === undefined || fechaRaw === null || fechaRaw === '') && row._rawRow) {
+          const foundDateCell = row._rawRow.find((c: any) => {
+            const str = String(c || '').trim();
+            return /^\d{1,2}[-/]\d{1,2}[-/]\d{2,4}$/.test(str) || /^\d{4}[-/]\d{1,2}[-/]\d{1,2}$/.test(str) || /^\d{5}$/.test(str);
+          });
+          if (foundDateCell) {
+            fechaRaw = foundDateCell;
+          }
+        }
+
         return {
-          fecha: String(row[columnMapping.fecha] || ''),
-          concepto: String(row[columnMapping.concepto] || ''),
+          fecha: String(fechaRaw || ''),
+          concepto: String(row[columnMapping.concepto] || row._rawRow?.[1] || ''),
           retiro: row[columnMapping.retiro] !== undefined ? String(row[columnMapping.retiro]) : '0',
           deposito: row[columnMapping.deposito] !== undefined ? String(row[columnMapping.deposito]) : '0',
           referencia: columnMapping.referencia ? String(row[columnMapping.referencia] || '') : ''
         };
-      }).filter(m => m.fecha && m.concepto);
+      }).filter(m => m.concepto);
 
       const token = await getSessionToken();
       const res = await importarMovimientosBancarios(formatted, token, selectedCuentaId);
@@ -818,11 +864,24 @@ export default function AdvancedBillingModule() {
   const handleOpenReconcileModal = async (mov: any) => {
     const { data: existingMappings } = await supabase
       .from('conciliaciones_bancarias')
-      .select('*')
+      .select('*, gasto:gastos(*, proveedores(nombre_comercial, rfc))')
       .eq('movimiento_id', mov.id);
 
     const linkedGastos = existingMappings?.map(m => m.gasto_id).filter(Boolean) as string[] || [];
     const linkedPedidos = existingMappings?.map(m => m.pedido_id).filter(Boolean) as string[] || [];
+
+    if (existingMappings && existingMappings.length > 0) {
+      setGastosReconciliables(prev => {
+        const existingIds = new Set(prev.map(g => g.id));
+        const newItems: any[] = [];
+        existingMappings.forEach(m => {
+          if (m.gasto && !existingIds.has(m.gasto.id)) {
+            newItems.push(m.gasto);
+          }
+        });
+        return newItems.length > 0 ? [...newItems, ...prev] : prev;
+      });
+    }
 
     setReconcileModal({
       open: true,
@@ -2631,21 +2690,32 @@ export default function AdvancedBillingModule() {
                 { field: 'retiro', label: 'Columna de Retiros / Cargos / Egresos', required: false },
                 { field: 'deposito', label: 'Columna de Depósitos / Abonos / Ingresos', required: false },
                 { field: 'referencia', label: 'Columna de Referencia / ID de Transacción', required: false }
-              ].map(({ field, label }) => (
-                <div key={field}>
-                  <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">{label}</label>
-                  <select
-                    value={(columnMapping as any)[field]}
-                    onChange={(e) => setColumnMapping(prev => ({ ...prev, [field]: e.target.value }))}
-                    className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-xl text-xs outline-none focus:ring-1 focus:ring-amber-500"
-                  >
-                    <option value="">-- No asociar / Vacío --</option>
-                    {excelHeaders.map(header => (
-                      <option key={header} value={header}>{header}</option>
-                    ))}
-                  </select>
-                </div>
-              ))}
+              ].map(({ field, label }) => {
+                const selectedHeader = (columnMapping as any)[field];
+                const sampleVals = selectedHeader 
+                  ? excelData.slice(0, 2).map(r => String(r[selectedHeader] ?? '')).filter(Boolean).join(', ')
+                  : '';
+                return (
+                  <div key={field}>
+                    <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">{label}</label>
+                    <select
+                      value={selectedHeader}
+                      onChange={(e) => setColumnMapping(prev => ({ ...prev, [field]: e.target.value }))}
+                      className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-xl text-xs outline-none focus:ring-1 focus:ring-amber-500"
+                    >
+                      <option value="">-- No asociar / Vacío --</option>
+                      {excelHeaders.map(header => (
+                        <option key={header} value={header}>{header}</option>
+                      ))}
+                    </select>
+                    {sampleVals && (
+                      <p className="text-[10px] text-gray-400 font-mono mt-0.5 truncate" title={`Valores de muestra: ${sampleVals}`}>
+                        Muestra: <span className="text-gray-600 dark:text-gray-300 font-semibold">{sampleVals}</span>
+                      </p>
+                    )}
+                  </div>
+                );
+              })}
             </div>
 
             <div className="flex gap-3">

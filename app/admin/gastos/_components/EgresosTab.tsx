@@ -86,45 +86,108 @@ export default function EgresosTab({
   // Expansión de parcialidades (hijos)
   const [expandedParents, setExpandedParents] = useState<Record<string, boolean>>({});
 
+  const getCleanId = (idVal: any): string => {
+    if (!idVal) return '';
+    if (typeof idVal === 'string') return idVal.trim().toLowerCase();
+    if (typeof idVal === 'object' && idVal.id) return String(idVal.id).trim().toLowerCase();
+    return String(idVal).trim().toLowerCase();
+  };
+
+  const formatDate = (dateVal?: string | null) => {
+    if (!dateVal) return 'S/F';
+    try {
+      const d = new Date(dateVal);
+      if (isNaN(d.getTime())) return 'S/F';
+      return d.toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: '2-digit' });
+    } catch (e) {
+      return 'S/F';
+    }
+  };
+
   const toggleParentExpand = (id: string) => {
+    const cleanId = getCleanId(id);
     setExpandedParents(prev => ({
       ...prev,
-      [id]: !prev[id]
+      [cleanId]: !prev[cleanId]
     }));
   };
 
+  const handlePropagarTicket = async (parentGasto: GastoFacturado) => {
+    const cleanId = getCleanId(parentGasto.id);
+    const hijos = hijosMap.get(cleanId) || [];
+    const ticketUrlToUse = parentGasto.ticket_url || hijos.find(h => h.ticket_url)?.ticket_url;
+
+    if (!ticketUrlToUse) {
+      alert('Ninguna de las facturas de este grupo tiene un ticket de comprobante cargado aún. Sube un ticket primero para compartirlo.');
+      return;
+    }
+
+    if (!confirm(`¿Deseas asignar el mismo ticket de comprobante a la factura principal y a sus ${hijos.length} parcialidades?`)) return;
+
+    const allIds = [parentGasto.id, ...hijos.map(h => h.id)];
+
+    const { error } = await supabase
+      .from('gastos')
+      .update({ ticket_url: ticketUrlToUse })
+      .in('id', allIds);
+
+    if (error) {
+      alert(`Error al asignar ticket: ${error.message}`);
+    } else {
+      alert(`Ticket asignado a la factura principal y a todas sus parcialidades (${allIds.length} facturas en total).`);
+      if (onRefresh) onRefresh();
+      else window.location.reload();
+    }
+  };
+
   // Modal para asociar a gasto principal
+  // Modal para asociar a gasto principal (con soporte para selección múltiple)
   const [associationModal, setAssociationModal] = useState<{
     isOpen: boolean;
     childGasto: GastoFacturado | null;
     searchParent: string;
-    parentGastoId: string | null;
+    selectedParentIds: string[];
     loading: boolean;
   }>({
     isOpen: false,
     childGasto: null,
     searchParent: '',
-    parentGastoId: null,
+    selectedParentIds: [],
     loading: false
   });
 
   const handleSaveAssociation = async () => {
-    if (!associationModal.childGasto || !associationModal.parentGastoId) return;
+    if (!associationModal.childGasto || associationModal.selectedParentIds.length === 0) return;
     setAssociationModal(prev => ({ ...prev, loading: true }));
     try {
-      const { error } = await supabase
+      const child = associationModal.childGasto;
+      const selectedIds = associationModal.selectedParentIds;
+      const primaryParentId = selectedIds[0];
+
+      // Vincular el gasto hijo al gasto principal seleccionado
+      const { error: err1 } = await supabase
         .from('gastos')
-        .update({ gasto_padre_id: associationModal.parentGastoId })
-        .eq('id', associationModal.childGasto.id);
+        .update({ gasto_padre_id: primaryParentId })
+        .eq('id', child.id);
 
-      if (error) throw error;
+      if (err1) throw err1;
 
-      alert('Asociación realizada con éxito.');
+      // Si se seleccionaron múltiples facturas del listado, vincular las demás bajo el mismo gasto principal
+      if (selectedIds.length > 1) {
+        const otherIds = selectedIds.slice(1);
+        const { error: err2 } = await supabase
+          .from('gastos')
+          .update({ gasto_padre_id: primaryParentId })
+          .in('id', otherIds);
+        if (err2) throw err2;
+      }
+
+      alert(`Asociación realizada con éxito (${selectedIds.length} factura${selectedIds.length > 1 ? 's' : ''}).`);
       setAssociationModal({
         isOpen: false,
         childGasto: null,
         searchParent: '',
-        parentGastoId: null,
+        selectedParentIds: [],
         loading: false
       });
       if (onRefresh) onRefresh();
@@ -153,7 +216,7 @@ export default function EgresosTab({
         isOpen: false,
         childGasto: null,
         searchParent: '',
-        parentGastoId: null,
+        selectedParentIds: [],
         loading: false
       });
       if (onRefresh) onRefresh();
@@ -185,17 +248,18 @@ export default function EgresosTab({
         return conceptoMatch || uuidMatch || rfcMatch || provMatch || montoMatch;
       }
       return true;
-    }).slice(0, 15);
+    }).slice(0, 50);
   }, [gastosFacturados, associationModal.childGasto, associationModal.searchParent]);
 
   // Mapa de hijos por id de padre
   const hijosMap = useMemo(() => {
     const map = new Map<string, GastoFacturado[]>();
     gastosFacturados.forEach(g => {
-      if (g.gasto_padre_id) {
-        const list = map.get(g.gasto_padre_id) || [];
+      const pId = getCleanId(g.gasto_padre_id);
+      if (pId) {
+        const list = map.get(pId) || [];
         list.push(g);
-        map.set(g.gasto_padre_id, list);
+        map.set(pId, list);
       }
     });
     return map;
@@ -237,8 +301,12 @@ export default function EgresosTab({
   const filtrados = useMemo(() => {
     const q = search.toLowerCase();
     const result = gastosFacturados.filter((g) => {
-      // Ocultar de la lista principal si es un gasto hijo (parcialidad)
-      if (g.gasto_padre_id) return false;
+      // Ocultar de la lista de filas principales si es un gasto hijo (parcialidad) y su padre existe en el listado
+      if (g.gasto_padre_id) {
+        const pId = getCleanId(g.gasto_padre_id);
+        const tienePadre = gastosFacturados.some(p => getCleanId(p.id) === pId);
+        if (tienePadre) return false;
+      }
 
       // Generar string de fecha legible para buscar por fecha
       const dateVal = g.fecha_timbrado || g.fecha_gasto || '';
@@ -352,10 +420,10 @@ export default function EgresosTab({
             <Search size={13} className="absolute left-2.5 top-2.5 text-gray-400" />
             <input
               type="text"
-              placeholder="Buscar por UUID, concepto, proveedor..."
+              placeholder="🔍 Buscar por UUID (ej. 3fd13a43...), concepto, proveedor, RFC, monto..."
               value={search}
               onChange={(e) => { setSearch(e.target.value); resetPage(); }}
-              className="w-full pl-8 pr-3 py-2 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-xl text-xs outline-none focus:ring-1 focus:ring-blue-500 text-gray-900 dark:text-white"
+              className="w-full pl-8 pr-3 py-2 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-xl text-xs outline-none focus:ring-1 focus:ring-blue-500 text-gray-900 dark:text-white font-sans"
             />
           </div>
           <div className="flex items-center gap-1.5">
@@ -575,9 +643,10 @@ export default function EgresosTab({
           </thead>
           <tbody className="divide-y divide-gray-100 dark:divide-gray-800/50">
             {visible.map((g) => {
-              const hijos = hijosMap.get(g.id) || [];
+              const cleanGId = getCleanId(g.id);
+              const hijos = hijosMap.get(cleanGId) || [];
               const hasHijos = hijos.length > 0;
-              const isExpanded = !!expandedParents[g.id];
+              const isExpanded = !!expandedParents[cleanGId];
 
               return (
                 <React.Fragment key={g.id}>
@@ -588,20 +657,20 @@ export default function EgresosTab({
                       <div className="flex items-center gap-1.5">
                         {hasHijos && (
                           <button
+                            type="button"
                             onClick={(e) => {
                               e.stopPropagation();
+                              e.preventDefault();
                               toggleParentExpand(g.id);
                             }}
-                            className="p-1 hover:bg-gray-200 dark:hover:bg-gray-800 rounded transition-all text-gray-500 hover:text-indigo-600"
+                            className="p-1 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 rounded transition-all text-indigo-600 dark:text-indigo-400 cursor-pointer"
                             title={isExpanded ? "Contraer parcialidades" : "Mostrar parcialidades"}
                           >
-                            <ChevronRight size={14} className={`transform transition-transform ${isExpanded ? 'rotate-90 text-indigo-500 font-bold' : 'text-gray-400'}`} />
+                            <ChevronRight size={14} className={`transform transition-transform duration-200 ${isExpanded ? 'rotate-90 text-indigo-600 font-bold' : 'text-gray-400'}`} />
                           </button>
                         )}
                         <span>
-                          {g.fecha_timbrado
-                            ? new Date(g.fecha_timbrado).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: '2-digit' })
-                            : new Date(g.fecha_gasto || '').toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: '2-digit' })}
+                          {formatDate(g.fecha_timbrado || g.fecha_gasto)}
                         </span>
                       </div>
                     </td>
@@ -719,6 +788,18 @@ export default function EgresosTab({
                       <div className="font-bold text-red-500 dark:text-red-400 text-sm">
                         -{formatCurrency(g.monto)}
                       </div>
+                      {hasHijos && (() => {
+                        const totalHijos = hijos.reduce((sum, h) => sum + Number(h.monto || 0), 0);
+                        const totalAcumuladoGasto = Number(g.monto || 0) + totalHijos;
+                        return (
+                          <div 
+                            className="text-[10px] font-black text-indigo-700 dark:text-indigo-300 mt-1 bg-indigo-50 dark:bg-indigo-950/40 px-2 py-0.5 rounded-lg border border-indigo-200 dark:border-indigo-800/50 inline-block shadow-2xs" 
+                            title={`Monto Padre: -${formatCurrency(g.monto)} | ${hijos.length} Parcialidad(es): -${formatCurrency(totalHijos)}`}
+                          >
+                            📊 Suma: -{formatCurrency(totalAcumuladoGasto)}
+                          </div>
+                        );
+                      })()}
                       {Number(g.iva_acreditable) > 0 ? (
                         <div className="text-[10px] text-gray-400 mt-0.5">IVA: {formatCurrency(g.iva_acreditable)}</div>
                       ) : g.subtotal && Number(g.monto) > Number(g.subtotal) ? (
@@ -759,9 +840,10 @@ export default function EgresosTab({
                         ))}
                         {g.xml_url && handleViewCfdi && (
                           <button
-                            onClick={() => handleViewCfdi(g.xml_url!.split(',')[0])}
-                            title="Ver representación impresa del XML"
-                            className="p-1.5 bg-indigo-50 dark:bg-indigo-900/20 hover:bg-indigo-100 dark:hover:bg-indigo-900/40 rounded border border-indigo-200 dark:border-indigo-900/50 text-indigo-600 flex items-center gap-0.5"
+                            type="button"
+                            onClick={() => handleViewCfdi(g.xml_url!.split(',')[0].trim())}
+                            title="Ver representación impresa del XML (CFDI)"
+                            className="p-1.5 bg-indigo-50 dark:bg-indigo-900/20 hover:bg-indigo-100 dark:hover:bg-indigo-900/40 rounded border border-indigo-200 dark:border-indigo-900/50 text-indigo-600 flex items-center gap-0.5 cursor-pointer"
                           >
                             <Eye size={13} />
                           </button>
@@ -777,6 +859,17 @@ export default function EgresosTab({
                             {arr.length > 1 && <span className="text-[9px] font-bold">{idx + 1}</span>}
                           </button>
                         ))}
+                        {hasHijos && (g.ticket_url || hijos.some(h => h.ticket_url)) && (
+                          <button
+                            type="button"
+                            onClick={() => handlePropagarTicket(g)}
+                            title="Asignar el mismo ticket de comprobante a la factura principal y a todas sus parcialidades"
+                            className="p-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-lg font-bold text-[9px] flex items-center gap-1 shadow-2xs transition-colors cursor-pointer"
+                          >
+                            <CreditCard size={11} />
+                            <span>Asignar ticket a todos</span>
+                          </button>
+                        )}
                         {!g.xml_url && !g.pdf_url && !g.ticket_url && (
                           <span className="text-[10px] text-gray-300 dark:text-gray-600 italic">Sin archivos</span>
                         )}
@@ -807,7 +900,7 @@ export default function EgresosTab({
                             isOpen: true,
                             childGasto: g,
                             searchParent: '',
-                            parentGastoId: g.gasto_padre_id || null,
+                            selectedParentIds: g.gasto_padre_id ? [g.gasto_padre_id] : [],
                             loading: false
                           })}
                           title="Vincular a Gasto Principal / Parcialidad"
@@ -837,12 +930,10 @@ export default function EgresosTab({
 
                   {/* Renderizar parcialidades/hijos anidados */}
                   {hasHijos && isExpanded && hijos.map(h => (
-                    <tr key={h.id} className="bg-indigo-50/10 dark:bg-indigo-950/5 border-l-4 border-indigo-400 dark:border-indigo-600 transition-colors">
+                    <tr key={h.id} className="bg-indigo-50/20 dark:bg-indigo-950/20 border-l-4 border-indigo-500 transition-colors">
                       {/* Fecha */}
                       <td className="p-3 pl-8 font-mono text-gray-500 dark:text-gray-400 whitespace-nowrap">
-                        {h.fecha_timbrado
-                          ? new Date(h.fecha_timbrado).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: '2-digit' })
-                          : new Date(h.fecha_gasto || '').toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: '2-digit' })}
+                        {formatDate(h.fecha_timbrado || h.fecha_gasto)}
                       </td>
 
                       {/* UUID / Detalle */}
@@ -896,6 +987,16 @@ export default function EgresosTab({
                               {arr.length > 1 && <span className="text-[9px] font-bold">{idx + 1}</span>}
                             </button>
                           ))}
+                          {h.xml_url && handleViewCfdi && (
+                            <button
+                              type="button"
+                              onClick={() => handleViewCfdi(h.xml_url!.split(',')[0].trim())}
+                              title="Ver representación impresa del XML (CFDI)"
+                              className="p-1 bg-indigo-50 dark:bg-indigo-900/20 hover:bg-indigo-100 dark:hover:bg-indigo-900/40 rounded border border-indigo-200 dark:border-indigo-900/50 text-indigo-600 flex items-center gap-0.5 cursor-pointer"
+                            >
+                              <Eye size={12} />
+                            </button>
+                          )}
                           {h.pdf_url && h.pdf_url.split(',').filter(Boolean).map((url, idx, arr) => (
                             <button
                               key={idx}
@@ -907,17 +1008,20 @@ export default function EgresosTab({
                               {arr.length > 1 && <span className="text-[9px] font-bold">{idx + 1}</span>}
                             </button>
                           ))}
-                          {h.ticket_url && h.ticket_url.split(',').filter(Boolean).map((url, idx, arr) => (
+                          {(h.ticket_url || g.ticket_url) && (h.ticket_url || g.ticket_url)!.split(',').filter(Boolean).map((url, idx, arr) => (
                             <button
                               key={idx}
                               onClick={() => onDownloadFile(url)}
-                              title={`Descargar Ticket${arr.length > 1 ? ` ${idx + 1}` : ''}`}
+                              title={h.ticket_url ? `Descargar Ticket${arr.length > 1 ? ` ${idx + 1}` : ''}` : 'Descargar Ticket del Gasto Principal'}
                               className="p-1 bg-amber-50 dark:bg-amber-900/20 hover:bg-amber-100 dark:hover:bg-amber-900/40 rounded border border-amber-200 dark:border-amber-900/50 text-amber-600 flex items-center gap-0.5"
                             >
                               <CreditCard size={12} />
-                              {arr.length > 1 && <span className="text-[9px] font-bold">{idx + 1}</span>}
+                              {!h.ticket_url && g.ticket_url && <span className="text-[8px] font-extrabold text-amber-700 dark:text-amber-300">Padre</span>}
                             </button>
                           ))}
+                          {!h.xml_url && !h.pdf_url && !h.ticket_url && !g.ticket_url && (
+                            <span className="text-[10px] text-gray-300 dark:text-gray-600 italic">Sin archivos</span>
+                          )}
                           <button 
                             onClick={() => setManualModal({isOpen: true, id: h.id})} 
                             className="text-blue-500 hover:text-blue-700 bg-blue-50 dark:bg-blue-900/30 hover:bg-blue-100 dark:hover:bg-blue-900/50 p-1 rounded-lg transition-colors" 
@@ -945,7 +1049,7 @@ export default function EgresosTab({
                               isOpen: true,
                               childGasto: h,
                               searchParent: '',
-                              parentGastoId: h.gasto_padre_id || null,
+                              selectedParentIds: h.gasto_padre_id ? [h.gasto_padre_id] : [],
                               loading: false
                             })}
                             title="Vincular a Gasto Principal / Parcialidad"
@@ -1079,11 +1183,11 @@ export default function EgresosTab({
                   Asociar a Gasto Principal
                 </h3>
                 <p className="text-xs text-gray-500 mt-0.5">
-                  Establece este comprobante/REP como parcialidad de otra factura.
+                  Establece este comprobante/REP como parcialidad o vincula con una o varias facturas.
                 </p>
               </div>
               <button 
-                onClick={() => setAssociationModal({ isOpen: false, childGasto: null, searchParent: '', parentGastoId: null, loading: false })}
+                onClick={() => setAssociationModal({ isOpen: false, childGasto: null, searchParent: '', selectedParentIds: [], loading: false })}
                 className="p-1.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
               >
                 <Plus className="rotate-45" size={18} />
@@ -1106,14 +1210,14 @@ export default function EgresosTab({
                   </div>
                   <div className="text-right">
                     <span className="text-xs font-black text-red-500 dark:text-red-400 block">-{formatCurrency(associationModal.childGasto.monto)}</span>
-                    <span className="text-[10px] text-gray-400 font-mono block mt-0.5">{associationModal.childGasto.fecha_timbrado ? new Date(associationModal.childGasto.fecha_timbrado).toLocaleDateString() : new Date(associationModal.childGasto.fecha_gasto || '').toLocaleDateString()}</span>
+                    <span className="text-[10px] text-gray-400 font-mono block mt-0.5">{formatDate(associationModal.childGasto.fecha_timbrado || associationModal.childGasto.fecha_gasto)}</span>
                   </div>
                 </div>
               </div>
 
               {/* Input de Búsqueda de Padre */}
               <div className="space-y-1.5">
-                <label className="text-[10px] font-extrabold text-gray-500 dark:text-gray-400 uppercase tracking-wider block">Buscar Factura Principal (Padre)</label>
+                <label className="text-[10px] font-extrabold text-gray-500 dark:text-gray-400 uppercase tracking-wider block">Buscar Facturas Principales</label>
                 <div className="relative">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" size={14} />
                   <input
@@ -1126,30 +1230,81 @@ export default function EgresosTab({
                 </div>
               </div>
 
-              {/* Lista de Candidatos */}
+              {/* Lista de Candidatos con Selección Múltiple */}
               <div className="space-y-1.5">
-                <label className="text-[10px] font-extrabold text-gray-500 dark:text-gray-400 uppercase tracking-wider block">Seleccionar del Listado</label>
+                <div className="flex items-center justify-between">
+                  <label className="text-[10px] font-extrabold text-gray-500 dark:text-gray-400 uppercase tracking-wider block">
+                    Seleccionar del Listado (Selección Múltiple)
+                  </label>
+                  {parentCandidates.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAssociationModal(prev => {
+                          const visIds = parentCandidates.map(c => c.id);
+                          const allChecked = visIds.every(id => prev.selectedParentIds.includes(id));
+                          return {
+                            ...prev,
+                            selectedParentIds: allChecked
+                              ? prev.selectedParentIds.filter(id => !visIds.includes(id))
+                              : Array.from(new Set([...prev.selectedParentIds, ...visIds]))
+                          };
+                        });
+                      }}
+                      className="text-[10px] text-indigo-600 dark:text-indigo-400 font-bold hover:underline"
+                    >
+                      {parentCandidates.every(c => associationModal.selectedParentIds.includes(c.id)) ? 'Desmarcar visibles' : 'Seleccionar visibles'}
+                    </button>
+                  )}
+                </div>
+
+                {associationModal.selectedParentIds.length > 0 && (() => {
+                  const selectedGastos = gastosFacturados.filter(g => associationModal.selectedParentIds.includes(g.id));
+                  const totalSum = selectedGastos.reduce((s, g) => s + Number(g.monto || 0), 0);
+                  return (
+                    <div className="p-2.5 bg-indigo-50 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800/50 rounded-xl flex justify-between items-center text-xs font-semibold text-indigo-900 dark:text-indigo-300">
+                      <span>Seleccionados ({associationModal.selectedParentIds.length} facturas):</span>
+                      <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400">
+                        -{formatCurrency(totalSum)}
+                      </span>
+                    </div>
+                  );
+                })()}
+
                 <div className="border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden max-h-[220px] overflow-y-auto divide-y divide-gray-100 dark:divide-gray-850">
                   {parentCandidates.map(p => {
-                    const isSelected = associationModal.parentGastoId === p.id;
+                    const isSelected = associationModal.selectedParentIds.includes(p.id);
                     return (
                       <div
                         key={p.id}
-                        onClick={() => setAssociationModal(prev => ({ ...prev, parentGastoId: p.id }))}
+                        onClick={() => setAssociationModal(prev => {
+                          const sel = [...prev.selectedParentIds];
+                          const idx = sel.indexOf(p.id);
+                          idx > -1 ? sel.splice(idx, 1) : sel.push(p.id);
+                          return { ...prev, selectedParentIds: sel };
+                        })}
                         className={`p-3 text-xs flex justify-between items-center cursor-pointer transition-colors ${
                           isSelected 
-                            ? 'bg-indigo-50/50 dark:bg-indigo-950/20 border-l-2 border-indigo-500 font-bold' 
+                            ? 'bg-indigo-50/70 dark:bg-indigo-950/30 border-l-4 border-indigo-500 font-bold' 
                             : 'hover:bg-gray-50 dark:hover:bg-gray-900/40'
                         }`}
                       >
-                        <div className="space-y-0.5 max-w-[70%]">
-                          <p className="text-gray-800 dark:text-gray-200 truncate">{p.concepto}</p>
-                          <p className="text-[10px] text-gray-400 truncate font-mono">UUID: {p.uuid_fiscal?.substring(0, 8)}...</p>
-                          <p className="text-[10px] text-gray-500 font-semibold">{p.proveedores?.nombre_comercial}</p>
+                        <div className="flex items-center gap-3 max-w-[70%] min-w-0">
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => {}} // Manejado por onClick del row
+                            className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 border-gray-300 dark:border-gray-700 cursor-pointer shrink-0"
+                          />
+                          <div className="space-y-0.5 min-w-0">
+                            <p className="text-gray-800 dark:text-gray-200 truncate font-semibold">{p.concepto}</p>
+                            <p className="text-[10px] text-gray-400 truncate font-mono">UUID: {p.uuid_fiscal ? `${p.uuid_fiscal.substring(0, 13)}...` : 'Sin UUID'}</p>
+                            <p className="text-[10px] text-gray-500 font-semibold">{p.proveedores?.nombre_comercial}</p>
+                          </div>
                         </div>
-                        <div className="text-right">
+                        <div className="text-right shrink-0">
                           <p className="font-black text-gray-955 dark:text-white">-{formatCurrency(p.monto)}</p>
-                          <p className="text-[10px] text-gray-400 font-mono">{p.fecha_timbrado ? new Date(p.fecha_timbrado).toLocaleDateString() : new Date(p.fecha_gasto || '').toLocaleDateString()}</p>
+                          <p className="text-[10px] text-gray-400 font-mono">{formatDate(p.fecha_timbrado || p.fecha_gasto)}</p>
                         </div>
                       </div>
                     );
@@ -1179,7 +1334,7 @@ export default function EgresosTab({
               <div className="flex gap-2">
                 <button
                   type="button"
-                  onClick={() => setAssociationModal({ isOpen: false, childGasto: null, searchParent: '', parentGastoId: null, loading: false })}
+                  onClick={() => setAssociationModal({ isOpen: false, childGasto: null, searchParent: '', selectedParentIds: [], loading: false })}
                   disabled={associationModal.loading}
                   className="px-4 py-2 rounded-xl text-xs font-bold text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors disabled:opacity-50"
                 >
@@ -1188,10 +1343,12 @@ export default function EgresosTab({
                 <button
                   type="button"
                   onClick={handleSaveAssociation}
-                  disabled={associationModal.loading || !associationModal.parentGastoId}
+                  disabled={associationModal.loading || associationModal.selectedParentIds.length === 0}
                   className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white px-5 py-2 rounded-xl text-xs font-bold shadow-md transition-colors flex items-center gap-1.5"
                 >
-                  {associationModal.loading ? 'Guardando...' : 'Confirmar Asociación'}
+                  {associationModal.loading 
+                    ? 'Guardando...' 
+                    : `Confirmar Asociación (${associationModal.selectedParentIds.length})`}
                 </button>
               </div>
             </div>

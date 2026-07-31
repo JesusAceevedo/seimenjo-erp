@@ -63,7 +63,7 @@ export default function ConfigPage() {
   const [departamentos, setDepartamentos] = useState<any[]>([]);
   const [puestos, setPuestos] = useState<any[]>([]);
   const [nuevoDept, setNuevoDept] = useState({ nombre: '', descripcion: '' });
-  const [nuevoPuesto, setNuevoPuesto] = useState({ nombre: '', salario_diario_base: 250, puntos_propina: 1.00, departamento_id: '' });
+  const [nuevoPuesto, setNuevoPuesto] = useState({ nombre: '', salario_mensual_base: 7500, salario_diario_base: 250, puntos_propina: 1.00, departamento_id: '' });
 
 
   // --- ESTADOS DE SUPERUSUARIO ---
@@ -374,7 +374,7 @@ export default function ConfigPage() {
     try {
       const { error } = await supabase
         .from('cierres_mensuales')
-        .update({ estatus: nuevoEstatus, updated_at: new Date().toISOString() })
+        .update({ estatus: nuevoEstatus, actualizado_en: new Date().toISOString() })
         .eq('id', cierreId);
       if (error) throw error;
       setPeriodoMensaje({ text: `Periodo ${mes} actualizado a "${nuevoEstatus}".`, type: 'success' });
@@ -1552,13 +1552,36 @@ export default function ConfigPage() {
                       <option key={d.id} value={d.id}>{d.nombre}</option>
                     ))}
                   </select>
-                  <input
-                    type="number"
-                    placeholder="Sueldo Diario Base ($)"
-                    value={nuevoPuesto.salario_diario_base}
-                    className="bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-xl text-sm focus:ring-1 focus:ring-amber-500 outline-none text-gray-900 dark:text-white"
-                    onChange={e => setNuevoPuesto({ ...nuevoPuesto, salario_diario_base: Number(e.target.value) })}
-                  />
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[9px] font-bold text-amber-600 dark:text-amber-400 uppercase mb-1">Salario Mensual Base ($)</label>
+                      <input
+                        type="number"
+                        placeholder="Salario Mensual Base ($)"
+                        value={nuevoPuesto.salario_mensual_base}
+                        className="w-full bg-gray-50 dark:bg-gray-900 border border-amber-300 dark:border-amber-700/60 p-2 rounded-xl text-xs font-bold text-amber-700 dark:text-amber-300 focus:ring-1 focus:ring-amber-500 outline-none"
+                        onChange={e => {
+                          const valMensual = Number(e.target.value);
+                          const valDiario = Math.round((valMensual / 30) * 100) / 100;
+                          setNuevoPuesto({ ...nuevoPuesto, salario_mensual_base: valMensual, salario_diario_base: valDiario });
+                        }}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[9px] font-bold text-gray-500 uppercase mb-1">Sueldo Diario Base (÷ 30)</label>
+                      <input
+                        type="number"
+                        placeholder="Sueldo Diario Base ($)"
+                        value={nuevoPuesto.salario_diario_base}
+                        className="w-full bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-xl text-xs focus:ring-1 focus:ring-amber-500 outline-none text-gray-900 dark:text-white"
+                        onChange={e => {
+                          const valDiario = Number(e.target.value);
+                          const valMensual = Math.round((valDiario * 30) * 100) / 100;
+                          setNuevoPuesto({ ...nuevoPuesto, salario_diario_base: valDiario, salario_mensual_base: valMensual });
+                        }}
+                      />
+                    </div>
+                  </div>
                   <input
                     type="number"
                     step="0.1"
@@ -1569,7 +1592,7 @@ export default function ConfigPage() {
                   />
                 </div>
                 <button
-                  onClick={() => handleSaveItem('puestos_trabajo', { nombre: nuevoPuesto.nombre, salario_diario_base: nuevoPuesto.salario_diario_base, puntos_propina: nuevoPuesto.puntos_propina, departamento_id: nuevoPuesto.departamento_id || null }, setPuestos, 'nombre', () => setNuevoPuesto({ nombre: '', salario_diario_base: 250, puntos_propina: 1, departamento_id: '' }))}
+                  onClick={() => handleSaveItem('puestos_trabajo', { nombre: nuevoPuesto.nombre, salario_diario_base: nuevoPuesto.salario_diario_base, puntos_propina: nuevoPuesto.puntos_propina, departamento_id: nuevoPuesto.departamento_id || null }, setPuestos, 'nombre', () => setNuevoPuesto({ nombre: '', salario_mensual_base: 7500, salario_diario_base: 250, puntos_propina: 1, departamento_id: '' }))}
                   className="w-full bg-amber-600 hover:bg-amber-500 text-white py-2.5 rounded-xl font-bold text-sm transition-colors flex items-center justify-center gap-1 shadow-sm font-sans"
                 >
                   <Plus size={16} /> Agregar Puesto de Trabajo
@@ -1580,7 +1603,7 @@ export default function ConfigPage() {
                     <thead>
                       <tr className="bg-gray-100/60 dark:bg-gray-900/40 p-3 border-b border-gray-200 dark:border-gray-800 font-semibold text-gray-500">
                         <th className="p-3">Puesto</th>
-                        <th className="p-3">Sueldo Diario</th>
+                        <th className="p-3">Sueldo Base (Mensual / Diario)</th>
                         <th className="p-3">Ptos Propina</th>
                         <th className="p-3 text-right">Acción</th>
                       </tr>
@@ -1589,7 +1612,10 @@ export default function ConfigPage() {
                       {puestos.map((p: any) => (
                         <tr key={p.id} className="hover:bg-gray-50 dark:hover:bg-gray-900/10">
                           <td className="p-3 font-semibold text-gray-800 dark:text-gray-200">{p.nombre}</td>
-                          <td className="p-3 text-emerald-600 dark:text-emerald-400 font-bold">${p.salario_diario_base}</td>
+                          <td className="p-3 font-bold">
+                            <span className="text-emerald-600 dark:text-emerald-400">${((p.salario_diario_base || 0) * 30).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}/mes</span>
+                            <span className="text-[10px] text-gray-400 block">${p.salario_diario_base}/día</span>
+                          </td>
                           <td className="p-3 text-gray-500 font-bold">{p.puntos_propina} pts</td>
                           <td className="p-3 text-right">
                             <button

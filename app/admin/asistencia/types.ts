@@ -8,6 +8,7 @@ export interface Puesto {
   id: string;
   nombre: string;
   salario_diario_base: number;
+  salario_mensual_base?: number;
   puntos_propina: number;
   departamento_id?: string;
   departamentos?: { nombre: string };
@@ -35,8 +36,10 @@ export interface EmpleadoDetalle {
   banco: string;
   cuenta_clabe: string;
   sueldo_diario: number;
+  sueldo_mensual?: number;
   salario_diario_integrado: number;
   zkteco_user_id: string;
+  exento_reloj_checador?: boolean;
   tipo_contrato: string;
   fecha_ingreso: string;
   fecha_antiguedad?: string;
