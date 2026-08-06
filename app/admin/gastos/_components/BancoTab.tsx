@@ -1495,12 +1495,12 @@ export default function BancoTab({
                                              {isVentanilla ? 'Ventanilla' : 'Tarjeta'}
                                            </span>
                                            <span className="font-bold truncate">{c.descripcion || 'Ficha de Depósito'}</span>
+                                           <span className="font-mono font-black text-emerald-600 dark:text-emerald-400">
+                                              {formatCurrency(rel?.monto_asociado || c.monto)}
+                                            </span>
                                            <span className="font-mono text-[9px] text-gray-400">({new Date(c.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })})</span>
                                          </div>
                                          <div className="flex items-center gap-1.5 shrink-0">
-                                           <span className="font-mono font-black text-emerald-600 dark:text-emerald-400">
-                                             {formatCurrency(rel?.monto_asociado || c.monto)}
-                                           </span>
                                            {c.archivo_url && (
                                              <button
                                                type="button"
@@ -2285,7 +2285,14 @@ export default function BancoTab({
                               propinaDebito: '',
                               propinaCredito: '',
                               montoAmex: '',
-                              propinaAmex: ''
+                              propinaAmex: '',
+                              montoEfectivo: '',
+                              propinaEfectivo: '',
+                              montoParrotpay: '',
+                              propinaParrotpay: '',
+                              comisionTransacciones: '',
+                              ivaTransacciones: '',
+                              otrosCargos: ''
                             });
                           }}
                           className="w-full mb-2 py-2 border border-gray-300 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300 rounded-lg text-xs font-bold transition-all shadow-sm"
@@ -2691,7 +2698,10 @@ export default function BancoTab({
                                             montoEfectivo: String(c.monto_efectivo || ''),
                                             propinaEfectivo: String(c.propina_efectivo || ''),
                                             montoParrotpay: String(c.monto_parrotpay || ''),
-                                            propinaParrotpay: String(c.propina_parrotpay || '')
+                                            propinaParrotpay: String(c.propina_parrotpay || ''),
+                                            comisionTransacciones: String(c.comision_transacciones || ''),
+                                            ivaTransacciones: String(c.iva_transacciones || ''),
+                                            otrosCargos: String(c.otros_cargos || '')
                                           });
                                         }}
                                         className="p-1 text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-955/20 rounded font-bold text-[10px] flex items-center gap-0.5"
@@ -4911,7 +4921,7 @@ export default function BancoTab({
                     disabled={linkingBatch}
                     onClick={async () => {
                       const ids = Array.from(selectedLinkMovIds);
-                      const selectedMovObjs = ids.map(id => availableMovs.find(x => x.id === id)).filter(Boolean);
+                      const selectedMovObjs = ids.map(id => availableMovs.find(x => x.id === id)).filter((m): m is NonNullable<typeof m> => !!m);
                       const selectedSum = selectedMovObjs.reduce((acc, m) => acc + Number(m.deposito || m.monto || 0), 0);
                       const totalSum = movsSum + selectedSum;
                       const dif = Number(currentCompToLink.monto) - totalSum;

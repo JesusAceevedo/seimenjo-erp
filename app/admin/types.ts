@@ -180,9 +180,16 @@ export interface VentaFacturada {
   folio_factura?: string | null;
   precio_total: number;
   cliente_nombre?: string;
+  cliente_id?: string;
   fecha_pedido?: string;
   estatus_pago?: string;
-  clientes?: { nombre_local: string; rfc: string; email_facturacion?: string };
+  clientes?: {
+    nombre_local: string;
+    rfc: string;
+    email_facturacion?: string;
+    facturar_publico_general?: boolean;
+    es_anonimo?: boolean;
+  };
   facturas_clientes?: {
     uuid_fiscal?: string;
     xml_url?: string;
@@ -306,4 +313,7 @@ export interface ComprobanteDeposito {
   monto_parrotpay?: number;
   propina_efectivo?: number;
   propina_parrotpay?: number;
+  comision_transacciones?: number;
+  iva_transacciones?: number;
+  otros_cargos?: number;
 }

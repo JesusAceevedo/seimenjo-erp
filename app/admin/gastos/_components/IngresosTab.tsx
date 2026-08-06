@@ -274,7 +274,8 @@ export default function IngresosTab({
                 con_xml: true,
                 sin_xml: true,
                 con_ticket: true,
-                sin_ticket: true
+                sin_ticket: true,
+                solo_pg: false
               });
               resetPage();
             }}

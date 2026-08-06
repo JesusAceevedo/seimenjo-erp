@@ -68,9 +68,16 @@ interface VentaFacturada {
   numero_pedido: string;
   precio_total: number;
   cliente_nombre?: string;
+  cliente_id?: string;
   fecha_pedido?: string;
   estatus_pago?: string;
-  clientes?: { nombre_local: string; rfc: string; email_facturacion?: string };
+  clientes?: {
+    nombre_local: string;
+    rfc: string;
+    email_facturacion?: string;
+    facturar_publico_general?: boolean;
+    es_anonimo?: boolean;
+  };
   facturas_clientes?: { 
     uuid_fiscal?: string; 
     xml_url?: string; 
@@ -391,7 +398,7 @@ export default function AdvancedBillingModule() {
         .or('estatus_pago.is.null,estatus_pago.neq.Cancelado')
         .order('creado_en', { ascending: false });
 
-      const { data: fIngresosSueltas } = await supabase
+      const { data: fIngresosSueltasPend } = await supabase
         .from('facturas_clientes')
         .select('*, clientes(nombre_local, rfc)')
         .eq('empresa_id', empresaId)
@@ -414,7 +421,7 @@ export default function AdvancedBillingModule() {
         };
       });
 
-      const sueltasMapped = (fIngresosSueltas || []).map((f: any) => ({
+      const sueltasMapped = (fIngresosSueltasPend || []).map((f: any) => ({
         id: f.id,
         numero_pedido: '',
         folio_factura: f.serie_folio || (f.uuid_fiscal ? `UUID:${f.uuid_fiscal.substring(0, 8)}` : 'Factura XML'),
