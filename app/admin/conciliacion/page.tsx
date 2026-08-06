@@ -10,6 +10,7 @@ import { useThemeMode } from '../../../lib/useThemeMode';
 import { usePeriod } from '../../../lib/hooks/usePeriod';
 import { useEmpresaId } from '../../../lib/hooks/useEmpresaId';
 import { useSessionToken } from '../../../lib/hooks/useSessionToken';
+import { EditMovimientoModal } from '../gastos/_components/EditModals';
 import {
   obtenerSignedUrl,
 } from '../gastos/actions';
@@ -30,7 +31,8 @@ import {
   vincularComprobanteAMovimiento,
   desvincularComprobanteDeMovimiento,
   obtenerComprobantesDeposito,
-  fusionarMovimientosReembolso
+  fusionarMovimientosReembolso,
+  resyncAllCajaChicaComprobantesAction
 } from '../gastos/reconciliationActions';
 import { ComprobanteDeposito } from '../types';
 import {
@@ -71,6 +73,8 @@ export default function BankReconciliationModule() {
   const [gastosReconciliables, setGastosReconciliables] = useState<any[]>([]);
   const [selectedGlobalDepositId, setSelectedGlobalDepositId] = useState<string | null>(null);
   const [selectedGlobalPedidosIds, setSelectedGlobalPedidosIds] = useState<string[]>([]);
+  const [editingMovimiento, setEditingMovimiento] = useState<any>(null);
+  const [editMovimientoToken, setEditMovimientoToken] = useState<string>('');
   const [showMigrationBanner, setShowMigrationBanner] = useState<boolean>(false);
   const [comprobantes, setComprobantes] = useState<ComprobanteDeposito[]>([]);
 
@@ -280,15 +284,51 @@ export default function BankReconciliationModule() {
         .order('nombre', { ascending: true });
       setCategoriasMovimiento(catMovs || []);
 
-      // 6. Pedidos pendientes
+      // 6. Pedidos y Facturas de ingresos pendientes de conciliar
       const { data: pPend } = await supabase
         .from('pedidos')
-        .select('id, numero_pedido, precio_total, cliente_nombre, fecha_pedido')
+        .select('*, clientes(nombre_local, rfc), facturas_clientes(*)')
         .eq('empresa_id', empresaId)
-        .is('folio_factura', null)
-        .eq('estatus_pago', 'Liquidado')
+        .is('movimiento_bancario_id', null)
+        .or('estatus_pago.is.null,estatus_pago.neq.Cancelado')
         .order('creado_en', { ascending: false });
-      setPedidosPendientes(pPend || []);
+
+      const { data: fIngresosSueltas } = await supabase
+        .from('facturas_clientes')
+        .select('*, clientes(nombre_local, rfc)')
+        .eq('empresa_id', empresaId)
+        .is('pedido_id', null)
+        .is('movimiento_bancario_id', null)
+        .order('fecha_emision', { ascending: false });
+
+      const pedidosMapped = (pPend || []).map((p: any) => {
+        const fcList = p.facturas_clientes;
+        const fc = Array.isArray(fcList) ? fcList[0] : fcList;
+        return {
+          id: p.id,
+          numero_pedido: p.numero_pedido || '',
+          folio_factura: p.folio_factura || fc?.serie_folio || (fc?.uuid_fiscal ? `UUID:${fc.uuid_fiscal.substring(0, 8)}` : ''),
+          precio_total: Number(fc?.total || p.precio_total || 0),
+          cliente_nombre: p.cliente_nombre || p.clientes?.nombre_local || fc?.razon_social_receptor || '',
+          fecha_pedido: p.fecha_pedido || fc?.fecha_emision || p.creado_en,
+          metodo_pago: p.metodo_pago || fc?.metodo_pago || '',
+          uuid_fiscal: p.uuid_fiscal || fc?.uuid_fiscal || ''
+        };
+      });
+
+      const sueltasMapped = (fIngresosSueltas || []).map((f: any) => ({
+        id: f.id,
+        numero_pedido: '',
+        folio_factura: f.serie_folio || (f.uuid_fiscal ? `UUID:${f.uuid_fiscal.substring(0, 8)}` : 'Factura XML'),
+        precio_total: Number(f.total || 0),
+        cliente_nombre: f.clientes?.nombre_local || f.razon_social_receptor || '',
+        fecha_pedido: f.fecha_emision,
+        metodo_pago: f.metodo_pago || '',
+        uuid_fiscal: f.uuid_fiscal || '',
+        _esFacturaSuelta: true
+      }));
+
+      setPedidosPendientes([...pedidosMapped, ...sueltasMapped]);
 
       // 7. Gastos reconciliables
       const { data: gReconcile } = await supabase
@@ -330,6 +370,7 @@ export default function BankReconciliationModule() {
         }
       } else {
         setComprobantes(compData || []);
+        resyncAllCajaChicaComprobantesAction(empresaId).catch(console.error);
       }
 
     } catch (err: any) {
@@ -981,49 +1022,170 @@ export default function BankReconciliationModule() {
 
   // --- CÁLCULO DE SALDOS E INGRESOS/EGRESOS POR CUENTA ---
   const getAccountStats = (cuenta: any) => {
+    const isCajaChica = cuenta.nombre.toUpperCase().includes('CAJA CHICA');
+
+    if (isCajaChica) {
+      const comprobantesMes = comprobantes.filter(c => {
+        const mes = c.fecha ? c.fecha.substring(0, 7) : '';
+        return (!selectedMonth || mes === selectedMonth) && c.tipo !== 'deposito_ventanilla';
+      });
+
+      const ingresosBase = comprobantesMes.reduce((sum, c) => sum + Number(c.monto_efectivo || 0), 0);
+      const ingresosPropinas = comprobantesMes.reduce((sum, c) => sum + Number(c.propina_efectivo || 0), 0);
+      const ingresos = ingresosBase + ingresosPropinas;
+
+      const cuentaMovs = movimientos.filter(m => m.cuenta_bancaria_id === cuenta.id);
+      const movsDelMes = cuentaMovs.filter(m => {
+        const mes = m.mes_conciliacion || (m.fecha ? m.fecha.substring(0, 7) : '');
+        return !selectedMonth || mes === selectedMonth;
+      });
+
+      let egresos = 0;
+
+      movsDelMes.forEach(m => {
+        const val = Number(m.monto) || 0;
+        const isTraspaso = m.categorias_movimiento_bancario?.nombre?.toLowerCase().includes('traspaso') ||
+                            m.categorias_movimiento_bancario?.nombre?.toLowerCase().includes('traspazo');
+        if (isTraspaso) return;
+
+        if (val < 0) {
+          egresos += Math.abs(val);
+        }
+      });
+
+      const saldoInicial = Number(cuenta.saldo_inicial || 0);
+      const saldoActual = saldoInicial + ingresos - egresos;
+
+      return {
+        saldoInicial,
+        ingresos,
+        ingresosBase,
+        ingresosPropinas,
+        egresos,
+        saldoActual
+      };
+    }
+
+    const isBBVA = cuenta.nombre.toUpperCase().includes('BBVA');
+    if (isBBVA) {
+      const comprobantesMes = comprobantes.filter(c => {
+        const mes = c.fecha ? c.fecha.substring(0, 7) : '';
+        if (selectedMonth && mes !== selectedMonth) return false;
+        if (c.tipo === 'deposito_ventanilla') return false;
+        if (c.cuenta_bancaria_id && c.cuenta_bancaria_id !== cuenta.id) return false;
+        if (c.tipo === 'corte_parrot') return false;
+        return true;
+      });
+
+      const ingresosBase = comprobantesMes.reduce((sum, c) => {
+        return sum + Number(c.monto_debito || 0) + Number(c.monto_credito || 0) + Number(c.monto_amex || 0);
+      }, 0);
+
+      const ingresosPropinas = comprobantesMes.reduce((sum, c) => {
+        return sum + Number(c.propina_debito || 0) + Number(c.propina_credito || 0) + Number(c.propina_amex || 0);
+      }, 0);
+
+      const ingresos = ingresosBase + ingresosPropinas;
+
+      const cuentaMovs = movimientos.filter(m => m.cuenta_bancaria_id === cuenta.id);
+      const movsDelMes = cuentaMovs.filter(m => {
+        const mes = m.mes_conciliacion || (m.fecha ? m.fecha.substring(0, 7) : '');
+        return !selectedMonth || mes === selectedMonth;
+      });
+
+      let egresos = 0;
+
+      movsDelMes.forEach(m => {
+        const val = Number(m.monto) || 0;
+        const isTraspaso = m.categorias_movimiento_bancario?.nombre?.toLowerCase().includes('traspaso') ||
+                            m.categorias_movimiento_bancario?.nombre?.toLowerCase().includes('traspazo');
+        if (isTraspaso) return;
+
+        if (val < 0) {
+          egresos += Math.abs(val);
+        }
+      });
+
+      const saldoInicial = Number(cuenta.saldo_inicial || 0);
+      const saldoActual = saldoInicial + ingresos - egresos;
+
+      return {
+        saldoInicial,
+        ingresos,
+        ingresosBase,
+        ingresosPropinas,
+        egresos,
+        saldoActual
+      };
+    }
+
+    const isParrot = cuenta.nombre.toUpperCase().includes('PARROT');
+    if (isParrot) {
+      const comprobantesMes = comprobantes.filter(c => {
+        const mes = c.fecha ? c.fecha.substring(0, 7) : '';
+        if (selectedMonth && mes !== selectedMonth) return false;
+        if (c.tipo === 'deposito_ventanilla') return false;
+        return true;
+      });
+
+      const ingresosBase = comprobantesMes.reduce((sum, c) => sum + Number(c.monto_parrotpay || 0), 0);
+      const ingresosPropinas = comprobantesMes.reduce((sum, c) => sum + Number(c.propina_parrotpay || 0), 0);
+      const ingresos = ingresosBase + ingresosPropinas;
+
+      const cuentaMovs = movimientos.filter(m => m.cuenta_bancaria_id === cuenta.id);
+      const movsDelMes = cuentaMovs.filter(m => {
+        const mes = m.mes_conciliacion || (m.fecha ? m.fecha.substring(0, 7) : '');
+        return !selectedMonth || mes === selectedMonth;
+      });
+
+      let egresos = 0;
+
+      movsDelMes.forEach(m => {
+        const val = Number(m.monto) || 0;
+        if (val < 0) {
+          egresos += Math.abs(val);
+        }
+      });
+
+      const saldoInicial = Number(cuenta.saldo_inicial || 0);
+      const saldoActual = saldoInicial + ingresos - egresos;
+
+      return {
+        saldoInicial,
+        ingresos,
+        ingresosBase,
+        ingresosPropinas,
+        egresos,
+        saldoActual
+      };
+    }
+
     const cuentaMovs = movimientos.filter(m => m.cuenta_bancaria_id === cuenta.id);
     const movsDelMes = cuentaMovs.filter(m => {
       const mes = m.mes_conciliacion || (m.fecha ? m.fecha.substring(0, 7) : '');
-      return mes === selectedMonth;
+      return !selectedMonth || mes === selectedMonth;
     });
 
-    const isCajaChica = cuenta.nombre.toUpperCase().includes('CAJA CHICA');
     let ingresos = 0;
     let egresos = 0;
 
     movsDelMes.forEach(m => {
       const val = Number(m.monto) || 0;
-      
-      const isTraspaso = m.categorias_movimiento_bancario?.nombre?.toLowerCase().includes('traspaso') ||
-                          m.categorias_movimiento_bancario?.nombre?.toLowerCase().includes('traspazo');
-      if (isCajaChica && isTraspaso) {
-        return; // Omitir traspasos en Caja Chica
-      }
-
-      if (isCajaChica) {
-        // En Caja Chica, los retiros se suman (se consideran ingresos)
-        if (val < 0) {
-          ingresos += Math.abs(val);
-        } else {
-          ingresos += val;
-        }
-      } else {
-        if (val > 0) {
-          ingresos += val;
-        } else {
-          egresos += Math.abs(val);
-        }
+      if (val > 0) {
+        ingresos += val;
+      } else if (val < 0) {
+        egresos += Math.abs(val);
       }
     });
 
     const saldoInicial = Number(cuenta.saldo_inicial || 0);
-    const saldoActual = isCajaChica 
-      ? (saldoInicial + ingresos) 
-      : (saldoInicial + ingresos - egresos);
+    const saldoActual = saldoInicial + ingresos - egresos;
 
     return {
       saldoInicial,
       ingresos,
+      ingresosBase: ingresos,
+      ingresosPropinas: 0,
       egresos,
       saldoActual
     };
@@ -1032,6 +1194,8 @@ export default function BankReconciliationModule() {
   const getGeneralStats = () => {
     let totalSaldoInicial = 0;
     let totalIngresos = 0;
+    let totalIngresosBase = 0;
+    let totalIngresosPropinas = 0;
     let totalEgresos = 0;
     let totalSaldoActual = 0;
 
@@ -1039,6 +1203,8 @@ export default function BankReconciliationModule() {
       const stats = getAccountStats(cuenta);
       totalSaldoInicial += stats.saldoInicial;
       totalIngresos += stats.ingresos;
+      totalIngresosBase += stats.ingresosBase || 0;
+      totalIngresosPropinas += stats.ingresosPropinas || 0;
       totalEgresos += stats.egresos;
       totalSaldoActual += stats.saldoActual;
     });
@@ -1046,9 +1212,320 @@ export default function BankReconciliationModule() {
     return {
       saldoInicial: totalSaldoInicial,
       ingresos: totalIngresos,
+      ingresosBase: totalIngresosBase,
+      ingresosPropinas: totalIngresosPropinas,
       egresos: totalEgresos,
       saldoActual: totalSaldoActual
     };
+  };
+
+  const isCompCuadrado = (c: any) => {
+    const sumAsoc = (c.comprobantes_deposito_movimientos || []).reduce((acc: number, rel: any) => acc + Number(rel.monto_asociado || 0), 0);
+    return Math.abs(Number(c.monto || 0) - sumAsoc) < 0.05;
+  };
+
+  const formatTicketMovimientosAsignados = (c: any, movsAll: any[]) => {
+    const links = c.comprobantes_deposito_movimientos || [];
+    if (links.length === 0) {
+      return {
+        montoAsociado: 0,
+        diferencia: Number(c.monto || 0),
+        estatus: 'Pendiente',
+        movsText: 'Sin movimientos asignados',
+        refsText: '-'
+      };
+    }
+
+    const sumAsoc = links.reduce((sum: number, rel: any) => sum + Number(rel.monto_asociado || 0), 0);
+    const isFully = Math.abs(Number(c.monto || 0) - sumAsoc) < 0.05;
+    const diff = Number(c.monto || 0) - sumAsoc;
+
+    const movsDescList: string[] = [];
+    const refsList: string[] = [];
+
+    links.forEach((rel: any) => {
+      const m = rel.movimientos_bancarios || movsAll.find((item: any) => item.id === rel.movimiento_id);
+      const fecha = m?.fecha ? new Date(m.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : '';
+      const concepto = m?.concepto || 'Movimiento Bancario';
+      const ref = m?.referencia || '';
+      const montoAsoc = Number(rel.monto_asociado || 0);
+
+      movsDescList.push(`${fecha} - ${concepto} ($${montoAsoc.toFixed(2)})`);
+      if (ref) refsList.push(ref);
+    });
+
+    return {
+      montoAsociado: sumAsoc,
+      diferencia: Math.max(0, diff),
+      estatus: isFully ? 'Conciliado' : 'Conciliado Parcial',
+      movsText: movsDescList.join(' | '),
+      refsText: refsList.join(', ') || '-'
+    };
+  };
+
+  // --- EXPORTACIÓN A EXCEL SEPARADA PARA INGRESOS Y EGRESOS POR BANCO ---
+  const getIngresosRowsForCuenta = (cuenta: any) => {
+    const isCajaChica = cuenta.nombre?.toUpperCase().includes('CAJA CHICA');
+    const isParrotPay = cuenta.nombre?.toUpperCase().includes('PARROT');
+    const isBBVA = cuenta.nombre?.toUpperCase().includes('BBVA');
+
+    const cuentaMovs = movimientos.filter(m => m.cuenta_bancaria_id === cuenta.id);
+    const movsDelMes = cuentaMovs.filter(m => {
+      const mes = m.mes_conciliacion || (m.fecha ? m.fecha.substring(0, 7) : '');
+      return !selectedMonth || mes === selectedMonth;
+    });
+
+    const comprobantesMes = comprobantes.filter(c => {
+      const mes = c.fecha ? c.fecha.substring(0, 7) : '';
+      if (selectedMonth && mes !== selectedMonth) return false;
+
+      // Si el comprobante ya está asignado explícitamente a otra cuenta (ej: Parrot)
+      if (c.cuenta_bancaria_id && c.cuenta_bancaria_id !== cuenta.id) {
+        if (isCajaChica && (Number(c.monto_efectivo || 0) > 0 || Number(c.propina_efectivo || 0) > 0)) return true;
+        return false;
+      }
+
+      if (c.cuenta_bancaria_id === cuenta.id) return true;
+      if (isCajaChica && (Number(c.monto_efectivo || 0) > 0 || Number(c.propina_efectivo || 0) > 0)) return true;
+      if (isParrotPay && (Number(c.monto_parrotpay || 0) > 0 || Number(c.propina_parrotpay || 0) > 0 || c.tipo === 'corte_parrot')) return true;
+
+      if (isBBVA) {
+        if (c.tipo === 'corte_parrot') return false;
+        const tarjetaTotalBBVA = Number(c.monto_debito || 0) + Number(c.propina_debito || 0) + Number(c.monto_credito || 0) + Number(c.propina_credito || 0) + Number(c.monto_amex || 0) + Number(c.propina_amex || 0);
+        if (tarjetaTotalBBVA > 0 || c.tipo === 'corte_bbva') return true;
+      }
+
+      return false;
+    });
+
+    const rows: any[] = [];
+
+    // 1. TICKETS Y COMPROBANTES DE INGRESO
+    comprobantesMes.forEach(c => {
+      if (isCajaChica && c.tipo === 'deposito_ventanilla') return;
+
+      let targetAmountTotal = Number(c.monto || 0);
+      let targetAmountBase = Number(c.monto || 0);
+      let targetAmountPropina = 0;
+      let tipoDesc = c.tipo === 'deposito_ventanilla' ? 'Depósito Ventanilla' : 'Ticket / Corte POS';
+
+      if (isCajaChica) {
+        targetAmountBase = Number(c.monto_efectivo || 0);
+        targetAmountPropina = Number(c.propina_efectivo || 0);
+        targetAmountTotal = targetAmountBase + targetAmountPropina;
+        tipoDesc = 'Venta Efectivo (Parrot/POS)';
+      } else if (isParrotPay) {
+        targetAmountBase = Number(c.monto_parrotpay || 0);
+        targetAmountPropina = Number(c.propina_parrotpay || 0);
+        targetAmountTotal = targetAmountBase + targetAmountPropina;
+        tipoDesc = 'Venta ParrotPay (POS)';
+      } else if (isBBVA && c.tipo !== 'deposito_ventanilla') {
+        targetAmountBase = Number(c.monto_debito || 0) + Number(c.monto_credito || 0) + Number(c.monto_amex || 0);
+        targetAmountPropina = Number(c.propina_debito || 0) + Number(c.propina_credito || 0) + Number(c.propina_amex || 0);
+        targetAmountTotal = targetAmountBase + targetAmountPropina;
+        tipoDesc = 'Venta Tarjetas BBVA/POS';
+      }
+
+      if (targetAmountTotal <= 0 && c.tipo !== 'deposito_ventanilla') return;
+
+      const assignedInfo = formatTicketMovimientosAsignados(c, movimientos);
+
+      rows.push({
+        'Fecha Ticket': c.fecha ? new Date(c.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : '',
+        'Cuenta / Banco': cuenta.nombre,
+        'Tipo Ingreso': tipoDesc,
+        'Importe sin Propina': targetAmountBase,
+        'Importe de la Propina': targetAmountPropina,
+        'Importe Total': targetAmountTotal,
+        'Estatus de la Conciliación': assignedInfo.estatus
+      });
+    });
+
+    // 2. MOVIMIENTOS BANCARIOS DIRECTOS EN ESTADO DE CUENTA (Sólo para cuentas de banco generales sin cortes POS)
+    if (!isBBVA && !isCajaChica && !isParrotPay) {
+      movsDelMes.forEach(m => {
+        const val = Number(m.monto || 0);
+        const ref = m.referencia || '';
+        if (ref.startsWith('COMPROBANTE_EFECTIVO_')) return;
+
+        if (val > 0) {
+          rows.push({
+            'Fecha Ticket': m.fecha ? new Date(m.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : '',
+            'Cuenta / Banco': cuenta.nombre,
+            'Tipo Ingreso': m.tipo_movimiento || 'Depósito Bancario Directo',
+            'Importe sin Propina': val,
+            'Importe de la Propina': 0,
+            'Importe Total': val,
+            'Estatus de la Conciliación': m.estatus_conciliacion_bancaria?.nombre || 'Directo en Banco'
+          });
+        }
+      });
+    }
+
+    return rows;
+  };
+
+  const getEgresosRowsForCuenta = (cuenta: any) => {
+    const cuentaMovs = movimientos.filter(m => m.cuenta_bancaria_id === cuenta.id);
+    const movsDelMes = cuentaMovs.filter(m => {
+      const mes = m.mes_conciliacion || (m.fecha ? m.fecha.substring(0, 7) : '');
+      return !selectedMonth || mes === selectedMonth;
+    });
+
+    const rows: any[] = [];
+    movsDelMes.forEach(m => {
+      const val = Number(m.monto || 0);
+      const isTraspaso = m.categorias_movimiento_bancario?.nombre?.toLowerCase().includes('traspaso') ||
+                          m.categorias_movimiento_bancario?.nombre?.toLowerCase().includes('traspazo');
+      if (isTraspaso) return;
+      if (val < 0) {
+        rows.push({
+          'Fecha': m.fecha ? new Date(m.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : '',
+          'Banco / Cuenta': cuenta.nombre,
+          'Tipo Egreso': m.tipo_movimiento || 'Retiro / Gasto',
+          'Concepto / Descripción': m.concepto || 'Egreso',
+          'Importe Egreso (-)': Math.abs(val),
+          'Categoría Movimiento': m.categorias_movimiento_bancario?.nombre || 'Sin Categoría',
+          'RFC Proveedor': m.rfc_proveedor || '-',
+          'Estatus Conciliación': m.estatus_conciliacion_bancaria?.nombre || 'Registrado',
+          'Referencia / Folio': m.referencia || '-'
+        });
+      }
+    });
+    return rows;
+  };
+
+  const exportReporteCuentaExcel = async (cuenta: any) => {
+    try {
+      const XLSX = await import('xlsx');
+      const wb = XLSX.utils.book_new();
+
+      const ingresosRows = getIngresosRowsForCuenta(cuenta);
+      const egresosRows = getEgresosRowsForCuenta(cuenta);
+
+      const wsIngresos = XLSX.utils.json_to_sheet(ingresosRows.length > 0 ? ingresosRows : [{ 'Aviso': 'Sin ingresos registrados en este período' }]);
+      const wsEgresos = XLSX.utils.json_to_sheet(egresosRows.length > 0 ? egresosRows : [{ 'Aviso': 'Sin egresos registrados en este período' }]);
+
+      XLSX.utils.book_append_sheet(wb, wsIngresos, 'Ingresos');
+      XLSX.utils.book_append_sheet(wb, wsEgresos, 'Egresos');
+
+      const cleanName = cuenta.nombre.replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 25);
+      const monthStr = selectedMonth ? `_${selectedMonth}` : '';
+      XLSX.writeFile(wb, `Reporte_Banco_${cleanName}${monthStr}.xlsx`);
+    } catch (err: any) {
+      console.error('Error al exportar reporte en Excel:', err);
+      alert(`Error al generar Excel: ${err.message}`);
+    }
+  };
+
+  const exportReporteSoloIngresosExcel = async () => {
+    try {
+      const XLSX = await import('xlsx');
+      const wb = XLSX.utils.book_new();
+
+      const allIngresos: any[] = [];
+      cuentasBancarias.forEach(cuenta => {
+        const rows = getIngresosRowsForCuenta(cuenta);
+        allIngresos.push(...rows);
+      });
+
+      const wsGlobal = XLSX.utils.json_to_sheet(allIngresos.length > 0 ? allIngresos : [{ 'Aviso': 'Sin ingresos en el período' }]);
+      XLSX.utils.book_append_sheet(wb, wsGlobal, 'Ingresos Todos los Bancos');
+
+      cuentasBancarias.forEach(cuenta => {
+        const rows = getIngresosRowsForCuenta(cuenta);
+        const wsBank = XLSX.utils.json_to_sheet(rows.length > 0 ? rows : [{ 'Aviso': 'Sin ingresos registrados' }]);
+        const sheetName = `Ingresos_${cuenta.nombre.replace(/[^a-zA-Z0-9]/g, '_').substring(0, 20)}`;
+        XLSX.utils.book_append_sheet(wb, wsBank, sheetName);
+      });
+
+      const monthStr = selectedMonth ? `_${selectedMonth}` : '';
+      XLSX.writeFile(wb, `Reporte_Solo_Ingresos${monthStr}.xlsx`);
+    } catch (err: any) {
+      console.error('Error al exportar reporte de ingresos:', err);
+      alert(`Error al generar Excel: ${err.message}`);
+    }
+  };
+
+  const exportReporteSoloEgresosExcel = async () => {
+    try {
+      const XLSX = await import('xlsx');
+      const wb = XLSX.utils.book_new();
+
+      const allEgresos: any[] = [];
+      cuentasBancarias.forEach(cuenta => {
+        const rows = getEgresosRowsForCuenta(cuenta);
+        allEgresos.push(...rows);
+      });
+
+      const wsGlobal = XLSX.utils.json_to_sheet(allEgresos.length > 0 ? allEgresos : [{ 'Aviso': 'Sin egresos en el período' }]);
+      XLSX.utils.book_append_sheet(wb, wsGlobal, 'Egresos Todos los Bancos');
+
+      cuentasBancarias.forEach(cuenta => {
+        const rows = getEgresosRowsForCuenta(cuenta);
+        const wsBank = XLSX.utils.json_to_sheet(rows.length > 0 ? rows : [{ 'Aviso': 'Sin egresos registrados' }]);
+        const sheetName = `Egresos_${cuenta.nombre.replace(/[^a-zA-Z0-9]/g, '_').substring(0, 20)}`;
+        XLSX.utils.book_append_sheet(wb, wsBank, sheetName);
+      });
+
+      const monthStr = selectedMonth ? `_${selectedMonth}` : '';
+      XLSX.writeFile(wb, `Reporte_Solo_Egresos${monthStr}.xlsx`);
+    } catch (err: any) {
+      console.error('Error al exportar reporte de egresos:', err);
+      alert(`Error al generar Excel: ${err.message}`);
+    }
+  };
+
+  const exportReporteTodosLosBancosExcel = async () => {
+    try {
+      const XLSX = await import('xlsx');
+      const wb = XLSX.utils.book_new();
+
+      const summaryRows = cuentasBancarias.map(cuenta => {
+        const stats = getAccountStats(cuenta);
+        return {
+          'Cuenta Bancaria': cuenta.nombre,
+          'Moneda': cuenta.moneda || 'MXN',
+          'Número Cuenta': cuenta.numero_cuenta || '-',
+          'Saldo Inicial': stats.saldoInicial,
+          'Total Ingresos (+)': stats.ingresos,
+          'Total Egresos (-)': stats.egresos,
+          'Saldo Actual': stats.saldoActual
+        };
+      });
+
+      const statsGen = getGeneralStats();
+      summaryRows.push({
+        'Cuenta Bancaria': '--- TOTAL GENERAL ---',
+        'Moneda': 'MXN',
+        'Número Cuenta': '',
+        'Saldo Inicial': statsGen.saldoInicial,
+        'Total Ingresos (+)': statsGen.ingresos,
+        'Total Egresos (-)': statsGen.egresos,
+        'Saldo Actual': statsGen.saldoActual
+      });
+
+      const wsSummary = XLSX.utils.json_to_sheet(summaryRows);
+      XLSX.utils.book_append_sheet(wb, wsSummary, 'Resumen General');
+
+      cuentasBancarias.forEach(cuenta => {
+        const ingresosRows = getIngresosRowsForCuenta(cuenta);
+        const egresosRows = getEgresosRowsForCuenta(cuenta);
+        const cleanName = cuenta.nombre.replace(/[^a-zA-Z0-9]/g, '_').substring(0, 18);
+
+        const wsIng = XLSX.utils.json_to_sheet(ingresosRows.length > 0 ? ingresosRows : [{ 'Aviso': 'Sin ingresos' }]);
+        XLSX.utils.book_append_sheet(wb, wsIng, `${cleanName}_Ingresos`);
+
+        const wsEgr = XLSX.utils.json_to_sheet(egresosRows.length > 0 ? egresosRows : [{ 'Aviso': 'Sin egresos' }]);
+        XLSX.utils.book_append_sheet(wb, wsEgr, `${cleanName}_Egresos`);
+      });
+
+      const monthStr = selectedMonth ? `_${selectedMonth}` : '';
+      XLSX.writeFile(wb, `Reporte_Bancos_Completo${monthStr}.xlsx`);
+    } catch (err: any) {
+      console.error('Error al exportar todos los bancos:', err);
+      alert(`Error al generar Excel: ${err.message}`);
+    }
   };
 
   return (
@@ -1074,8 +1551,35 @@ export default function BankReconciliationModule() {
               </div>
             )}
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 flex-wrap">
             <PeriodSelector onPeriodChange={() => { setBancoPage(0); refreshPeriodStatus(); }} />
+
+            <button
+              onClick={exportReporteSoloIngresosExcel}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs transition-all shadow-sm cursor-pointer"
+              title="Descargar únicamente el reporte de Ingresos en Excel (.xlsx)"
+            >
+              <FileSpreadsheet size={15} />
+              <span>Reporte Ingresos</span>
+            </button>
+
+            <button
+              onClick={exportReporteSoloEgresosExcel}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white font-extrabold text-xs transition-all shadow-sm cursor-pointer"
+              title="Descargar únicamente el reporte de Egresos en Excel (.xlsx)"
+            >
+              <FileSpreadsheet size={15} />
+              <span>Reporte Egresos</span>
+            </button>
+
+            <button
+              onClick={exportReporteTodosLosBancosExcel}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs transition-all shadow-sm cursor-pointer"
+              title="Descargar reporte completo en Excel con hojas separadas de Ingresos y Egresos por banco"
+            >
+              <FileSpreadsheet size={15} />
+              <span>Bancos (Completo)</span>
+            </button>
 
             <button
               onClick={fetchData}
@@ -1244,16 +1748,35 @@ NOTIFY pgrst, 'reload schema';`}
                       <p className="text-[10px] text-gray-400 font-mono mt-0.5">Nº: {cuenta.numero_cuenta}</p>
                     )}
                   </div>
-                  <span className={`text-[9px] font-extrabold uppercase px-2 py-0.5 rounded font-mono ${
-                    isSelected ? 'bg-amber-500 text-white' : 'bg-gray-100 dark:bg-gray-800 text-gray-550 dark:text-gray-450'
-                  }`}>
-                    {cuenta.moneda}
-                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        exportReporteCuentaExcel(cuenta);
+                      }}
+                      className="px-2 py-0.5 rounded font-mono text-[9px] font-extrabold bg-emerald-100 text-emerald-800 dark:bg-emerald-955/40 dark:text-emerald-400 hover:bg-emerald-200 dark:hover:bg-emerald-900/60 transition-colors flex items-center gap-1"
+                      title={`Descargar Reporte Excel de ${cuenta.nombre}`}
+                    >
+                      <FileSpreadsheet size={11} /> Excel
+                    </button>
+                    <span className={`text-[9px] font-extrabold uppercase px-2 py-0.5 rounded font-mono ${
+                      isSelected ? 'bg-amber-500 text-white' : 'bg-gray-100 dark:bg-gray-800 text-gray-550 dark:text-gray-450'
+                    }`}>
+                      {cuenta.moneda}
+                    </span>
+                  </div>
                 </div>
                 <div className="mt-4 space-y-1.5">
-                  <div className="flex justify-between text-[10px] text-gray-400 dark:text-gray-500 border-b border-gray-100 dark:border-gray-900 pb-1">
+                  <div className="flex justify-between items-start text-[10px] text-gray-400 dark:text-gray-500 border-b border-gray-100 dark:border-gray-900 pb-1">
                     <span>Ingresos:</span>
-                    <span className="font-mono font-bold text-emerald-600 dark:text-emerald-500">+{formatCurrency(stats.ingresos)}</span>
+                    <div className="text-right">
+                      <span className="font-mono font-bold text-emerald-600 dark:text-emerald-500 block">+{formatCurrency(stats.ingresos)}</span>
+                      {stats.ingresosPropinas > 0 && (
+                        <span className="text-[9px] font-mono text-emerald-700 dark:text-emerald-400 block font-normal">
+                          (Venta: {formatCurrency(stats.ingresosBase)} | Prop: {formatCurrency(stats.ingresosPropinas)})
+                        </span>
+                      )}
+                    </div>
                   </div>
                   <div className="flex justify-between text-[10px] text-gray-400 dark:text-gray-500 border-b border-gray-100 dark:border-gray-900 pb-1">
                     <span>Egresos:</span>
@@ -1322,13 +1845,19 @@ NOTIFY pgrst, 'reload schema';`}
               handleDeleteFormaPago={handleDeleteFormaPago}
               handleDeleteMovimiento={handleDeleteMovimientoDirect}
               onDownloadFile={handleDownloadFile}
-              onEditMovimiento={() => {}}
+              onEditMovimiento={(m) => {
+                getSessionToken().then((t) => {
+                  setEditMovimientoToken(t || '');
+                  setEditingMovimiento(m);
+                });
+              }}
               selectedCuentaId={selectedCuentaId}
               setSelectedCuentaId={setSelectedCuentaId}
               handleUnlinkReconciliation={handleUnlinkReconciliation}
               handleBulkMoveMovimientos={handleBulkMoveMovimientos}
               handleUpdateMesConciliacion={handleUpdateMesConciliacion}
               comprobantes={comprobantesForSelectedMonth}
+              selectedMonth={selectedMonth}
               onCrearComprobante={handleCrearComprobante}
               onActualizarComprobante={handleActualizarComprobante}
               onEliminarComprobante={handleEliminarComprobante}
@@ -1465,6 +1994,16 @@ NOTIFY pgrst, 'reload schema';`}
             </div>
           </div>
         </div>
+      )}
+
+      {/* MODAL DE EDICIÓN DE MOVIMIENTO BANCARIO */}
+      {editingMovimiento && (
+        <EditMovimientoModal
+          movimiento={editingMovimiento}
+          token={editMovimientoToken}
+          onClose={() => setEditingMovimiento(null)}
+          onSuccess={() => { setEditingMovimiento(null); fetchData(); }}
+        />
       )}
     </div>
   );

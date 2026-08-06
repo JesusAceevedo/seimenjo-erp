@@ -3,14 +3,17 @@
 // app/admin/gastos/_components/IngresosTab.tsx
 // Tab de Ingresos (Ventas) — con paginación, búsqueda, columnas enriquecidas.
 
-import React, { useState, useMemo } from 'react';
-import { UploadCloud, Plus, FileCode, FileText, CreditCard, Mail, Search, ChevronLeft, ChevronRight, CheckCircle, Clock, Eye, Edit3, Trash2, Activity, Link as LinkIcon, SlidersHorizontal } from 'lucide-react';
+import React, { useState, useMemo, useEffect } from 'react';
+import { UploadCloud, Plus, FileCode, FileText, CreditCard, Mail, Search, ChevronLeft, ChevronRight, CheckCircle, Clock, Eye, Edit3, Trash2, Activity, Link as LinkIcon, SlidersHorizontal, Globe, X, RefreshCw, AlertTriangle } from 'lucide-react';
 import { formatCurrency } from '../../../../lib/formatters';
 import { getMetodoPagoLabel } from '../../../../lib/constants/sat';
 import CargaXmlMasivaModal from './CargaXmlMasivaModal';
 import CargaManualModal from './CargaManualModal';
 import TrayectoriaPedidoModal from './TrayectoriaPedidoModal';
 import VincularXmlPedidoModal from './VincularXmlPedidoModal';
+import { vincularFacturaAPedido } from '../actions';
+import { useSessionToken } from '../../../../lib/hooks/useSessionToken';
+import { supabase } from '../../../../lib/supabase';
 import type { VentaFacturada } from '../../types';
 import { useCfdiViewer } from '../../_components/CfdiViewerContext';
 
@@ -24,6 +27,7 @@ interface IngresosTabProps {
   onSendEmail: (pedidoId: string) => void;
   onEditVenta: (venta: VentaFacturada) => void;
   onDeleteVenta: (pedidoId: string) => void;
+  onDeleteFacturaSuelta?: (facturaId: string) => void;
   onRefresh?: () => void;
 }
 
@@ -83,6 +87,7 @@ export default function IngresosTab({
   onSendEmail,
   onEditVenta,
   onDeleteVenta,
+  onDeleteFacturaSuelta,
   onRefresh,
 }: IngresosTabProps) {
   const { openCfdi } = useCfdiViewer();
@@ -92,6 +97,7 @@ export default function IngresosTab({
   const [manualModal, setManualModal] = useState<{isOpen: boolean, id?: string}>({isOpen: false});
   const [selectedTrayectoriaId, setSelectedTrayectoriaId] = useState<string | null>(null);
   const [vincularModalPedidoId, setVincularModalPedidoId] = useState<string | null>(null);
+  const [vincularSueltaFactura, setVincularSueltaFactura] = useState<any | null>(null);
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(PAGE_SIZE_OPTIONS[0]);
   const [search, setSearch] = useState('');
@@ -105,7 +111,8 @@ export default function IngresosTab({
     con_xml: true,
     sin_xml: true,
     con_ticket: true,
-    sin_ticket: true
+    sin_ticket: true,
+    solo_pg: false
   });
 
   const filtrados = useMemo(() => {
@@ -148,6 +155,10 @@ export default function IngresosTab({
       if (!filtrosEstatus.con_ticket && tieneTicket) return false;
       if (!filtrosEstatus.sin_ticket && !tieneTicket) return false;
 
+      // Filtro Bolsa Público en General
+      const isPublicoGeneral = !!v.clientes?.facturar_publico_general || !!v.clientes?.es_anonimo || !v.cliente_id || (v.cliente_nombre || '').toLowerCase().includes('ocasional') || (v.cliente_nombre || '').toLowerCase().includes('público');
+      if (filtrosEstatus.solo_pg && !isPublicoGeneral) return false;
+
       return matchSearch;
     });
   }, [ventasFacturadas, search, filtrosEstatus]);
@@ -169,12 +180,20 @@ export default function IngresosTab({
       Otros: 0,
     };
 
+    const publicoGeneral = { total: 0, count: 0 };
+
     filtrados.forEach((v) => {
       const totalAmount = Number(v.precio_total || 0);
       const ivaAmount = totalAmount - (totalAmount / 1.16);
 
       totalMonto += totalAmount;
       totalIva += ivaAmount;
+
+      const isPG = !!v.clientes?.facturar_publico_general || !!v.clientes?.es_anonimo || !v.cliente_id || (v.cliente_nombre || '').toLowerCase().includes('ocasional') || (v.cliente_nombre || '').toLowerCase().includes('público');
+      if (isPG) {
+        publicoGeneral.total += totalAmount;
+        publicoGeneral.count++;
+      }
 
       const metodo = ((v as any).metodo_pago || '').toLowerCase();
       if (metodo === '01' || metodo.includes('efectivo')) {
@@ -194,6 +213,7 @@ export default function IngresosTab({
       totalMonto,
       totalIva,
       metodoTotals,
+      publicoGeneral
     };
   }, [filtrados]);
 
@@ -380,12 +400,30 @@ export default function IngresosTab({
               </div>
             </div>
 
+            {/* Clasificación Especial */}
+            <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 p-3 rounded-xl flex flex-col shadow-sm">
+              <span className="text-[10px] font-bold text-purple-600 dark:text-purple-400 uppercase tracking-wider mb-2 block flex items-center gap-1">
+                <Globe size={11} /> Factura Global
+              </span>
+              <div className="space-y-1.5 flex-1">
+                <label className="flex items-center gap-2 cursor-pointer text-gray-700 dark:text-gray-300 text-[11px] font-semibold hover:text-gray-950 dark:hover:text-white">
+                  <input
+                    type="checkbox"
+                    checked={filtrosEstatus.solo_pg}
+                    onChange={e => { setFiltrosEstatus(prev => ({...prev, solo_pg: e.target.checked})); resetPage(); }}
+                    className="w-3.5 h-3.5 rounded text-purple-600 focus:ring-purple-500 border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950 cursor-pointer"
+                  />
+                  <span>Solo Público en General ({kpis.publicoGeneral.count})</span>
+                </label>
+              </div>
+            </div>
+
           </div>
         )}
       </div>
 
       {/* ── TARJETAS DE ACUMULADOS (KPIs) ─────────────────────────────────── */}
-      <div className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 bg-gray-50/50 dark:bg-gray-900/10 border-b border-gray-200 dark:border-gray-800 shrink-0">
+      <div className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 bg-gray-50/50 dark:bg-gray-900/10 border-b border-gray-200 dark:border-gray-800 shrink-0">
         {/* Card 1: Total Ingresos */}
         <div className="bg-white dark:bg-gray-950 border border-gray-150 dark:border-gray-850 p-4 rounded-2xl shadow-sm flex items-center gap-3">
           <div className="p-3 bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 rounded-xl flex items-center justify-center shrink-0">
@@ -412,7 +450,23 @@ export default function IngresosTab({
           </div>
         </div>
 
-        {/* Card 3 y 4: Desglose por Método de Pago */}
+        {/* Card 3: Bolsa Público en General */}
+        <div className="bg-purple-50/50 dark:bg-purple-955/20 border border-purple-200 dark:border-purple-900/40 p-4 rounded-2xl shadow-sm flex items-center gap-3">
+          <div className="p-3 bg-purple-100 dark:bg-purple-900/40 text-purple-600 dark:text-purple-300 rounded-xl flex items-center justify-center shrink-0">
+            <Globe size={20} />
+          </div>
+          <div>
+            <span className="text-[10px] font-extrabold text-purple-700 dark:text-purple-300 uppercase tracking-wider block">Bolsa Público en General</span>
+            <span className="text-lg font-black text-purple-900 dark:text-purple-100 block font-mono">
+              {formatCurrency(kpis.publicoGeneral.total)}
+            </span>
+            <span className="text-[9px] text-purple-600 dark:text-purple-400 font-bold block">
+              {kpis.publicoGeneral.count} ventas para Factura Global
+            </span>
+          </div>
+        </div>
+
+        {/* Card 4: Desglose por Método de Pago */}
         <div className="lg:col-span-2 bg-white dark:bg-gray-950 border border-gray-150 dark:border-gray-850 p-4 rounded-2xl shadow-sm flex flex-col justify-center">
           <div className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2 flex items-center gap-1.5">
             <CreditCard size={12} className="text-gray-450" />
@@ -449,6 +503,7 @@ export default function IngresosTab({
           <tbody className="divide-y divide-gray-100 dark:divide-gray-800/50">
             {visible.map((v) => {
               const invoice = getInvoiceForVenta(v, ventasFacturadas);
+              const esSuelta = !!(v as any)._esFacturaSuelta;
               const clientName = v.clientes?.nombre_local || v.cliente_nombre || 'Cliente Ocasional';
               const clientRfc = v.clientes?.rfc || 'S/N';
               const totalAmount = Number(v.precio_total || 0);
@@ -476,9 +531,14 @@ export default function IngresosTab({
                         <div className="text-gray-800 dark:text-gray-200 font-semibold" title={invoice.uuid_fiscal}>
                           {invoice.uuid_fiscal ? invoice.uuid_fiscal.substring(0, 20) + '…' : 'Sin UUID'}
                         </div>
-                        <div className="text-[10px] text-gray-400 mt-0.5">
-                          {invoice.serie_folio ? `Folio: ${invoice.serie_folio} · ` : ''}Pedido #{v.numero_pedido}
-                        </div>
+                      <div className="text-[10px] text-gray-400 mt-0.5">
+                        {invoice.serie_folio ? `Folio: ${invoice.serie_folio} · ` : ''}
+                        {esSuelta ? (
+                          <span className="text-amber-600 dark:text-amber-400 font-bold">XML sin pedido</span>
+                        ) : (
+                          <>Pedido #{v.numero_pedido}</>
+                        )}
+                      </div>
                       </div>
                     ) : v.folio_factura ? (
                       <div>
@@ -497,7 +557,14 @@ export default function IngresosTab({
                   {/* Cliente */}
                   <td className="p-3">
                     <div className="font-bold text-gray-800 dark:text-gray-100 truncate max-w-[180px]">{clientName}</div>
-                    <div className="font-mono text-[10px] text-gray-400 mt-0.5">{clientRfc}</div>
+                    <div className="flex items-center gap-1 flex-wrap mt-0.5">
+                      <span className="font-mono text-[10px] text-gray-400">{clientRfc}</span>
+                      {(!!v.clientes?.facturar_publico_general || !!v.clientes?.es_anonimo || !v.cliente_id || (v.cliente_nombre || '').toLowerCase().includes('ocasional') || (v.cliente_nombre || '').toLowerCase().includes('público')) && (
+                        <span className="px-1.5 py-0.5 rounded text-[8px] font-extrabold bg-purple-100 dark:bg-purple-955/30 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-900/40">
+                          🌐 Público General
+                        </span>
+                      )}
+                    </div>
                   </td>
 
                   {/* Método de pago */}
@@ -513,7 +580,13 @@ export default function IngresosTab({
 
                   {/* Estatus facturación */}
                   <td className="p-3 text-center">
-                    <EstatusFacturaBadge v={v} invoice={invoice} />
+                    {esSuelta ? (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400">
+                        <LinkIcon size={9} /> Sin vincular
+                      </span>
+                    ) : (
+                      <EstatusFacturaBadge v={v} invoice={invoice} />
+                    )}
                   </td>
 
                   {/* Importe */}
@@ -568,26 +641,28 @@ export default function IngresosTab({
                     )}
                     <div className="flex justify-center gap-1 mt-1">
                       <button 
-                        onClick={() => setVincularModalPedidoId(v.id)} 
+                        onClick={() => esSuelta ? setVincularSueltaFactura(v) : setVincularModalPedidoId(v.id)} 
                         className="text-blue-600 hover:text-blue-800 bg-blue-50 dark:bg-blue-900/30 hover:bg-blue-100 dark:hover:bg-blue-900/50 p-1.5 rounded-lg transition-colors" 
-                        title="Vincular Factura XML de Carga Masiva"
+                        title={esSuelta ? "Vincular esta factura XML a un pedido de venta" : "Vincular Factura XML de Carga Masiva"}
                       >
                         <LinkIcon size={14} />
                       </button>
-                      <button 
-                        onClick={() => setManualModal({isOpen: true, id: v.id})} 
-                        className="text-gray-600 hover:text-gray-800 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 p-1.5 rounded-lg transition-colors" 
-                        title="Añadir Documentos Faltantes (Manual)"
-                      >
-                        <Plus size={14} />
-                      </button>
+                      {!esSuelta && (
+                        <button 
+                          onClick={() => setManualModal({isOpen: true, id: v.id})} 
+                          className="text-gray-600 hover:text-gray-800 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 p-1.5 rounded-lg transition-colors" 
+                          title="Añadir Documentos Faltantes (Manual)"
+                        >
+                          <Plus size={14} />
+                        </button>
+                      )}
                     </div>
                   </td>
 
                   {/* Acciones */}
                   <td className="p-3 text-center">
                     <div className="flex flex-col gap-1 items-center justify-center">
-                      {invoice ? (
+                      {invoice && !esSuelta ? (
                         <button
                           onClick={() => onSendEmail(v.id)}
                           className="inline-flex items-center justify-center gap-1 w-full px-2 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-[10px] font-bold transition-colors"
@@ -596,25 +671,29 @@ export default function IngresosTab({
                         </button>
                       ) : null}
                       <div className="flex gap-1 justify-center w-full mt-1">
+                        {!esSuelta && (
+                          <button
+                            onClick={() => setSelectedTrayectoriaId(v.id)}
+                            title="Ver Trayectoria de Venta (Pedido ➔ XML ➔ Banco)"
+                            className="flex-1 flex justify-center items-center py-1 bg-purple-50 hover:bg-purple-100 dark:bg-purple-950/30 dark:hover:bg-purple-900/50 text-purple-600 dark:text-purple-400 rounded transition-colors"
+                          >
+                            <Activity size={12} />
+                          </button>
+                        )}
+                        {!esSuelta && (
+                          <button
+                            onClick={() => onEditVenta(v)}
+                            disabled={!!v.movimiento_bancario_id}
+                            title={v.movimiento_bancario_id ? "No se puede editar porque está conciliado" : "Editar"}
+                            className={`flex-1 flex justify-center items-center py-1 rounded transition-colors ${v.movimiento_bancario_id ? 'bg-gray-100 dark:bg-gray-800 text-gray-400 cursor-not-allowed' : 'bg-blue-50 hover:bg-blue-100 text-blue-600 dark:bg-blue-900/20 dark:hover:bg-blue-900/40 dark:text-blue-400'}`}
+                          >
+                            <Edit3 size={12} />
+                          </button>
+                        )}
                         <button
-                          onClick={() => setSelectedTrayectoriaId(v.id)}
-                          title="Ver Trayectoria de Venta (Pedido ➔ XML ➔ Banco)"
-                          className="flex-1 flex justify-center items-center py-1 bg-purple-50 hover:bg-purple-100 dark:bg-purple-950/30 dark:hover:bg-purple-900/50 text-purple-600 dark:text-purple-400 rounded transition-colors"
-                        >
-                          <Activity size={12} />
-                        </button>
-                        <button
-                          onClick={() => onEditVenta(v)}
+                          onClick={() => esSuelta ? onDeleteFacturaSuelta && onDeleteFacturaSuelta(v.id) : onDeleteVenta(v.id)}
                           disabled={!!v.movimiento_bancario_id}
-                          title={v.movimiento_bancario_id ? "No se puede editar porque está conciliado" : "Editar"}
-                          className={`flex-1 flex justify-center items-center py-1 rounded transition-colors ${v.movimiento_bancario_id ? 'bg-gray-100 dark:bg-gray-800 text-gray-400 cursor-not-allowed' : 'bg-blue-50 hover:bg-blue-100 text-blue-600 dark:bg-blue-900/20 dark:hover:bg-blue-900/40 dark:text-blue-400'}`}
-                        >
-                          <Edit3 size={12} />
-                        </button>
-                        <button
-                          onClick={() => onDeleteVenta(v.id)}
-                          disabled={!!v.movimiento_bancario_id}
-                          title={v.movimiento_bancario_id ? "No se puede eliminar porque está conciliado" : "Eliminar"}
+                          title={v.movimiento_bancario_id ? "No se puede eliminar porque está conciliado" : esSuelta ? "Eliminar factura XML" : "Eliminar"}
                           className={`flex-1 flex justify-center items-center py-1 rounded transition-colors ${v.movimiento_bancario_id ? 'bg-gray-100 dark:bg-gray-800 text-gray-400 cursor-not-allowed' : 'bg-red-50 hover:bg-red-100 text-red-600 dark:bg-red-900/20 dark:hover:bg-red-900/40 dark:text-red-400'}`}
                         >
                           <Trash2 size={12} />
@@ -720,6 +799,16 @@ export default function IngresosTab({
           }}
         />
       )}
+      {vincularSueltaFactura && (
+        <VincularSueltaAPedidoModal
+          factura={vincularSueltaFactura}
+          onClose={() => setVincularSueltaFactura(null)}
+          onSuccess={() => {
+            setVincularSueltaFactura(null);
+            if (onRefresh) onRefresh();
+          }}
+        />
+      )}
       {selectedTrayectoriaId && (
         <TrayectoriaPedidoModal
           pedidoId={selectedTrayectoriaId}
@@ -729,6 +818,227 @@ export default function IngresosTab({
           }}
         />
       )}
+    </div>
+  );
+}
+
+// ── MODAL: VINCULAR FACTURA SUELTA A UN PEDIDO ──────────────────────────────
+function VincularSueltaAPedidoModal({ factura, onClose, onSuccess }: {
+  factura: any;
+  onClose: () => void;
+  onSuccess: () => void;
+}) {
+  const getSessionToken = useSessionToken();
+  const facturaData = factura.facturas_clientes?.[0] || factura;
+  const clienteId = facturaData.cliente_id || factura.cliente_id;
+
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [pedidos, setPedidos] = useState<any[]>([]);
+  const [selectedPedidoId, setSelectedPedidoId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
+
+  const loadPedidos = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      let query = supabase
+        .from('pedidos')
+        .select('id, numero_pedido, cliente_nombre, fecha_pedido, precio_total, estatus_pago, clientes(nombre_local, rfc)')
+        .neq('estatus_pago', 'Cancelado')
+        .is('folio_factura', null)
+        .order('creado_en', { ascending: false });
+
+      if (clienteId) {
+        query = query.eq('cliente_id', clienteId);
+      }
+      const { data, error: qErr } = await query;
+      if (qErr) throw qErr;
+      setPedidos(data || []);
+    } catch (err: any) {
+      setError(err.message || 'Error al cargar pedidos.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadPedidos();
+  }, []);
+
+  const handleVincular = async () => {
+    if (!selectedPedidoId) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const token = await getSessionToken();
+      const res = await vincularFacturaAPedido(facturaData.id || factura.id, selectedPedidoId, token);
+      if (res.success) {
+        onSuccess();
+      } else {
+        setError(res.error || 'Error al vincular la factura.');
+      }
+    } catch (err: any) {
+      setError(err.message || 'Error al vincular.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const filtrados = pedidos.filter(p => {
+    const q = search.toLowerCase();
+    if (!q) return true;
+    return (
+      p.numero_pedido?.toString().includes(q) ||
+      p.cliente_nombre?.toLowerCase().includes(q) ||
+      p.clientes?.nombre_local?.toLowerCase().includes(q) ||
+      p.clientes?.rfc?.toLowerCase().includes(q) ||
+      p.precio_total?.toString().includes(q)
+    );
+  });
+
+  const clienteNombre = facturaData.clientes?.nombre_local || factura.clientes?.nombre_local || facturaData.nombreReceptor || 'Cliente Desconocido';
+  const clienteRfc = facturaData.clientes?.rfc || factura.clientes?.rfc || 'S/N';
+
+  return (
+    <div className="fixed inset-0 z-[120] flex items-center justify-center p-4 sm:p-6 bg-black/60 backdrop-blur-sm font-sans animate-in fade-in duration-200">
+      <div className="bg-white dark:bg-gray-950 w-full max-w-2xl rounded-2xl shadow-2xl flex flex-col max-h-[85vh] overflow-hidden border border-gray-200 dark:border-gray-800">
+        <div className="flex items-center justify-between p-6 border-b border-gray-100 dark:border-gray-900 bg-gray-50/60 dark:bg-gray-900/30">
+          <div>
+            <h2 className="text-xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
+              <LinkIcon className="text-blue-500" /> Vincular Factura XML a Pedido
+            </h2>
+            <p className="text-xs text-gray-500 mt-1">
+              Selecciona el pedido de venta al que pertenece esta factura de ingreso.
+            </p>
+          </div>
+          <button onClick={onClose} className="p-2 text-gray-400 hover:text-gray-600 rounded-xl transition-colors">
+            <X size={20} />
+          </button>
+        </div>
+
+        <div className="p-4 border-b border-gray-100 dark:border-gray-900 bg-gray-50/30 dark:bg-gray-900/10">
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-xs">
+            <div className="flex items-center gap-2">
+              <FileCode size={14} className="text-blue-500" />
+              <span className="font-mono font-bold text-gray-800 dark:text-gray-200">
+                {facturaData.uuid_fiscal ? facturaData.uuid_fiscal.substring(0, 20) + '…' : facturaData.serie_folio || 'Sin UUID'}
+              </span>
+            </div>
+            <div className="text-gray-600 dark:text-gray-400">
+              <span className="font-semibold">{clienteNombre}</span>
+              <span className="font-mono ml-1 text-gray-400">({clienteRfc})</span>
+            </div>
+            <div className="font-mono font-extrabold text-emerald-600 dark:text-emerald-400">
+              {formatCurrency(Number(facturaData.total || factura.precio_total || 0))}
+            </div>
+          </div>
+        </div>
+
+        <div className="p-4 border-b border-gray-100 dark:border-gray-900 bg-gray-50/30 dark:bg-gray-900/10">
+          <div className="relative">
+            <Search size={14} className="absolute left-3 top-3 text-gray-400" />
+            <input
+              type="text"
+              placeholder="Buscar pedido por número, cliente, RFC o monto..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="w-full pl-9 pr-3 py-2 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-xl text-xs outline-none focus:ring-1 focus:ring-blue-500 text-gray-900 dark:text-white"
+            />
+          </div>
+        </div>
+
+        <div className="p-6 overflow-y-auto flex-1 space-y-4">
+          {error && (
+            <div className="p-3 bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800/50 rounded-xl text-red-700 dark:text-red-400 text-xs flex items-center gap-2">
+              <AlertTriangle size={16} />
+              <span>{error}</span>
+            </div>
+          )}
+
+          {loading ? (
+            <div className="flex flex-col items-center justify-center py-12 text-gray-400 gap-2">
+              <RefreshCw className="animate-spin text-blue-500" size={24} />
+              <span className="text-xs">Cargando pedidos...</span>
+            </div>
+          ) : filtrados.length === 0 ? (
+            <div className="text-center py-12 text-gray-400 space-y-2">
+              <FileCode size={36} className="mx-auto text-gray-300 dark:text-gray-700" />
+              <p className="text-sm font-semibold">No se encontraron pedidos disponibles para vincular.</p>
+              <p className="text-xs text-gray-400">El pedido debe estar activo y sin factura asignada.</p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <span className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider block">
+                Pedidos candidatos ({filtrados.length})
+              </span>
+              <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                {filtrados.map((p) => {
+                  const isSelected = selectedPedidoId === p.id;
+                  return (
+                    <div
+                      key={p.id}
+                      onClick={() => setSelectedPedidoId(p.id)}
+                      className={`p-3.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-3 ${
+                        isSelected
+                          ? 'bg-blue-50 dark:bg-blue-950/40 border-blue-500 ring-2 ring-blue-500/20'
+                          : 'bg-white dark:bg-gray-900 border-gray-200 dark:border-gray-800 hover:border-blue-300 dark:hover:border-blue-800'
+                      }`}
+                    >
+                      <div className="min-w-0 flex-1 space-y-1">
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-xs text-gray-900 dark:text-white">
+                            Pedido #{p.numero_pedido}
+                          </span>
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 font-bold uppercase">
+                            {p.estatus_pago || '—'}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-3 text-[11px] text-gray-600 dark:text-gray-400">
+                          <span className="font-medium truncate max-w-[220px]">
+                            {p.clientes?.nombre_local || p.cliente_nombre || 'Cliente Desconocido'}
+                          </span>
+                          {p.clientes?.rfc && <span className="font-mono text-[10px] text-gray-400">({p.clientes.rfc})</span>}
+                        </div>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <div className="font-extrabold text-sm font-mono text-blue-600 dark:text-blue-400">
+                          {formatCurrency(Number(p.precio_total || 0))}
+                        </div>
+                        <div className="text-[10px] text-gray-400 font-mono">
+                          {p.fecha_pedido ? new Date(p.fecha_pedido).toLocaleDateString('es-MX') : '—'}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="p-6 border-t border-gray-100 dark:border-gray-900 bg-gray-50/50 dark:bg-gray-900/20 flex justify-end gap-3">
+          <button
+            onClick={onClose}
+            disabled={saving}
+            className="px-5 py-2.5 rounded-xl font-bold text-xs text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-800 transition-colors"
+          >
+            Cancelar
+          </button>
+          <button
+            onClick={handleVincular}
+            disabled={!selectedPedidoId || saving}
+            className="bg-blue-600 hover:bg-blue-500 text-white px-6 py-2.5 rounded-xl font-bold text-xs shadow-md transition-all flex items-center gap-2 disabled:opacity-50"
+          >
+            {saving ? (
+              <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Vinculando...</>
+            ) : (
+              <>Vincular al Pedido Seleccionado</>
+            )}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

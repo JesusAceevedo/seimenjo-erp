@@ -27,7 +27,8 @@ const PEDIDO_INICIAL = {
 
 const CLIENTE_INICIAL = {
   nombre_local: '', rfc: '', razon_social: '', regimen_fiscal: '',
-  codigo_postal: '', uso_cfdi: '', email_facturacion: '', telefono: ''
+  codigo_postal: '', uso_cfdi: '', email_facturacion: '', telefono: '',
+  facturar_publico_general: false
 };
 
 export default function AdminMonitor() {
@@ -205,7 +206,7 @@ export default function AdminMonitor() {
       pedidoId = pedido.id;
 
       if (itemsProcesados.length > 0) {
-        const detalles = itemsProcesados.map(item => ({ pedido_id: pedidoId, ...item }));
+        const detalles = itemsProcesados.map(item => ({ pedido_id: pedidoId, empresa_id: empresaId, ...item }));
         const { error: detallesError } = await supabase.from('pedido_detalles').insert(detalles);
         if (detallesError) throw detallesError;
       }
@@ -270,7 +271,8 @@ export default function AdminMonitor() {
       const { error } = await supabase.from('clientes').update({
         nombre_local: c.nombre_local, rfc: c.rfc, razon_social: c.razon_social,
         regimen_fiscal: c.regimen_fiscal, codigo_postal: c.codigo_postal,
-        uso_cfdi: c.uso_cfdi, email_facturacion: c.email_facturacion, telefono: c.telefono
+        uso_cfdi: c.uso_cfdi, email_facturacion: c.email_facturacion, telefono: c.telefono,
+        facturar_publico_general: !!c.facturar_publico_general
       }).eq('id', c.id);
 
       if (error) { throw error; }
@@ -419,7 +421,16 @@ export default function AdminMonitor() {
                     <tbody className="divide-y divide-gray-100 dark:divide-gray-800/50 text-xs">
                       {paginatedClientes.map((c) => (
                         <tr key={c.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/20 transition-colors">
-                          <td className="p-4 font-bold text-amber-600 dark:text-amber-500">{c.nombre_local}</td>
+                          <td className="p-4 font-bold text-amber-600 dark:text-amber-500">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span>{c.nombre_local}</span>
+                              {c.facturar_publico_general && (
+                                <span className="px-2 py-0.5 rounded-full text-[9px] font-extrabold bg-purple-100 dark:bg-purple-955/30 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-900/40">
+                                  🌐 Público en General
+                                </span>
+                              )}
+                            </div>
+                          </td>
                           <td className="p-4 space-y-0.5">
                             <div className="font-semibold text-gray-900 dark:text-white">{c.razon_social || 'N/A'}</div>
                             <div className="text-gray-400 font-mono text-[11px]">{c.rfc}</div>
@@ -615,6 +626,24 @@ export default function AdminMonitor() {
                     {CATALOGO_USO_CFDI.map(u => <option key={u.clave} value={u.clave}>{u.clave} | {u.descripcion}</option>)}
                   </select>
                 </div>
+                <div className="p-3 bg-purple-50 dark:bg-purple-955/20 border border-purple-200 dark:border-purple-900/40 rounded-xl mt-3">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={!!nuevoCliente.facturar_publico_general}
+                      onChange={e => setNuevoCliente({ ...nuevoCliente, facturar_publico_general: e.target.checked })}
+                      className="w-4 h-4 text-purple-600 rounded focus:ring-purple-500"
+                    />
+                    <div>
+                      <span className="text-xs font-bold text-purple-700 dark:text-purple-300 block">
+                        🌐 Facturar en Público en General (Bolsa Global Mensual)
+                      </span>
+                      <span className="text-[10px] text-gray-500 dark:text-gray-400 block">
+                        Las ventas de este cliente se agruparán automáticamente en la bolsa de Factura Global mensual.
+                      </span>
+                    </div>
+                  </label>
+                </div>
               </div>
               <div className="flex gap-3 pt-6 mt-6 border-t border-gray-200 dark:border-gray-800">
                 <button onClick={() => { setIsClienteModalOpen(false); setErrorClienteModal(''); }} disabled={isLoadingCliente} className="flex-1 py-2.5 border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-300 rounded-xl font-semibold hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">Cancelar</button>
@@ -690,6 +719,24 @@ export default function AdminMonitor() {
                     <option value="">Selecciona uso...</option>
                     {CATALOGO_USO_CFDI.map(u => <option key={u.clave} value={u.clave}>{u.clave} | {u.descripcion}</option>)}
                   </select>
+                </div>
+                <div className="p-3 bg-purple-50 dark:bg-purple-955/20 border border-purple-200 dark:border-purple-900/40 rounded-xl mt-3">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={!!editarClienteModal.cliente?.facturar_publico_general}
+                      onChange={e => setEditarClienteModal({ open: true, cliente: { ...editarClienteModal.cliente, facturar_publico_general: e.target.checked } })}
+                      className="w-4 h-4 text-purple-600 rounded focus:ring-purple-500"
+                    />
+                    <div>
+                      <span className="text-xs font-bold text-purple-700 dark:text-purple-300 block">
+                        🌐 Facturar en Público en General (Bolsa Global Mensual)
+                      </span>
+                      <span className="text-[10px] text-gray-500 dark:text-gray-400 block">
+                        Las ventas de este cliente se agruparán automáticamente en la bolsa de Factura Global mensual.
+                      </span>
+                    </div>
+                  </label>
                 </div>
               </div>
               <div className="flex gap-3 pt-6 mt-6 border-t border-gray-200 dark:border-gray-800">

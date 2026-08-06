@@ -16,7 +16,8 @@ import {
   comprobarEgresoConFacturas,
   sincronizarMetodosPagoXml,
   eliminarGasto,
-  eliminarPedidoSano
+  eliminarPedidoSano,
+  eliminarFacturaCliente
 } from '../gastos/actions';
 
 // Tabs and Modals Components
@@ -122,6 +123,29 @@ export default function ContabilidadDashboard() {
         .neq('estatus_pago', 'Cancelado')
         .order('creado_en', { ascending: false });
       setVentasFacturadas(vAll || []);
+
+      // 2b. Facturas XML de ingreso sin vincular (carga masiva que no encontró un pedido candidato)
+      const { data: fIngresosSueltas } = await supabase
+        .from('facturas_clientes')
+        .select('*, clientes(nombre_local, rfc, email_facturacion), estatus_factura(nombre)')
+        .eq('empresa_id', empresaId)
+        .is('pedido_id', null)
+        .order('fecha_emision', { ascending: false });
+
+      const ventasSueltas = (fIngresosSueltas || []).map((f: any) => ({
+        id: f.id,
+        numero_pedido: '',
+        folio_factura: f.serie_folio || (f.uuid_fiscal ? `UUID:${f.uuid_fiscal.substring(0, 8)}` : ''),
+        precio_total: Number(f.total || 0),
+        cliente_nombre: f.clientes?.nombre_local,
+        fecha_pedido: f.fecha_emision,
+        estatus_pago: 'Liquidado',
+        clientes: f.clientes,
+        facturas_clientes: [f],
+        movimiento_bancario_id: f.movimiento_bancario_id ?? null,
+        _esFacturaSuelta: true
+      }));
+      setVentasFacturadas([...ventasSueltas, ...(vAll || [])]);
 
       // 3. Pedidos pendientes de facturar (solo liquidados)
       const { data: pPend } = await supabase
@@ -313,6 +337,22 @@ export default function ContabilidadDashboard() {
     const res = await eliminarPedidoSano(id, token);
     if (res.success) {
       alert('Venta eliminada exitosamente');
+      fetchData();
+    } else {
+      alert('Error: ' + res.error);
+    }
+  };
+
+  const handleDeleteFacturaSuelta = async (facturaId: string) => {
+    if (periodStatus === 'cerrado_definitivo') {
+      alert('No se pueden eliminar facturas en un periodo cerrado definitivamente.');
+      return;
+    }
+    if (!confirm('¿Estás seguro de eliminar esta factura XML de ingreso?')) return;
+    const token = await getSessionToken();
+    const res = await eliminarFacturaCliente(facturaId, token);
+    if (res.success) {
+      alert('Factura de ingreso eliminada exitosamente');
       fetchData();
     } else {
       alert('Error: ' + res.error);
@@ -625,6 +665,7 @@ export default function ContabilidadDashboard() {
                 onSendEmail={handleSendEmail}
                 onEditVenta={setEditingVenta}
                 onDeleteVenta={handleDeleteVenta}
+                onDeleteFacturaSuelta={handleDeleteFacturaSuelta}
                 onRefresh={fetchData}
               />
             )}

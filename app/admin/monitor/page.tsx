@@ -180,7 +180,7 @@ export default function AdminMonitor() {
 
       let query = supabase
         .from('pedidos')
-        .select('*, pedido_detalles(*, producto_variantes(id, gramaje, precio_base, productos(nombre))), clientes(nombre_local, telefono, rfc)')
+        .select('*, pedido_detalles(*, producto_variantes(*, productos(*))), clientes(nombre_local, telefono, rfc)')
         .eq('empresa_id', empresaId)
         .order('numero_pedido', { ascending: false });
 
@@ -389,13 +389,15 @@ export default function AdminMonitor() {
         if (deleteError) throw deleteError;
 
         if (itemsProcesados.length > 0) {
+          const empresaId = await getEmpresaId();
           const detalles = itemsProcesados.map(item => ({ 
             pedido_id: idPedidoEditar, 
             variante_id: item.variante_id,
             cantidad: item.cantidad,
             comentarios: item.comentarios,
             precio_aplicado: item.precio_aplicado,
-            subtotal: item.subtotal
+            subtotal: item.subtotal,
+            empresa_id: empresaId
           }));
           const { error: insertDetailsError } = await supabase
             .from('pedido_detalles')
@@ -431,7 +433,8 @@ export default function AdminMonitor() {
             cantidad: item.cantidad,
             comentarios: item.comentarios,
             precio_aplicado: item.precio_aplicado,
-            subtotal: item.subtotal
+            subtotal: item.subtotal,
+            empresa_id: empresaId
           }));
           const { error: insertDetailsError } = await supabase
             .from('pedido_detalles')
@@ -587,13 +590,15 @@ export default function AdminMonitor() {
         : '';
 
       // Items table rows
-      const itemsHtml = pedido.pedido_detalles?.map((d: DetallePedido) => {
-        const prodNombre = d.producto_variantes?.productos?.nombre || 'Producto';
-        const gramaje = d.producto_variantes?.gramaje || '';
+      const itemsHtml = pedido.pedido_detalles?.map((d: any) => {
+        const pv = Array.isArray(d?.producto_variantes) ? d.producto_variantes[0] : d?.producto_variantes;
+        const prod = Array.isArray(pv?.productos) ? pv.productos[0] : pv?.productos;
+        const prodNombre = prod?.nombre || d?.producto_nombre || d?.comentarios || 'Producto';
+        const gramaje = pv?.gramaje || '';
         return `
             <tr>
               <td style="padding: 4px 0; max-width: 180px; word-wrap: break-word;">
-                ${d.cantidad}x ${prodNombre} ${gramaje ? `(${gramaje})` : ''}
+                ${d.cantidad || 0}x ${prodNombre} ${gramaje ? `(${gramaje})` : ''}
               </td>
               <td style="text-align: right; vertical-align: top; padding: 4px 0;">
                 ${formatCurrency(d.subtotal)}
@@ -849,11 +854,23 @@ export default function AdminMonitor() {
                         <div><span className="text-emerald-600 dark:text-emerald-500">Ent:</span> {p.fecha_entrega || 'N/A'}</div>
                       </td>
                       <td className="p-4 space-y-1">
-                        <div className="bg-gray-50 dark:bg-gray-900/60 p-2 rounded border border-gray-200 dark:border-gray-800 space-y-1 text-gray-900 dark:text-white">
-                          {p.pedido_detalles?.map((d: DetallePedido) => (
-                            <div key={d.id}>📦 <span className="font-semibold">{d.producto_variantes?.productos?.nombre} ({d.producto_variantes?.gramaje}):</span> {d.cantidad} un.</div>
-                          ))}
-                        </div>
+                        {(!p.pedido_detalles || p.pedido_detalles.length === 0) ? (
+                          <span className="text-gray-400 italic text-[11px]">Sin productos</span>
+                        ) : (
+                          <div className="bg-gray-50 dark:bg-gray-900/60 p-2 rounded border border-gray-200 dark:border-gray-800 space-y-1 text-gray-900 dark:text-white">
+                            {p.pedido_detalles.map((d: any) => {
+                              const pv = Array.isArray(d?.producto_variantes) ? d.producto_variantes[0] : d?.producto_variantes;
+                              const prod = Array.isArray(pv?.productos) ? pv.productos[0] : pv?.productos;
+                              const nombre = prod?.nombre || d?.producto_nombre || d?.comentarios || 'Producto';
+                              const gramaje = pv?.gramaje || '';
+                              return (
+                                <div key={d.id || Math.random()}>
+                                  📦 <span className="font-semibold">{nombre}{gramaje ? ` (${gramaje})` : ''}:</span> {d.cantidad || 0} un.
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
                       </td>
                       <td className="p-4 space-y-1 text-gray-900 dark:text-white">
                         <div>🚚 Envío: <span className="font-semibold">{formatCurrency(p.costo_envio)}</span></div>

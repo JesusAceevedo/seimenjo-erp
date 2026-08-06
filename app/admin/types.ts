@@ -16,6 +16,7 @@ export interface Cliente {
   uso_cfdi?: string;
   email_facturacion?: string;
   es_anonimo?: boolean;
+  facturar_publico_general?: boolean;
 }
 
 export interface Proveedor {
@@ -283,7 +284,7 @@ export interface EstatusConciliacion {
 
 export interface ComprobanteDeposito {
   id: string;
-  tipo: 'deposito_ventanilla' | 'corte_tarjeta';
+  tipo: 'deposito_ventanilla' | 'corte_tarjeta' | 'corte_pos' | 'corte_bbva' | 'corte_parrot' | string;
   fecha: string;
   monto: number;
   descripcion?: string | null;
@@ -301,4 +302,8 @@ export interface ComprobanteDeposito {
   propina_credito?: number;
   monto_amex?: number;
   propina_amex?: number;
+  monto_efectivo?: number;
+  monto_parrotpay?: number;
+  propina_efectivo?: number;
+  propina_parrotpay?: number;
 }

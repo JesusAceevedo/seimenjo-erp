@@ -961,6 +961,39 @@ export async function eliminarPedidoSano(pedidoId: string, token: string): Promi
     return { success: false, error: message || 'Error al eliminar el pedido' };
   }
 }
+export async function eliminarFacturaCliente(
+  facturaId: string,
+  token: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { empresaId } = await getUserEmpresaId(token);
+    if (!empresaId) throw new Error('Sesión no válida o empresa no especificada.');
+
+    const { data: factura } = await supabaseAdmin
+      .from('facturas_clientes')
+      .select('pedido_id')
+      .eq('id', facturaId)
+      .eq('empresa_id', empresaId)
+      .single();
+
+    if (factura?.pedido_id) {
+      throw new Error('No se puede eliminar una factura que ya está vinculada a un pedido.');
+    }
+
+    const { error } = await supabaseAdmin
+      .from('facturas_clientes')
+      .delete()
+      .eq('id', facturaId)
+      .eq('empresa_id', empresaId);
+
+    if (error) throw error;
+    return { success: true };
+  } catch (err: any) {
+    const message = err?.message || (typeof err === 'string' ? err : JSON.stringify(err));
+    return { success: false, error: message || 'Error al eliminar la factura' };
+  }
+}
+
 function mapFormaPagoCodeToMetodo(code: string): string {
   return code ? code.trim().padStart(2, '0') : '99';
 }

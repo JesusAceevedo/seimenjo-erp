@@ -1,7 +1,4 @@
-// Cálculos de nómina conforme a la Ley Federal del Trabajo (LFT) y LISR
-
-// --- TABLAS ISR 2025-2026 (Mensual - Aproximación basada en UMA 2026 ~$113.14) ---
-// Fuente: LISR Art. 96 y tablas publicadas por SAT
+// TABLAS OFICIALES DE ISR SAT 2025-2026 (Anexo 8 RMF - LISR Art. 96)
 interface IsrBracket {
   inferior: number;
   superior: number;
@@ -9,84 +6,100 @@ interface IsrBracket {
   porcentaje: number;
 }
 
-const TABLA_ISR_MENSUAL: IsrBracket[] = [
-  { inferior: 0.01, superior: 8_952.49, cuota_fija: 0, porcentaje: 1.92 },
-  { inferior: 8_952.50, superior: 75_984.55, cuota_fija: 171.88, porcentaje: 6.40 },
-  { inferior: 75_984.56, superior: 133_536.07, cuota_fija: 4_460.65, porcentaje: 10.88 },
-  { inferior: 133_536.08, superior: 155_229.80, cuota_fija: 10_723.41, porcentaje: 16.00 },
-  { inferior: 155_229.81, superior: 185_852.57, cuota_fija: 14_194.45, porcentaje: 17.92 },
-  { inferior: 185_852.58, superior: 374_837.88, cuota_fija: 19_679.76, porcentaje: 21.36 },
-  { inferior: 374_837.89, superior: 758_473.73, cuota_fija: 60_070.93, porcentaje: 23.52 },
-  { inferior: 758_473.74, superior: 1_000_000.00, cuota_fija: 150_231.24, porcentaje: 30.00 },
-  { inferior: 1_000_000.01, superior: 3_000_000.00, cuota_fija: 222_689.12, porcentaje: 32.00 },
-  { inferior: 3_000_000.01, superior: Infinity, cuota_fija: 862_689.12, porcentaje: 35.00 },
+// Tarifa Oficial SAT Quincenal (15 días)
+const TABLA_ISR_QUINCENAL: IsrBracket[] = [
+  { inferior: 0.01, superior: 373.02, cuota_fija: 0.00, porcentaje: 1.92 },
+  { inferior: 373.03, superior: 3166.03, cuota_fija: 7.16, porcentaje: 6.40 },
+  { inferior: 3166.04, superior: 5564.01, cuota_fija: 185.92, porcentaje: 10.88 },
+  { inferior: 5564.02, superior: 6467.91, cuota_fija: 446.42, porcentaje: 16.00 },
+  { inferior: 6467.92, superior: 7743.86, cuota_fija: 591.02, porcentaje: 17.92 },
+  { inferior: 7743.87, superior: 15618.25, cuota_fija: 725.38, porcentaje: 21.36 },
+  { inferior: 15618.26, superior: 24616.50, cuota_fija: 2500.48, porcentaje: 23.52 },
+  { inferior: 24616.51, superior: 46996.95, cuota_fija: 4616.95, porcentaje: 30.00 },
+  { inferior: 46996.96, superior: 62662.60, cuota_fija: 11331.08, porcentaje: 32.00 },
+  { inferior: 62662.61, superior: Infinity, cuota_fija: 16344.09, porcentaje: 35.00 },
 ];
 
-// Subsidio al empleo mensual 2025-2026 (Decreto SAT: aplica a ingresos mensuales <= $9,081.00)
+// Tarifa Oficial SAT Mensual (30.4 días)
+const TABLA_ISR_MENSUAL: IsrBracket[] = [
+  { inferior: 0.01, superior: 746.04, cuota_fija: 0.00, porcentaje: 1.92 },
+  { inferior: 746.05, superior: 6332.05, cuota_fija: 14.32, porcentaje: 6.40 },
+  { inferior: 6332.06, superior: 11128.01, cuota_fija: 371.83, porcentaje: 10.88 },
+  { inferior: 11128.02, superior: 12935.82, cuota_fija: 892.84, porcentaje: 16.00 },
+  { inferior: 12935.83, superior: 15487.71, cuota_fija: 1182.05, porcentaje: 17.92 },
+  { inferior: 15487.72, superior: 31236.49, cuota_fija: 1638.98, porcentaje: 21.36 },
+  { inferior: 31236.50, superior: 49233.00, cuota_fija: 5000.95, porcentaje: 23.52 },
+  { inferior: 49233.01, superior: 93993.90, cuota_fija: 9233.89, porcentaje: 30.00 },
+  { inferior: 93993.91, superior: 125325.20, cuota_fija: 22662.16, porcentaje: 32.00 },
+  { inferior: 125325.21, superior: Infinity, cuota_fija: 32688.18, porcentaje: 35.00 },
+];
+
+// Subsidio al empleo mensual 2025-2026 (Decreto SAT)
 function calcularSubsidio(ingresoMensual: number): number {
-  if (ingresoMensual <= 9_081.00) return 390.00;
+  if (ingresoMensual <= 9081.00) return 390.00;
   return 0;
 }
 
-// --- TABLAS IMSS 2026 (Cuotas Obrero-Patronales) ---
-// UMA 2026 estimada: ~$113.14/día = ~$3,437/mes
-const UMA_DIARIA = 113.14;
-const UMA_MENSUAL = UMA_DIARIA * 30.4;
+// TABLAS IMSS 2025-2026 (Cuotas Obrero-Patronales Ley del Seguro Social)
+const UMA_DIARIA = 108.57; // UMA Vigente Oficial
 
-interface ImssCuota {
-  concepto: string;
-  obrero: number;  // % sobre SBC
-  patron: number;  // % sobre SBC
-  exento_uma: boolean; // si aplica solo sobre excedente de 3 UMAs
-}
+function calcularImss(salarioDiarioIntegrado: number, diasTrabajados: number = 15): { obrero: number; patronal: number } {
+  if (diasTrabajados <= 0 || salarioDiarioIntegrado <= 0) return { obrero: 0, patronal: 0 };
 
-const TABLA_IMSS: ImssCuota[] = [
-  { concepto: 'Gastos Médicos (Enfermedad y Maternidad)', obrero: 0.375, patron: 1.10, exento_uma: true },
-  { concepto: 'Invalidez y Vida', obrero: 0.625, patron: 1.75, exento_uma: true },
-  { concepto: 'Cesantía y Vejez', obrero: 0, patron: 3.15, exento_uma: false },
-  { concepto: 'Guarderías', obrero: 0, patron: 1.00, exento_uma: false },
-  { concepto: 'Riesgos de Trabajo', obrero: 0, patron: 0.5, exento_uma: false }, // Variable según riesgo
-  { concepto: 'Retiro', obrero: 0, patron: 2.00, exento_uma: false },
-  { concepto: 'INFONAVIT', obrero: 0, patron: 5.00, exento_uma: false },
-];
+  const sbcDiario = salarioDiarioIntegrado;
+  const sbcTotal = sbcDiario * diasTrabajados;
 
-function calcularImss(salarioDiario: number): { obrero: number; patronal: number } {
-  const sbcMensual = salarioDiario * 30.4;
-  const baseExenta = 3 * UMA_MENSUAL; // 3 UMAs mensuales
-  const excedente = Math.max(0, sbcMensual - baseExenta);
+  // 1. Excedente de 3 UMA (Enfermedad y Maternidad)
+  const tresUmaDiaria = 3 * UMA_DIARIA;
+  const excedenteDiario = Math.max(0, sbcDiario - tresUmaDiaria);
+  const excedenteTotal = excedenteDiario * diasTrabajados;
 
-  let obrero = 0;
-  let patronal = 0;
+  // Cuotas Obrero:
+  // - E&M Excedente: 0.40% sobre excedente 3 UMA
+  // - E&M Dinero: 0.25% sobre SBC
+  // - E&M Pensionados: 0.375% sobre SBC
+  // - Invalidez y Vida: 0.625% sobre SBC
+  // - Cesantía y Vejez: 1.125% sobre SBC
+  const obreroExcedente = excedenteTotal * 0.004;
+  const obreroSbc = sbcTotal * (0.0025 + 0.00375 + 0.00625 + 0.01125);
+  const obreroTotal = obreroExcedente + obreroSbc;
 
-  for (const cuota of TABLA_IMSS) {
-    if (cuota.exento_uma) {
-      obrero += (excedente * cuota.obrero) / 100;
-      patronal += (excedente * cuota.patron) / 100;
-    } else {
-      obrero += (sbcMensual * cuota.obrero) / 100;
-      patronal += (sbcMensual * cuota.patron) / 100;
-    }
-  }
+  // Cuotas Patronal:
+  // - E&M Fija: 20.40% sobre 1 UMA
+  // - E&M Excedente: 1.10% sobre excedente 3 UMA
+  // - E&M Dinero: 0.70% sobre SBC
+  // - E&M Pensionados: 1.05% sobre SBC
+  // - Invalidez y Vida: 1.75% sobre SBC
+  // - Riesgos de Trabajo: 0.50% sobre SBC
+  // - Guarderías: 1.00% sobre SBC
+  // - Retiro: 2.00% sobre SBC
+  // - Cesantía y Vejez: 3.15% sobre SBC
+  // - INFONAVIT: 5.00% sobre SBC
+  const patronFija = (1 * UMA_DIARIA * diasTrabajados) * 0.204;
+  const patronExcedente = excedenteTotal * 0.011;
+  const patronSbc = sbcTotal * (0.007 + 0.0105 + 0.0175 + 0.005 + 0.01 + 0.02 + 0.0315 + 0.05);
+  const patronTotal = patronFija + patronExcedente + patronSbc;
 
-  return { obrero: Math.round(obrero * 100) / 100, patronal: Math.round(patronal * 100) / 100 };
+  return {
+    obrero: Math.round(obreroTotal * 100) / 100,
+    patronal: Math.round(patronTotal * 100) / 100
+  };
 }
 
 // --- CÁLCULO DE VACACIONES (Vacaciones Dignas - Art. 76 LFT) ---
-// Reforma 2023: 12 días año 1, +2 hasta 20, luego +2 cada 5 años
 function calcularDiasVacaciones(aniosAntiguedad: number): number {
   if (aniosAntiguedad < 1) return 0;
   if (aniosAntiguedad === 1) return 12;
   if (aniosAntiguedad === 2) return 14;
   if (aniosAntiguedad === 3) return 16;
   if (aniosAntiguedad === 4) return 18;
-  if (aniosAntiguedad <= 9) return 20; // 5-9 años
-  if (aniosAntiguedad <= 14) return 22; // 10-14
-  if (aniosAntiguedad <= 19) return 24; // 15-19
-  if (aniosAntiguedad <= 24) return 26; // 20-24
-  return 28; // 25+
+  if (aniosAntiguedad <= 9) return 20;
+  if (aniosAntiguedad <= 14) return 22;
+  if (aniosAntiguedad <= 19) return 24;
+  if (aniosAntiguedad <= 24) return 26;
+  return 28;
 }
 
-// Prima vacacional = 25% del salario de los días de vacaciones (Art. 80)
 function calcularPrimaVacacional(sueldoDiario: number, aniosAntiguedad: number, diasPeriodo: number): number {
   const diasVacacion = calcularDiasVacaciones(aniosAntiguedad);
   const proporcionVacacional = diasPeriodo / 365;
@@ -94,8 +107,6 @@ function calcularPrimaVacacional(sueldoDiario: number, aniosAntiguedad: number, 
   return sueldoDiario * diasVacProporcionales * 0.25;
 }
 
-// --- CÁLCULO DE AGUINALDO (Art. 87 LFT) ---
-// 15 días de salario mínimo, proporcional si no trabajó el año completo
 function calcularAguinaldo(sueldoDiario: number, diasTrabajadosAnio: number): number {
   const proporcionAnio = Math.min(1, diasTrabajadosAnio / 365);
   return 15 * sueldoDiario * proporcionAnio;
@@ -105,16 +116,19 @@ function calcularPrimaDominical(sueldoDiario: number, domingosTrabajados: number
   return sueldoDiario * domingosTrabajados * 0.25;
 }
 
-// --- HORAS EXTRA (Art. 66-68 LFT) ---
-// Dobles: primeras 9 horas a la semana
-// Triples: excedentes de 9 horas
-// Proporcional: hora sencilla (sueldoDiario / 8 * totalHoras)
 function calcularHorasExtra(
   sueldoDiario: number,
   horasDobles: number,
   horasTriples: number,
-  modalidad: 'lft' | 'proporcional' = 'lft'
+  modalidad: 'lft' | 'proporcional' | 'ninguna' = 'lft'
 ) {
+  if (modalidad === 'ninguna') {
+    return {
+      pagoDoble: 0,
+      pagoTriple: 0,
+      total: 0,
+    };
+  }
   const horaNormal = sueldoDiario / 8;
   if (modalidad === 'proporcional') {
     const totalHoras = horasDobles + horasTriples;
@@ -132,47 +146,38 @@ function calcularHorasExtra(
   };
 }
 
-// --- DESCUENTO POR RETARDOS ---
-// Se descuenta el tiempo no laborado (doble por ser tiempo no trabajado dentro de la jornada)
 function calcularDescuentoRetardos(sueldoDiario: number, minutosRetardo: number): number {
   const minutoNormal = sueldoDiario / (8 * 60);
   return minutoNormal * minutosRetardo;
 }
 
-// --- ISR (Art. 96 LISR) ---
-// Calcula el ISR basado en el salario mensual gravable y lo divide proporcionalmente (ej. en dos quincenas = / 2)
+// ISR (Art. 96 LISR) con Tarifa SAT Quincenal o Mensual según periodo
 function calcularIsr(
   ingresoPeriodo: number,
   diasPeriodo: number = 15,
   sueldoMensualDirecto?: number
 ): { isr: number; subsidio: number } {
-  // 1. Proyectar ingreso mensual gravable
-  const ingresoMensual = sueldoMensualDirecto && sueldoMensualDirecto > 0
-    ? sueldoMensualDirecto
-    : Math.round((ingresoPeriodo * (30 / Math.max(1, diasPeriodo))) * 100) / 100;
-
-  // 2. Buscar en la tabla mensual de ISR (Art. 96 LISR)
-  let bracket = TABLA_ISR_MENSUAL.find(b => ingresoMensual >= b.inferior && ingresoMensual <= b.superior);
-  if (!bracket) {
-    bracket = TABLA_ISR_MENSUAL[TABLA_ISR_MENSUAL.length - 1];
+  if (!ingresoPeriodo || ingresoPeriodo <= 0) {
+    return { isr: 0, subsidio: 0 };
   }
 
-  // 3. Impuesto mensual base
-  const impuestoMarginal = ((ingresoMensual - bracket.inferior) * bracket.porcentaje) / 100;
-  const isrBaseMensual = bracket.cuota_fija + impuestoMarginal;
+  const esQuincena = diasPeriodo >= 13 && diasPeriodo <= 16;
+  const tabla = esQuincena ? TABLA_ISR_QUINCENAL : TABLA_ISR_MENSUAL;
 
-  // 4. Subsidio al Empleo (Decreto SAT: aplica para ingresos mensuales <= $9,081.00)
-  const subsidioMensual = calcularSubsidio(ingresoMensual);
-  const isrNetoMensual = Math.max(0, isrBaseMensual - subsidioMensual);
+  let bracket = tabla.find(b => ingresoPeriodo >= b.inferior && ingresoPeriodo <= b.superior);
+  if (!bracket) {
+    bracket = tabla[tabla.length - 1];
+  }
 
-  // 5. División proporcional del ISR para la quincena/período actual (ej. quincena = 15/30 = 0.5 o /2)
-  const factorProporcional = Math.min(1, Math.max(0.1, diasPeriodo / 30));
-  const isrPeriodo = Math.round((isrNetoMensual * factorProporcional) * 100) / 100;
-  const subsidioPeriodo = Math.round((subsidioMensual * factorProporcional) * 100) / 100;
+  const impuestoMarginal = ((ingresoPeriodo - bracket.inferior) * bracket.porcentaje) / 100;
+  const isrBase = bracket.cuota_fija + impuestoMarginal;
+
+  const subsidio = esQuincena ? calcularSubsidio(ingresoPeriodo * 2) / 2 : calcularSubsidio(ingresoPeriodo);
+  const isrNeto = Math.max(0, isrBase - subsidio);
 
   return {
-    isr: isrPeriodo,
-    subsidio: subsidioPeriodo,
+    isr: Math.round(isrNeto * 100) / 100,
+    subsidio: Math.round(subsidio * 100) / 100,
   };
 }
 
@@ -217,7 +222,7 @@ export interface NominaInput {
   diasTrabajadosAnio: number; // Para aguinaldo
   esNominaAguinaldo?: boolean;
   montoPropina?: number;
-  modalidadHorasExtra?: 'lft' | 'proporcional';
+  modalidadHorasExtra?: 'lft' | 'proporcional' | 'ninguna';
 }
 
 export interface NominaOutput {
@@ -266,12 +271,30 @@ export function calcularNomina(input: NominaInput): NominaOutput {
 
   const totalPercepciones = sueldoOrdinario + pagoDoble + pagoTriple + primaDominical + primaVacacional + aguinaldo + propina;
 
-  // Deducciones (ISR basado en salario mensual y divididos los pagos en 2 partes quincenales)
-  const { isr, subsidio } = calcularIsr(totalPercepciones, diasTrabajados, sueldoMensual);
-  const { obrero: imssObrero, patronal: imssPatronal } = calcularImss(salarioDiarioIntegrado);
-  const descuentoRetardos = calcularDescuentoRetardos(sueldoDiario, minutosRetardo);
+  // Deducciones
+  let isr = 0;
+  let subsidio = 0;
+  if (totalPercepciones > 0 && diasTrabajados > 0) {
+    const isrRes = calcularIsr(totalPercepciones, diasTrabajados, sueldoMensual);
+    isr = isrRes.isr;
+    subsidio = isrRes.subsidio;
+  }
 
-  const totalDeducciones = isr + imssObrero + descuentoRetardos;
+  let imssObrero = 0;
+  let imssPatronal = 0;
+  if (totalPercepciones > 0 && diasTrabajados > 0) {
+    const sdiEffective = salarioDiarioIntegrado > 0 ? salarioDiarioIntegrado : sueldoDiario * 1.0493;
+    const { obrero, patronal } = calcularImss(sdiEffective, diasTrabajados);
+    imssObrero = obrero;
+    imssPatronal = patronal;
+  }
+
+  const descuentoRetardos = diasTrabajados > 0 ? calcularDescuentoRetardos(sueldoDiario, minutosRetardo) : 0;
+
+  const totalDeduccionesRaw = isr + imssObrero + descuentoRetardos;
+  const totalDeducciones = Math.min(totalPercepciones, totalDeduccionesRaw);
+
+  const neto = Math.max(0, Math.round((totalPercepciones - totalDeducciones) * 100) / 100);
 
   return {
     percepciones: {
@@ -293,7 +316,7 @@ export function calcularNomina(input: NominaInput): NominaOutput {
       otrasDeducciones: 0,
       total: Math.round(totalDeducciones * 100) / 100,
     },
-    neto: Math.round((totalPercepciones - totalDeducciones) * 100) / 100,
+    neto,
     sdi: salarioDiarioIntegrado,
     imssPatronal: Math.round(imssPatronal * 100) / 100,
   };

@@ -245,8 +245,26 @@ function parseFechaClean(rawFecha: any, concepto?: string): string {
     }
   }
 
-  // 2. SOLO SI la fecha de la columna no vino o fue inválida: intentar extraer de referencia SPEI en el concepto
+  // 2. SOLO SI la fecha de la columna no vino o fue inválida: intentar extraerla del concepto
   if (concepto) {
+    // 2a. Fecha embebida estilo estado de cuenta BBVA ("09/JUL", "09 JUL", "09-JUL") — más confiable
+    const MESES: Record<string, number> = {
+      ENE: 1, FEB: 2, MAR: 3, ABR: 4, MAY: 5, JUN: 6, JUL: 7, AGO: 8, SEP: 9, OCT: 10, NOV: 11, DIC: 12,
+      JAN: 1, APR: 4, AUG: 8, DEC: 12
+    };
+    const mesMatch = concepto.match(/\b(\d{1,2})\s*[\/\-\.]\s*([A-Za-z]{3})(?:\b|[^A-Za-z])/);
+    if (mesMatch) {
+      const dNum = parseInt(mesMatch[1], 10);
+      const mNum = MESES[mesMatch[2].toUpperCase()];
+      if (mNum && dNum >= 1 && dNum <= 31) {
+        const now = new Date();
+        let yyyy = now.getFullYear();
+        if (mNum > now.getMonth() + 1) yyyy -= 1;
+        return `${yyyy}-${String(mNum).padStart(2, '0')}-${String(dNum).padStart(2, '0')}`;
+      }
+    }
+
+    // 2b. Referencia SPEI (DDMMYY embebido en 8 dígitos consecutivos)
     const speiMatch = concepto.match(/\b(\d{2})(\d{2})(\d{2})\d(?=[A-Za-z0-9]|$)/);
     if (speiMatch) {
       const dd = speiMatch[1];
@@ -290,10 +308,11 @@ export async function importarMovimientosBancarios(
 
     const estatusId = statusPendiente?.id;
 
-    // Obtener cuentas bancarias para el auto-enrutamiento
+    // Obtener cuentas bancarias para el auto-enrutamiento (solo de la empresa activa)
     const { data: cuentas } = await supabaseAdmin
       .from('cuentas_bancarias')
-      .select('id, nombre');
+      .select('id, nombre')
+      .eq('empresa_id', empresaId);
 
     const bbvaAcc = cuentas?.find(c => c.nombre.toUpperCase() === 'BBVA');
     const cajaAcc = cuentas?.find(c => c.nombre.toUpperCase().includes('CAJA CHICA'));
@@ -308,16 +327,18 @@ export async function importarMovimientosBancarios(
       let d = Math.abs(parseNumberClean(m.deposito));
       const rfc = extraerRfcDeConcepto(m.concepto);
 
-      // Enrutamiento automático
+      // Enrutamiento automático: solo si el usuario NO eligió una cuenta destino explícita
       const conceptoUpper = (m.concepto || '').toUpperCase();
       let targetCuentaId = cuentaBancariaId || null;
 
-      if (conceptoUpper.includes('OELTRANSFER')) {
-        targetCuentaId = parrotId || targetCuentaId;
-      } else if (esMovimientoEfectivo(m.concepto || '')) {
-        targetCuentaId = cajaId || targetCuentaId;
-      } else {
-        targetCuentaId = bbvaId || targetCuentaId;
+      if (!targetCuentaId) {
+        if (conceptoUpper.includes('OELTRANSFER')) {
+          targetCuentaId = parrotId;
+        } else if (esMovimientoEfectivo(m.concepto || '')) {
+          targetCuentaId = cajaId;
+        } else {
+          targetCuentaId = bbvaId;
+        }
       }
 
       // Si se enruta a la Caja Chica y era un Retiro (salida del banco), lo sumamos en la Caja Chica (se convierte a Depósito)
@@ -342,6 +363,7 @@ export async function importarMovimientosBancarios(
         rfc_proveedor: rfc,
         empresa_id: empresaId,
         cuenta_bancaria_id: targetCuentaId,
+        mes_conciliacion: fechaFormatted.substring(0, 7),
         visible_egresos: false,
         visible_ingresos: false
       };
@@ -1822,7 +1844,7 @@ export async function actualizarMesConciliacionMovimiento(
 
 export async function crearComprobanteDeposito(
   payload: {
-    tipo: 'deposito_ventanilla' | 'corte_tarjeta';
+    tipo: 'deposito_ventanilla' | 'corte_tarjeta' | 'corte_pos' | 'corte_bbva' | 'corte_parrot' | string;
     fecha: string;
     monto: number;
     descripcion?: string;
@@ -1836,31 +1858,59 @@ export async function crearComprobanteDeposito(
     propina_credito?: number;
     monto_amex?: number;
     propina_amex?: number;
+    monto_efectivo?: number;
+    monto_parrotpay?: number;
+    propina_efectivo?: number;
+    propina_parrotpay?: number;
+    comision_transacciones?: number;
+    iva_transacciones?: number;
+    otros_cargos?: number;
   },
   token: string
 ) {
   try {
     const { empresaId } = await getUserEmpresaId(token);
-    const { data, error } = await supabaseAdmin
+    const insertPayload: any = {
+      tipo: payload.tipo,
+      fecha: payload.fecha,
+      monto: payload.monto,
+      descripcion: payload.descripcion || null,
+      archivo_url: payload.archivo_url || null,
+      storage_provider: payload.storage_provider || 'Supabase',
+      cuenta_bancaria_id: payload.cuenta_bancaria_id || null,
+      empresa_id: empresaId,
+      monto_debito: payload.monto_debito || 0,
+      monto_credito: payload.monto_credito || 0,
+      propina_debito: payload.propina_debito || 0,
+      propina_credito: payload.propina_credito || 0,
+      monto_amex: payload.monto_amex || 0,
+      propina_amex: payload.propina_amex || 0,
+      monto_efectivo: payload.monto_efectivo || 0,
+      monto_parrotpay: payload.monto_parrotpay || 0,
+      propina_efectivo: payload.propina_efectivo || 0,
+      propina_parrotpay: payload.propina_parrotpay || 0,
+      comision_transacciones: payload.comision_transacciones || 0,
+      iva_transacciones: payload.iva_transacciones || 0,
+      otros_cargos: payload.otros_cargos || 0
+    };
+
+    let { data, error } = await supabaseAdmin
       .from('comprobantes_deposito')
-      .insert({
-        tipo: payload.tipo,
-        fecha: payload.fecha,
-        monto: payload.monto,
-        descripcion: payload.descripcion || null,
-        archivo_url: payload.archivo_url || null,
-        storage_provider: payload.storage_provider || 'Supabase',
-        cuenta_bancaria_id: payload.cuenta_bancaria_id || null,
-        empresa_id: empresaId,
-        monto_debito: payload.monto_debito || 0,
-        monto_credito: payload.monto_credito || 0,
-        propina_debito: payload.propina_debito || 0,
-        propina_credito: payload.propina_credito || 0,
-        monto_amex: payload.monto_amex || 0,
-        propina_amex: payload.propina_amex || 0
-      })
+      .insert(insertPayload)
       .select()
       .single();
+
+    if (error && (error.message?.includes('comprobantes_deposito_tipo_check') || error.code === '23514')) {
+      console.warn('comprobantes_deposito_tipo_check active in DB, retrying insert with corte_tarjeta fallback');
+      insertPayload.tipo = 'corte_tarjeta';
+      const retryRes = await supabaseAdmin
+        .from('comprobantes_deposito')
+        .insert(insertPayload)
+        .select()
+        .single();
+      data = retryRes.data;
+      error = retryRes.error;
+    }
 
     if (error) throw error;
 
@@ -1877,6 +1927,8 @@ export async function crearComprobanteDeposito(
       await autoActualizarEstatusMovimiento(payload.movimiento_bancario_id, empresaId);
     }
 
+    await syncCajaChicaForComprobante(data, empresaId);
+
     return { success: true, comprobante: data };
   } catch (err: any) {
     console.error('Error in crearComprobanteDeposito:', err);
@@ -1887,7 +1939,7 @@ export async function crearComprobanteDeposito(
 export async function actualizarComprobanteDeposito(
   id: string,
   payload: {
-    tipo: 'deposito_ventanilla' | 'corte_tarjeta';
+    tipo: 'deposito_ventanilla' | 'corte_tarjeta' | 'corte_pos' | 'corte_bbva' | 'corte_parrot' | string;
     fecha: string;
     monto: number;
     descripcion?: string;
@@ -1900,32 +1952,65 @@ export async function actualizarComprobanteDeposito(
     propina_credito?: number;
     monto_amex?: number;
     propina_amex?: number;
+    monto_efectivo?: number;
+    monto_parrotpay?: number;
+    propina_efectivo?: number;
+    propina_parrotpay?: number;
+    comision_transacciones?: number;
+    iva_transacciones?: number;
+    otros_cargos?: number;
   },
   token: string
 ) {
   try {
-    const { data, error } = await supabaseAdmin
+    const { empresaId } = await getUserEmpresaId(token);
+    const updatePayload: any = {
+      tipo: payload.tipo,
+      fecha: payload.fecha,
+      monto: payload.monto,
+      descripcion: payload.descripcion || null,
+      archivo_url: payload.archivo_url || null,
+      storage_provider: payload.storage_provider || 'Supabase',
+      cuenta_bancaria_id: payload.cuenta_bancaria_id || null,
+      monto_debito: payload.monto_debito || 0,
+      monto_credito: payload.monto_credito || 0,
+      propina_debito: payload.propina_debito || 0,
+      propina_credito: payload.propina_credito || 0,
+      monto_amex: payload.monto_amex || 0,
+      propina_amex: payload.propina_amex || 0,
+      monto_efectivo: payload.monto_efectivo || 0,
+      monto_parrotpay: payload.monto_parrotpay || 0,
+      propina_efectivo: payload.propina_efectivo || 0,
+      propina_parrotpay: payload.propina_parrotpay || 0,
+      comision_transacciones: payload.comision_transacciones || 0,
+      iva_transacciones: payload.iva_transacciones || 0,
+      otros_cargos: payload.otros_cargos || 0
+    };
+
+    let { data, error } = await supabaseAdmin
       .from('comprobantes_deposito')
-      .update({
-        tipo: payload.tipo,
-        fecha: payload.fecha,
-        monto: payload.monto,
-        descripcion: payload.descripcion || null,
-        archivo_url: payload.archivo_url || null,
-        storage_provider: payload.storage_provider || 'Supabase',
-        cuenta_bancaria_id: payload.cuenta_bancaria_id || null,
-        monto_debito: payload.monto_debito || 0,
-        monto_credito: payload.monto_credito || 0,
-        propina_debito: payload.propina_debito || 0,
-        propina_credito: payload.propina_credito || 0,
-        monto_amex: payload.monto_amex || 0,
-        propina_amex: payload.propina_amex || 0
-      })
+      .update(updatePayload)
       .eq('id', id)
       .select()
       .single();
 
+    if (error && (error.message?.includes('comprobantes_deposito_tipo_check') || error.code === '23514')) {
+      console.warn('comprobantes_deposito_tipo_check active in DB, retrying update with corte_tarjeta fallback');
+      updatePayload.tipo = 'corte_tarjeta';
+      const retryRes = await supabaseAdmin
+        .from('comprobantes_deposito')
+        .update(updatePayload)
+        .eq('id', id)
+        .select()
+        .single();
+      data = retryRes.data;
+      error = retryRes.error;
+    }
+
     if (error) throw error;
+
+    await syncCajaChicaForComprobante(data, empresaId);
+
     return { success: true, comprobante: data };
   } catch (err: any) {
     console.error('Error in actualizarComprobanteDeposito:', err);
@@ -1940,6 +2025,8 @@ export async function eliminarComprobanteDeposito(id: string, token: string) {
       .from('comprobantes_deposito_movimientos')
       .select('movimiento_id')
       .eq('comprobante_id', id);
+
+    await removeCajaChicaForComprobante(id, empresaId);
 
     const { error } = await supabaseAdmin
       .from('comprobantes_deposito')
@@ -1959,6 +2046,139 @@ export async function eliminarComprobanteDeposito(id: string, token: string) {
   } catch (err: any) {
     console.error('Error in eliminarComprobanteDeposito:', err);
     return { success: false, error: err.message || 'Error al eliminar comprobante.' };
+  }
+}
+
+async function syncCajaChicaForComprobante(comprobante: any, empresaId: string) {
+  try {
+    const { data: accounts } = await supabaseAdmin
+      .from('cuentas_bancarias')
+      .select('id, nombre')
+      .eq('empresa_id', empresaId);
+
+    let cajaChica = accounts?.find(a => a.nombre.toUpperCase().includes('CAJA CHICA'));
+    if (!cajaChica) {
+      const { data: newCaja } = await supabaseAdmin
+        .from('cuentas_bancarias')
+        .insert({ nombre: 'Caja Chica', moneda: 'MXN', empresa_id: empresaId })
+        .select('id, nombre')
+        .single();
+      if (newCaja) cajaChica = newCaja;
+    }
+    if (!cajaChica) return;
+
+    const { data: statusComprobado } = await supabaseAdmin
+      .from('estatus_conciliacion_bancaria')
+      .select('id')
+      .eq('clave', 'comprobado')
+      .single();
+
+    const refIngreso = `COMPROBANTE_EFECTIVO_${comprobante.id}`;
+    const refEgreso = `COMPROBANTE_DEPOSITO_BBVA_${comprobante.id}`;
+
+    // 1. REGISTRAR ENTRADA DE EFECTIVO EN CAJA CHICA (Únicamente cortes de venta, no depósitos en ventanilla)
+    const isCorteVenta = comprobante.tipo !== 'deposito_ventanilla';
+    const montoEfectivo = isCorteVenta ? (Number(comprobante.monto_efectivo || 0) + Number(comprobante.propina_efectivo || 0)) : 0;
+    const { data: existingIngreso } = await supabaseAdmin
+      .from('movimientos_bancarios')
+      .select('id')
+      .eq('referencia', refIngreso)
+      .eq('empresa_id', empresaId)
+      .maybeSingle();
+
+    if (montoEfectivo > 0) {
+      const payloadIngreso = {
+        fecha: comprobante.fecha,
+        concepto: `Venta en Efectivo (Parrot POS - ${comprobante.descripcion || comprobante.fecha})`,
+        deposito: montoEfectivo,
+        retiro: 0,
+        monto: montoEfectivo,
+        tipo_movimiento: 'Deposito',
+        referencia: refIngreso,
+        cuenta_bancaria_id: cajaChica.id,
+        estatus_conciliacion_id: statusComprobado?.id || null,
+        empresa_id: empresaId,
+        visible_ingresos: true,
+        visible_egresos: false
+      };
+      if (existingIngreso) {
+        await supabaseAdmin.from('movimientos_bancarios').update(payloadIngreso).eq('id', existingIngreso.id);
+      } else {
+        await supabaseAdmin.from('movimientos_bancarios').insert(payloadIngreso);
+      }
+    } else if (existingIngreso) {
+      await supabaseAdmin.from('movimientos_bancarios').delete().eq('id', existingIngreso.id);
+    }
+
+    // 2. REGISTRAR DESCUENTO / SALIDA DE CAJA CHICA AL DEPOSITAR EL EFECTIVO A BANCO BBVA
+    const isDepositoABanco = comprobante.tipo === 'deposito_ventanilla' && comprobante.cuenta_bancaria_id && comprobante.cuenta_bancaria_id !== cajaChica.id;
+    const montoDescuento = Number(comprobante.monto || 0);
+
+    const { data: existingEgreso } = await supabaseAdmin
+      .from('movimientos_bancarios')
+      .select('id')
+      .eq('referencia', refEgreso)
+      .eq('empresa_id', empresaId)
+      .maybeSingle();
+
+    if (isDepositoABanco && montoDescuento > 0) {
+      const payloadEgreso = {
+        fecha: comprobante.fecha,
+        concepto: `Descuento Caja Chica por Depósito de Efectivo a Banco (${comprobante.descripcion || comprobante.fecha})`,
+        deposito: 0,
+        retiro: montoDescuento,
+        monto: -montoDescuento,
+        tipo_movimiento: 'Retiro',
+        referencia: refEgreso,
+        cuenta_bancaria_id: cajaChica.id,
+        estatus_conciliacion_id: statusComprobado?.id || null,
+        empresa_id: empresaId,
+        visible_ingresos: false,
+        visible_egresos: true
+      };
+      if (existingEgreso) {
+        await supabaseAdmin.from('movimientos_bancarios').update(payloadEgreso).eq('id', existingEgreso.id);
+      } else {
+        await supabaseAdmin.from('movimientos_bancarios').insert(payloadEgreso);
+      }
+    } else if (existingEgreso) {
+      await supabaseAdmin.from('movimientos_bancarios').delete().eq('id', existingEgreso.id);
+    }
+  } catch (err) {
+    console.error('Error syncing Caja Chica for comprobante:', err);
+  }
+}
+
+export async function resyncAllCajaChicaComprobantesAction(empresaId: string) {
+  try {
+    const { data: comprobantes } = await supabaseAdmin
+      .from('comprobantes_deposito')
+      .select('*')
+      .eq('empresa_id', empresaId);
+
+    if (comprobantes) {
+      for (const comp of comprobantes) {
+        await syncCajaChicaForComprobante(comp, empresaId);
+      }
+    }
+    return { success: true };
+  } catch (err: any) {
+    console.error('Error resyncing Caja Chica:', err);
+    return { success: false, error: err.message };
+  }
+}
+
+async function removeCajaChicaForComprobante(comprobanteId: string, empresaId: string) {
+  try {
+    const refIngreso = `COMPROBANTE_EFECTIVO_${comprobanteId}`;
+    const refEgreso = `COMPROBANTE_DEPOSITO_BBVA_${comprobanteId}`;
+    await supabaseAdmin
+      .from('movimientos_bancarios')
+      .delete()
+      .or(`referencia.eq.${refIngreso},referencia.eq.${refEgreso}`)
+      .eq('empresa_id', empresaId);
+  } catch (err) {
+    console.error('Error removing Caja Chica movements for comprobante:', err);
   }
 }
 

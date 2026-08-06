@@ -30,7 +30,7 @@ import {
   eliminarMovimientoBancario,
   desconciliarMovimientoBancario
 } from './reconciliationActions';
-import { eliminarGasto, eliminarPedidoSano } from './actions';
+import { eliminarGasto, eliminarPedidoSano, eliminarFacturaCliente } from './actions';
 import { EditGastoModal, EditVentaModal, EditMovimientoModal } from './_components/EditModals';
 import {
   UploadCloud, FileText, Send, Eye, RefreshCw, AlertTriangle, CheckCircle,
@@ -359,15 +359,74 @@ export default function AdvancedBillingModule() {
         .order('creado_en', { ascending: false });
       setVentasFacturadas(vAll || []);
 
-      // 3. Pedidos pendientes de facturar (solo liquidados)
+      // 2b. Facturas XML de ingreso sin vincular (carga masiva que no encontró un pedido candidato)
+      const { data: fIngresosSueltas } = await supabase
+        .from('facturas_clientes')
+        .select('*, clientes(nombre_local, rfc, email_facturacion), estatus_factura(nombre)')
+        .eq('empresa_id', empresaId)
+        .is('pedido_id', null)
+        .order('fecha_emision', { ascending: false });
+
+      const ventasSueltas = (fIngresosSueltas || []).map((f: any) => ({
+        id: f.id,
+        numero_pedido: '',
+        folio_factura: f.serie_folio || (f.uuid_fiscal ? `UUID:${f.uuid_fiscal.substring(0, 8)}` : ''),
+        precio_total: Number(f.total || 0),
+        cliente_nombre: f.clientes?.nombre_local,
+        fecha_pedido: f.fecha_emision,
+        estatus_pago: 'Liquidado',
+        clientes: f.clientes,
+        facturas_clientes: [f],
+        movimiento_bancario_id: f.movimiento_bancario_id ?? null,
+        _esFacturaSuelta: true
+      }));
+      setVentasFacturadas([...ventasSueltas, ...(vAll || [])]);
+
+      // 3. Pedidos y Facturas de ingresos pendientes de conciliar
       const { data: pPend } = await supabase
         .from('pedidos')
-        .select('id, numero_pedido, precio_total, cliente_nombre, fecha_pedido')
+        .select('*, clientes(nombre_local, rfc), facturas_clientes(*)')
         .eq('empresa_id', empresaId)
-        .is('folio_factura', null)
-        .eq('estatus_pago', 'Liquidado')
+        .is('movimiento_bancario_id', null)
+        .or('estatus_pago.is.null,estatus_pago.neq.Cancelado')
         .order('creado_en', { ascending: false });
-      setPedidosPendientes(pPend || []);
+
+      const { data: fIngresosSueltas } = await supabase
+        .from('facturas_clientes')
+        .select('*, clientes(nombre_local, rfc)')
+        .eq('empresa_id', empresaId)
+        .is('pedido_id', null)
+        .is('movimiento_bancario_id', null)
+        .order('fecha_emision', { ascending: false });
+
+      const pedidosMapped = (pPend || []).map((p: any) => {
+        const fcList = p.facturas_clientes;
+        const fc = Array.isArray(fcList) ? fcList[0] : fcList;
+        return {
+          id: p.id,
+          numero_pedido: p.numero_pedido || '',
+          folio_factura: p.folio_factura || fc?.serie_folio || (fc?.uuid_fiscal ? `UUID:${fc.uuid_fiscal.substring(0, 8)}` : ''),
+          precio_total: Number(fc?.total || p.precio_total || 0),
+          cliente_nombre: p.cliente_nombre || p.clientes?.nombre_local || fc?.razon_social_receptor || '',
+          fecha_pedido: p.fecha_pedido || fc?.fecha_emision || p.creado_en,
+          metodo_pago: p.metodo_pago || fc?.metodo_pago || '',
+          uuid_fiscal: p.uuid_fiscal || fc?.uuid_fiscal || ''
+        };
+      });
+
+      const sueltasMapped = (fIngresosSueltas || []).map((f: any) => ({
+        id: f.id,
+        numero_pedido: '',
+        folio_factura: f.serie_folio || (f.uuid_fiscal ? `UUID:${f.uuid_fiscal.substring(0, 8)}` : 'Factura XML'),
+        precio_total: Number(f.total || 0),
+        cliente_nombre: f.clientes?.nombre_local || f.razon_social_receptor || '',
+        fecha_pedido: f.fecha_emision,
+        metodo_pago: f.metodo_pago || '',
+        uuid_fiscal: f.uuid_fiscal || '',
+        _esFacturaSuelta: true
+      }));
+
+      setPedidosPendientes([...pedidosMapped, ...sueltasMapped]);
 
       // 4. Gastos pendientes de facturar/comprobar (egresos manuales sin comprobante)
       const { data: gPend } = await supabase
@@ -1072,6 +1131,18 @@ export default function AdvancedBillingModule() {
     const res = await eliminarPedidoSano(id, token);
     if (res.success) {
       alert('Venta eliminada exitosamente');
+      fetchData();
+    } else {
+      alert('Error: ' + res.error);
+    }
+  };
+
+  const handleDeleteFacturaSuelta = async (facturaId: string) => {
+    if (!confirm('¿Estás seguro de eliminar esta factura XML de ingreso?')) return;
+    const token = await getSessionToken();
+    const res = await eliminarFacturaCliente(facturaId, token);
+    if (res.success) {
+      alert('Factura de ingreso eliminada exitosamente');
       fetchData();
     } else {
       alert('Error: ' + res.error);

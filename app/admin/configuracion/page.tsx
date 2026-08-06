@@ -7,6 +7,7 @@ import { useRouter } from 'next/navigation';
 import { supabase } from '../../../lib/supabase';
 import { useThemeMode } from '../../../lib/useThemeMode';
 import { useSessionToken } from '../../../lib/hooks/useSessionToken';
+import { useEmpresaId } from '../../../lib/hooks/useEmpresaId';
 import { Repartidor, FormaPago, EstatusFactura, RegimenFiscal, UsoCfdi, CategoriaGasto, Proveedor, ProductoVariante } from '../types';
 import {
   Settings, Truck, CreditCard, FileCheck, Hash, Globe, FileText,
@@ -21,6 +22,7 @@ import { crearBucketsAlmacenamiento, provisionarAdminEmpresa } from '../actions/
 export default function ConfigPage() {
   const router = useRouter();
   const getSessionToken = useSessionToken();
+  const getEmpresaId = useEmpresaId();
   const { isDarkMode, toggleDarkMode } = useThemeMode();
   const [activeTab, setActiveTab] = useState<'ventas' | 'clientes' | 'facturacion' | 'productos' | 'tickets' | 'empresa' | 'superusuario' | 'rrhh' | 'periodos'>('ventas');
 
@@ -138,7 +140,7 @@ export default function ConfigPage() {
     }
   };
 
-  const loadAllData = async () => {
+  const loadAllData = async (empresaIdForFilters: string | null = null) => {
     // 1. Repartidores
     const reps = await fetchCatalog('repartidores', 'nombre');
     setRepartidores(reps);
@@ -165,8 +167,8 @@ export default function ConfigPage() {
 
 
     // FACTURACION Y CONCILIACION
-    const cb = await fetchCatalog('cuentas_bancarias', 'nombre');
-    setCuentasBancarias(cb);
+    // Cuentas bancarias: filtrar por empresa activa para no repetir el catálogo de otros clientes
+    await cargarCuentasBancarias(empresaIdForFilters);
     const ec = await fetchCatalog('estatus_conciliacion_bancaria', 'nombre');
     setEstatusConciliacion(ec);
     const catMov = await fetchCatalog('categorias_movimiento_bancario', 'nombre');
@@ -261,19 +263,8 @@ export default function ConfigPage() {
         await loadSuperData();
       }
 
-      // Cargar id de empresa activa y perfil
-      let activeEmpId = null;
-      const sessionData = localStorage.getItem('seimenjo_session');
-      if (sessionData) {
-        try {
-          const datosSesion = JSON.parse(sessionData);
-          activeEmpId = datosSesion.empresa_id;
-        } catch (e) {}
-      }
-      if (!activeEmpId) {
-        const { data: { user } } = await supabase.auth.getUser();
-        activeEmpId = user?.user_metadata?.empresa_id;
-      }
+      // Cargar id de empresa activa y perfil (resolución autoritativa, igual que la RLS)
+      const activeEmpId = await getEmpresaId();
       if (activeEmpId) {
         setEmpresaId(activeEmpId);
         const { data: empProfile } = await supabase
@@ -286,7 +277,7 @@ export default function ConfigPage() {
         }
       }
 
-      await loadAllData();
+      await loadAllData(activeEmpId);
     };
     checkAuth();
   }, [router]);
@@ -299,11 +290,30 @@ export default function ConfigPage() {
   }, [activeTab, empresaId]);
 
   // --- ACCIONES COMUNES ---
+  const cargarCuentasBancarias = async (empId: string | null = empresaId) => {
+    let lista: any[] = [];
+    try {
+      let cbQuery = supabase.from('cuentas_bancarias').select('*');
+      if (empId) cbQuery = cbQuery.eq('empresa_id', empId);
+      const { data: cbData, error: cbErr } = await cbQuery.order('nombre', { ascending: true });
+      if (cbErr) throw cbErr;
+      lista = cbData || [];
+      setErrors(prev => ({ ...prev, 'cuentas_bancarias': null }));
+    } catch (err: any) {
+      console.error('Error al cargar cuentas_bancarias:', err);
+      setErrors(prev => ({ ...prev, 'cuentas_bancarias': err.message }));
+    }
+    setCuentasBancarias(lista);
+    return lista;
+  };
+
   const handleSaveItem = async (tableName: string, fields: any, setList: React.Dispatch<React.SetStateAction<any[]>>, orderBy = 'nombre', resetForm: () => void) => {
     try {
       const { error } = await supabase.from(tableName).insert([fields]);
       if (error) throw error;
-      const updated = await fetchCatalog(tableName, orderBy);
+      const updated = tableName === 'cuentas_bancarias'
+        ? await cargarCuentasBancarias()
+        : await fetchCatalog(tableName, orderBy);
       setList(updated);
       resetForm();
     } catch (err: any) {
@@ -317,7 +327,9 @@ export default function ConfigPage() {
     try {
       const { error } = await supabase.from(tableName).delete().eq('id', id);
       if (error) throw error;
-      const updated = await fetchCatalog(tableName, orderBy);
+      const updated = tableName === 'cuentas_bancarias'
+        ? await cargarCuentasBancarias()
+        : await fetchCatalog(tableName, orderBy);
       setList(updated);
     } catch (err: any) {
       console.error(err);
@@ -1253,7 +1265,7 @@ export default function ConfigPage() {
                 <div className="grid grid-cols-3 gap-2">
                   <input type="text" placeholder="Nombre (Ej. Banamex)" value={nuevaCuenta.nombre} className="bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-xl text-sm outline-none" onChange={e => setNuevaCuenta({...nuevaCuenta, nombre: e.target.value})} />
                   <input type="text" placeholder="Número Cuenta" value={nuevaCuenta.numero_cuenta} className="bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-xl text-sm outline-none" onChange={e => setNuevaCuenta({...nuevaCuenta, numero_cuenta: e.target.value})} />
-                  <button onClick={() => handleSaveItem('cuentas_bancarias', nuevaCuenta, setCuentasBancarias, 'nombre', () => setNuevaCuenta({ nombre: '', numero_cuenta: '', moneda: 'MXN' }))} className="bg-blue-600 hover:bg-blue-500 text-white py-2.5 rounded-xl font-bold text-sm flex items-center justify-center gap-1"><Plus size={16}/> Agregar</button>
+                  <button onClick={() => handleSaveItem('cuentas_bancarias', { ...nuevaCuenta, empresa_id: empresaId }, setCuentasBancarias, 'nombre', () => setNuevaCuenta({ nombre: '', numero_cuenta: '', moneda: 'MXN' }))} className="bg-blue-600 hover:bg-blue-500 text-white py-2.5 rounded-xl font-bold text-sm flex items-center justify-center gap-1"><Plus size={16}/> Agregar</button>
                 </div>
                 <div className="overflow-hidden rounded-xl border border-gray-100 dark:border-gray-800">
                   <table className="w-full text-left text-xs">

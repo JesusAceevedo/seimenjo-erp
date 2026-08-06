@@ -44,7 +44,14 @@ export async function loadEmpleados(empresaId: string) {
     .select('*')
     .eq('empresa_id', empresaId)
     .order('nombre_completo');
-  return data ?? [];
+  if (!data) return [];
+  const seen = new Set<string>();
+  return data.filter(e => {
+    const key = (e.nombre_completo || e.id || '').trim().toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 export async function loadTurnos(empresaId: string) {
@@ -84,32 +91,66 @@ export async function loadHorariosEmpleados() {
 }
 
 export async function saveEmpleado(payload: any, isUpdate: boolean, id?: string) {
-  if (isUpdate && id) {
-    const { error } = await getServerSupabase()
-      .from('empleados_detalle')
-      .update(payload)
-      .eq('id', id);
-    if (error) throw error;
-  } else {
-    const { error } = await getServerSupabase()
-      .from('empleados_detalle')
-      .insert(payload);
-    if (error) throw error;
-  }
+  const sanitizedPayload = {
+    ...payload,
+    sueldo_mensual: isNaN(Number(payload.sueldo_mensual)) ? 0 : Number(payload.sueldo_mensual),
+    sueldo_diario: isNaN(Number(payload.sueldo_diario)) ? 0 : Number(payload.sueldo_diario),
+    salario_diario_integrado: isNaN(Number(payload.salario_diario_integrado)) ? 0 : Number(payload.salario_diario_integrado),
+  };
 
-  if (payload.zkteco_user_id) {
-    const nameText = `${payload.primer_nombre || ''} ${payload.primer_apellido || ''}`.trim();
-    const cmdText = `DATA UPDATE USERINFO PIN=${payload.zkteco_user_id}\tName=${nameText}\tPri=0\tPass=\tCard=\tGrp=1`;
-    const cmdId = Math.floor(100000 + Math.random() * 900000).toString();
-    await getServerSupabase()
-      .from('zkteco_comandos')
-      .insert({
-        empresa_id: payload.empresa_id,
-        comando_id: cmdId,
-        comando_texto: cmdText,
-        categoria: 'usuarios',
-        procesado: false
-      });
+  try {
+    if (isUpdate && id) {
+      const { error } = await getServerSupabase()
+        .from('empleados_detalle')
+        .update(sanitizedPayload)
+        .eq('id', id);
+      if (error) {
+        if (error.message?.includes('exento_reloj_checador')) {
+          const { exento_reloj_checador, ...payloadWithoutExento } = sanitizedPayload;
+          const { error: err2 } = await getServerSupabase()
+            .from('empleados_detalle')
+            .update(payloadWithoutExento)
+            .eq('id', id);
+          if (err2) throw err2;
+        } else {
+          throw error;
+        }
+      }
+    } else {
+      const { error } = await getServerSupabase()
+        .from('empleados_detalle')
+        .insert(sanitizedPayload);
+      if (error) {
+        if (error.message?.includes('exento_reloj_checador')) {
+          const { exento_reloj_checador, ...payloadWithoutExento } = sanitizedPayload;
+          const { error: err2 } = await getServerSupabase()
+            .from('empleados_detalle')
+            .insert(payloadWithoutExento);
+          if (err2) throw err2;
+        } else {
+          throw error;
+        }
+      }
+    }
+
+    if (sanitizedPayload.zkteco_user_id) {
+      const nameText = `${sanitizedPayload.primer_nombre || ''} ${sanitizedPayload.primer_apellido || ''}`.trim();
+      const cmdText = `DATA UPDATE USERINFO PIN=${sanitizedPayload.zkteco_user_id}\tName=${nameText}\tPri=0\tPass=\tCard=\tGrp=1`;
+      const cmdId = Math.floor(100000 + Math.random() * 900000).toString();
+      const { error: cmdErr } = await getServerSupabase()
+        .from('zkteco_comandos')
+        .insert({
+          empresa_id: sanitizedPayload.empresa_id,
+          comando_id: cmdId,
+          comando_texto: cmdText,
+          categoria: 'usuarios',
+          procesado: false
+        });
+      if (cmdErr) console.warn('[zkteco_comandos warn]', cmdErr);
+    }
+  } catch (err: any) {
+    console.error('[saveEmpleado error]', err);
+    throw new Error(err.message || 'Error al guardar empleado');
   }
 }
 
@@ -474,7 +515,7 @@ export async function calcularNominaCompleta(
   fechaFin: string,
   montoPropinas: number = 0,
   utilidadFiscalAnual: number = 0,
-  modalidadHorasExtra: 'lft' | 'proporcional' = 'lft',
+  modalidadHorasExtra: 'lft' | 'proporcional' | 'ninguna' = 'lft',
   incluirHoyEnFaltas: boolean = false
 ) {
   const { calcularNomina } = await import('./_lib/lft');
@@ -511,7 +552,14 @@ export async function calcularNominaCompleta(
       .lte('fecha', fechaFin),
   ]);
 
-  const empleados = empleadosRes.data || [];
+  const rawEmpleados = empleadosRes.data || [];
+  const seenEmp = new Set<string>();
+  const empleados = rawEmpleados.filter((emp: any) => {
+    const key = (emp.nombre_completo || emp.id || '').trim().toLowerCase();
+    if (seenEmp.has(key)) return false;
+    seenEmp.add(key);
+    return true;
+  });
   const logs = checadasRes.data || [];
   const absences = incidenciasRes.data || [];
   const horariosList = horariosRes.data || [];
@@ -529,7 +577,7 @@ export async function calcularNominaCompleta(
 
   const resultados = empleados.map((emp: any) => {
     const todayLocalStr = new Date().toLocaleDateString('en-CA');
-    const isExentoReloj = !!emp.exento_reloj_checador;
+    const isExentoReloj = !!emp.exento_reloj_checador || !emp.zkteco_user_id || String(emp.zkteco_user_id).trim() === '' || String(emp.zkteco_user_id).trim() === '0';
 
     let faltasNoJustificadasCount = 0;
     const detallesDias = dateArray.map(d => {

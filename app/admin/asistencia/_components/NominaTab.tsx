@@ -35,7 +35,7 @@ export default function NominaTab({
 
   const [resultados, setResultados] = useState<any[]>([]);
   const [calculando, setCalculando] = useState(false);
-  const [modalidadHorasExtra, setModalidadHorasExtra] = useState<'lft' | 'proporcional'>('lft');
+  const [modalidadHorasExtra, setModalidadHorasExtra] = useState<'lft' | 'proporcional' | 'ninguna'>('lft');
 
   // Parámetros de Propina Diaria (Configurables)
   const [descontarFaltas, setDescontarFaltas] = useState(true);
@@ -169,47 +169,67 @@ export default function NominaTab({
       'Puesto',
       'Salario Mensual',
       'Sueldo Diario',
-      'SDI',
-      'Días Pagados',
-      'Faltas',
-      'Sueldo Ordinario',
-      'Horas Extra',
-      'Prima Dominical',
+      'Días',
+      'Ordinario',
+      'H. Extra',
+      'Dominical',
+      'Vacaciones',
       'Propina',
-      'Total Percepciones',
-      'ISR (Art. 96)',
-      'IMSS Obrero',
-      'Descuento Retardos',
-      'Total Deducciones',
-      'Sueldo Neto'
+      'ISR',
+      'IMSS',
+      'Neto'
     ];
 
     const rows = resultados.map((r: any) => [
-      `"${(r.empleado?.nombre_completo || '').replace(/"/g, '""')}"`,
-      `"${(r.puesto || '').replace(/"/g, '""')}"`,
-      (r.empleado?.sueldo_mensual || (r.sueldoDiario * 30)).toFixed(2),
-      r.sueldoDiario.toFixed(2),
-      r.sdi.toFixed(2),
-      r.diasTrabajados,
-      r.faltasNoJustificadas || 0,
-      r.percepciones.sueldoOrdinario.toFixed(2),
-      (r.percepciones.horasExtraDobles + r.percepciones.horasExtraTriples).toFixed(2),
-      r.percepciones.primaDominical.toFixed(2),
-      r.percepciones.propina.toFixed(2),
-      r.percepciones.total.toFixed(2),
-      r.deducciones.isr.toFixed(2),
-      r.deducciones.imssObrero.toFixed(2),
-      r.deducciones.descuentoRetardos.toFixed(2),
-      r.deducciones.total.toFixed(2),
-      r.neto.toFixed(2)
+      `"${(r.nombre || '').replace(/"/g, '""')}"`,
+      `"${(r.puesto || 'General').replace(/"/g, '""')}"`,
+      (r.sueldoMensual || Math.round((r.sueldoDiario || 0) * 30)).toFixed(2),
+      (r.sueldoDiario || 0).toFixed(2),
+      r.diasTrabajados || 0,
+      (r.percepciones?.sueldoOrdinario || 0).toFixed(2),
+      ((r.percepciones?.horasExtraDobles || 0) + (r.percepciones?.horasExtraTriples || 0)).toFixed(2),
+      (r.percepciones?.primaDominical || 0).toFixed(2),
+      (r.percepciones?.primaVacacional || 0).toFixed(2),
+      (r.percepciones?.propina || 0).toFixed(2),
+      (r.deducciones?.isr || 0).toFixed(2),
+      (r.deducciones?.imssObrero || 0).toFixed(2),
+      (r.neto || 0).toFixed(2)
     ]);
 
-    const csvString = '\uFEFF' + [headers.join(','), ...rows.map(row => row.join(','))].join('\n');
+    const totMensual = resultados.reduce((sum, r) => sum + (r.sueldoMensual || Math.round((r.sueldoDiario || 0) * 30)), 0);
+    const totDiario = resultados.reduce((sum, r) => sum + (r.sueldoDiario || 0), 0);
+    const totDias = resultados.reduce((sum, r) => sum + (r.diasTrabajados || 0), 0);
+    const totOrdinario = resultados.reduce((sum, r) => sum + (r.percepciones?.sueldoOrdinario || 0), 0);
+    const totHExtra = resultados.reduce((sum, r) => sum + (r.percepciones?.horasExtraDobles || 0) + (r.percepciones?.horasExtraTriples || 0), 0);
+    const totDominical = resultados.reduce((sum, r) => sum + (r.percepciones?.primaDominical || 0), 0);
+    const totVacaciones = resultados.reduce((sum, r) => sum + (r.percepciones?.primaVacacional || 0), 0);
+    const totPropina = resultados.reduce((sum, r) => sum + (r.percepciones?.propina || 0), 0);
+    const totISR = resultados.reduce((sum, r) => sum + (r.deducciones?.isr || 0), 0);
+    const totIMSS = resultados.reduce((sum, r) => sum + (r.deducciones?.imssObrero || 0), 0);
+    const totNeto = resultados.reduce((sum, r) => sum + (r.neto || 0), 0);
+
+    const totalRow = [
+      '"Totales"',
+      '""',
+      totMensual.toFixed(2),
+      totDiario.toFixed(2),
+      totDias,
+      totOrdinario.toFixed(2),
+      totHExtra.toFixed(2),
+      totDominical.toFixed(2),
+      totVacaciones.toFixed(2),
+      totPropina.toFixed(2),
+      totISR.toFixed(2),
+      totIMSS.toFixed(2),
+      totNeto.toFixed(2)
+    ];
+
+    const csvString = '\uFEFF' + [headers.join(','), ...rows.map(row => row.join(',')), totalRow.join(',')].join('\n');
     const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.setAttribute('download', `Reporte_Nomina_${periodo.fecha_inicio}_al_${periodo.fecha_fin}.csv`);
+    link.setAttribute('download', `Nomina_Detalle_${periodo.fecha_inicio}_al_${periodo.fecha_fin}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -220,7 +240,228 @@ export default function NominaTab({
       alert('Primero debes calcular la nómina para generar el reporte en PDF.');
       return;
     }
-    window.print();
+
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      alert('Por favor permite las ventanas emergentes (popups) para abrir el reporte en PDF.');
+      return;
+    }
+
+    const totMensual = resultados.reduce((sum, r) => sum + (r.sueldoMensual || Math.round((r.sueldoDiario || 0) * 30)), 0);
+    const totDiario = resultados.reduce((sum, r) => sum + (r.sueldoDiario || 0), 0);
+    const totDias = resultados.reduce((sum, r) => sum + (r.diasTrabajados || 0), 0);
+    const totOrdinario = resultados.reduce((sum, r) => sum + (r.percepciones?.sueldoOrdinario || 0), 0);
+    const totHExtra = resultados.reduce((sum, r) => sum + (r.percepciones?.horasExtraDobles || 0) + (r.percepciones?.horasExtraTriples || 0), 0);
+    const totDominical = resultados.reduce((sum, r) => sum + (r.percepciones?.primaDominical || 0), 0);
+    const totVacaciones = resultados.reduce((sum, r) => sum + (r.percepciones?.primaVacacional || 0), 0);
+    const totPropina = resultados.reduce((sum, r) => sum + (r.percepciones?.propina || 0), 0);
+    const totISR = resultados.reduce((sum, r) => sum + (r.deducciones?.isr || 0), 0);
+    const totIMSS = resultados.reduce((sum, r) => sum + (r.deducciones?.imssObrero || 0), 0);
+    const totNeto = resultados.reduce((sum, r) => sum + (r.neto || 0), 0);
+
+    const formatMoney = (val: number) => `$${val.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+    const htmlContent = `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>Reporte de Nómina ${periodo.fecha_inicio} a ${periodo.fecha_fin}</title>
+          <style>
+            @page {
+              size: landscape;
+              margin: 8mm;
+            }
+            body {
+              font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+              margin: 0;
+              padding: 12px;
+              color: #111827;
+              background: #fff;
+            }
+            .header {
+              display: flex;
+              justify-content: space-between;
+              align-items: center;
+              border-bottom: 2px solid #111827;
+              padding-bottom: 10px;
+              margin-bottom: 14px;
+            }
+            .header h1 {
+              font-size: 18px;
+              font-weight: 900;
+              margin: 0;
+              color: #111827;
+            }
+            .header p {
+              font-size: 11px;
+              color: #4b5563;
+              margin: 3px 0 0 0;
+            }
+            .kpi-container {
+              display: flex;
+              gap: 10px;
+              margin-bottom: 14px;
+            }
+            .kpi-card {
+              flex: 1;
+              padding: 8px 10px;
+              border-radius: 6px;
+              border: 1px solid #e5e7eb;
+              background: #f9fafb;
+            }
+            .kpi-card .title {
+              font-size: 8.5px;
+              font-weight: 700;
+              color: #6b7280;
+              text-transform: uppercase;
+            }
+            .kpi-card .value {
+              font-size: 14px;
+              font-weight: 800;
+              margin-top: 2px;
+            }
+            table {
+              width: 100%;
+              border-collapse: collapse;
+              font-size: 9.5px;
+            }
+            th {
+              background-color: #f3f4f6;
+              color: #111827;
+              font-weight: 800;
+              text-align: left;
+              padding: 6px 6px;
+              border-bottom: 2px solid #374151;
+              text-transform: uppercase;
+              font-size: 8.5px;
+            }
+            td {
+              padding: 5px 6px;
+              border-bottom: 1px solid #e5e7eb;
+            }
+            tr:nth-child(even) {
+              background-color: #fcfcfc;
+            }
+            .text-right { text-align: right; }
+            .text-center { text-align: center; }
+            .font-bold { font-weight: 700; }
+            .font-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+            .total-row {
+              background-color: #f3f4f6 !important;
+              font-weight: 900;
+              border-top: 2px solid #111827;
+              border-bottom: 2px solid #111827;
+            }
+            @media print {
+              body { padding: 0; }
+            }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <div>
+              <h1>REPORTE GENERAL DE NÓMINA</h1>
+              <p>Período Activo: <strong>${periodo.fecha_inicio}</strong> al <strong>${periodo.fecha_fin}</strong> | Cumplimiento LFT & SAT LISR Art. 96</p>
+            </div>
+            <div style="text-align: right;">
+              <p style="font-size: 11px; font-weight: 800; color: #111827;">RAMEN DE PLAYA / SEIMENJO</p>
+              <p style="font-size: 9px; color: #6b7280;">Emisión: ${new Date().toLocaleDateString('es-MX')} ${new Date().toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })}</p>
+            </div>
+          </div>
+
+          <div class="kpi-container">
+            <div class="kpi-card">
+              <div class="title">Sueldos Ordinarios</div>
+              <div class="value" style="color: #111827;">${formatMoney(totOrdinario)}</div>
+            </div>
+            <div class="kpi-card">
+              <div class="title">Horas Extra</div>
+              <div class="value" style="color: #d97706;">${formatMoney(totHExtra)}</div>
+            </div>
+            <div class="kpi-card">
+              <div class="title">Propinas</div>
+              <div class="value" style="color: #059669;">${formatMoney(totPropina)}</div>
+            </div>
+            <div class="kpi-card">
+              <div class="title">Retención ISR</div>
+              <div class="value" style="color: #dc2626;">-${formatMoney(totISR)}</div>
+            </div>
+            <div class="kpi-card">
+              <div class="title">Cuotas IMSS</div>
+              <div class="value" style="color: #e11d48;">-${formatMoney(totIMSS)}</div>
+            </div>
+            <div class="kpi-card" style="background: #ecfdf5; border-color: #a7f3d0;">
+              <div class="title" style="color: #047857;">Total Neto a Pagar</div>
+              <div class="value" style="color: #047857;">${formatMoney(totNeto)}</div>
+            </div>
+          </div>
+
+          <table>
+            <thead>
+              <tr>
+                <th>Empleado</th>
+                <th>Puesto</th>
+                <th class="text-right">Salario Mensual</th>
+                <th class="text-right">Sueldo Diario</th>
+                <th class="text-center">Días</th>
+                <th class="text-right">Ordinario</th>
+                <th class="text-right">H. Extra</th>
+                <th class="text-right">Dominical</th>
+                <th class="text-right">Vacaciones</th>
+                <th class="text-right">Propina</th>
+                <th class="text-right">ISR</th>
+                <th class="text-right">IMSS</th>
+                <th class="text-right">Neto</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${resultados.map((r: any) => `
+                <tr>
+                  <td class="font-bold">${r.nombre || ''} ${r.exentoReloj ? '<span style="font-size: 8px; color: #2563eb; background: #eff6ff; padding: 1px 4px; border-radius: 3px; border: 1px solid #bfdbfe;">Sueldo Fijo</span>' : ''}</td>
+                  <td style="color: #4b5563;">${r.puesto || 'General'}</td>
+                  <td class="text-right font-mono" style="color: #059669; font-weight: 700;">${formatMoney(r.sueldoMensual || Math.round((r.sueldoDiario || 0) * 30))}</td>
+                  <td class="text-right font-mono" style="color: #6b7280;">${formatMoney(r.sueldoDiario || 0)}</td>
+                  <td class="text-center font-mono font-bold">${r.diasTrabajados || 0}</td>
+                  <td class="text-right font-mono">${formatMoney(r.percepciones?.sueldoOrdinario || 0)}</td>
+                  <td class="text-right font-mono" style="color: #d97706;">${formatMoney((r.percepciones?.horasExtraDobles || 0) + (r.percepciones?.horasExtraTriples || 0))}</td>
+                  <td class="text-right font-mono" style="color: #2563eb;">${formatMoney(r.percepciones?.primaDominical || 0)}</td>
+                  <td class="text-right font-mono" style="color: #7c3aed;">${formatMoney(r.percepciones?.primaVacacional || 0)}</td>
+                  <td class="text-right font-mono" style="color: #059669; font-weight: 600;">${formatMoney(r.percepciones?.propina || 0)}</td>
+                  <td class="text-right font-mono" style="color: #dc2626;">${r.deducciones?.isr > 0 ? `-${formatMoney(r.deducciones.isr)}` : '$0.00'}</td>
+                  <td class="text-right font-mono" style="color: #e11d48;">${r.deducciones?.imssObrero > 0 ? `-${formatMoney(r.deducciones.imssObrero)}` : '$0.00'}</td>
+                  <td class="text-right font-mono font-bold" style="font-size: 10.5px;">${formatMoney(r.neto || 0)}</td>
+                </tr>
+              `).join('')}
+              <tr class="total-row">
+                <td colspan="2">TOTALES GENERATION</td>
+                <td class="text-right font-mono">${formatMoney(totMensual)}</td>
+                <td class="text-right font-mono">${formatMoney(totDiario)}</td>
+                <td class="text-center font-mono">${totDias}</td>
+                <td class="text-right font-mono">${formatMoney(totOrdinario)}</td>
+                <td class="text-right font-mono">${formatMoney(totHExtra)}</td>
+                <td class="text-right font-mono">${formatMoney(totDominical)}</td>
+                <td class="text-right font-mono">${formatMoney(totVacaciones)}</td>
+                <td class="text-right font-mono">${formatMoney(totPropina)}</td>
+                <td class="text-right font-mono" style="color: #dc2626;">-${formatMoney(totISR)}</td>
+                <td class="text-right font-mono" style="color: #e11d48;">-${formatMoney(totIMSS)}</td>
+                <td class="text-right font-mono" style="font-size: 11px; color: #047857;">${formatMoney(totNeto)}</td>
+              </tr>
+            </tbody>
+          </table>
+          <script>
+            window.onload = function() {
+              setTimeout(function() {
+                window.print();
+              }, 300);
+            }
+          </script>
+        </body>
+      </html>
+    `;
+
+    printWindow.document.open();
+    printWindow.document.write(htmlContent);
+    printWindow.document.close();
   };
 
   const totalOrdinario = resultados.reduce((s, r) => s + r.percepciones.sueldoOrdinario, 0);
@@ -571,11 +812,12 @@ export default function NominaTab({
                 <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Pago Horas Extra</label>
                 <select
                   value={modalidadHorasExtra}
-                  onChange={e => setModalidadHorasExtra(e.target.value as 'lft' | 'proporcional')}
+                  onChange={e => setModalidadHorasExtra(e.target.value as 'lft' | 'proporcional' | 'ninguna')}
                   className="w-full px-3 py-2 rounded-lg bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 text-gray-900 dark:text-white font-bold text-xs"
                 >
                   <option value="lft">Conforme LFT (Dobles / Triples)</option>
                   <option value="proporcional">Proporcional Directo (Hora Sencilla = Sueldo ÷ 8)</option>
+                  <option value="ninguna">🚫 No contar Horas Extra (Solo Salario Regular)</option>
                 </select>
               </div>
               <div>
@@ -719,8 +961,8 @@ export default function NominaTab({
                           <td className="p-2 text-right text-blue-600">${r.percepciones.primaDominical.toFixed(2)}</td>
                           <td className="p-2 text-right text-purple-600">${r.percepciones.primaVacacional.toFixed(2)}</td>
                           <td className="p-2 text-right text-emerald-600 font-semibold">${r.percepciones.propina.toFixed(2)}</td>
-                          <td className="p-2 text-right text-rose-600">-${r.deducciones.isr.toFixed(2)}</td>
-                          <td className="p-2 text-right text-rose-500">-${r.deducciones.imssObrero.toFixed(2)}</td>
+                          <td className="p-2 text-right text-rose-600">{r.deducciones.isr > 0 ? `-$${r.deducciones.isr.toFixed(2)}` : '$0.00'}</td>
+                          <td className="p-2 text-right text-rose-500">{r.deducciones.imssObrero > 0 ? `-$${r.deducciones.imssObrero.toFixed(2)}` : '$0.00'}</td>
                           <td className="p-2 text-right text-gray-900 dark:text-white font-extrabold">${r.neto.toFixed(2)}</td>
                           <td className="p-2 text-center">
                             <button

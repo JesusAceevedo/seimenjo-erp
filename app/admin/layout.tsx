@@ -217,6 +217,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
   const hasModule = (moduleName: string) => {
     if (esSuperusuario) return true;
+    if (moduleName === 'herramientas') return true;
     if (moduleName === 'ventas') {
       return activeModules.includes('ventas') || activeModules.includes('pedidos');
     }

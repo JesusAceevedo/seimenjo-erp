@@ -18,6 +18,7 @@ import {
   FileText,
   ChevronLeft,
   ChevronRight,
+  Wrench,
 } from 'lucide-react';
 import CompanySwitcher from './CompanySwitcher';
 
@@ -68,6 +69,7 @@ export default function AdminSidebar({
     { module: 'proveedores', path: '/admin/proveedores', label: 'Proveedores', icon: Truck },
     { module: 'personal', path: '/admin/staff', label: 'Personal', icon: Users },
     { module: 'asistencia', path: '/admin/asistencia', label: 'Asistencia y Nóminas', icon: Clock },
+    { module: 'herramientas', path: '/admin/herramientas', label: 'Herramientas', icon: Wrench },
     { module: 'configuracion', path: '/admin/configuracion', label: 'Configuración', icon: Settings },
   ];
 

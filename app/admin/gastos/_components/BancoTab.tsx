@@ -11,7 +11,7 @@ import React from 'react';
 import {
   FileCode, FileText, CreditCard, List, Scale, Settings,
   ArrowRightLeft, Play, RefreshCw, FileSpreadsheet, Plus, Trash2, Edit3,
-  Layers, Check, X, UploadCloud, Paperclip, AlertTriangle, Filter, Eye, Link
+  Layers, Check, X, UploadCloud, Paperclip, AlertTriangle, Filter, Eye, Link, Ticket, Landmark
 } from 'lucide-react';
 import { formatCurrency } from '../../../../lib/formatters';
 import type { MovimientoBancario, EstatusConciliacion, GastoReconciliable, FormaPago, ComprobanteDeposito } from '../../types';
@@ -58,9 +58,12 @@ interface FormasPagoModalState {
 interface PedidoPendiente {
   id: string;
   numero_pedido: string;
+  folio_factura?: string;
   precio_total: number;
   cliente_nombre?: string;
   fecha_pedido?: string;
+  metodo_pago?: string;
+  uuid_fiscal?: string;
 }
 
 export interface BancoTabProps {
@@ -156,6 +159,7 @@ export interface BancoTabProps {
   handleUpdateMesConciliacion?: (movimientoId: string, mes: string) => Promise<void>;
 
   comprobantes?: ComprobanteDeposito[];
+  selectedMonth?: string;
   onCrearComprobante?: (payload: any) => Promise<any>;
   onActualizarComprobante?: (id: string, payload: any) => Promise<any>;
   onEliminarComprobante?: (id: string) => Promise<any>;
@@ -281,6 +285,7 @@ export default function BancoTab({
   handleBulkMoveMovimientos,
   handleUpdateMesConciliacion,
   comprobantes = [],
+  selectedMonth,
   onCrearComprobante,
   onActualizarComprobante,
   onEliminarComprobante,
@@ -302,8 +307,73 @@ export default function BancoTab({
   const [selectedMovimientos, setSelectedMovimientos] = React.useState<string[]>([]);
   const [showFiltrosAvanzados, setShowFiltrosAvanzados] = React.useState<boolean>(false);
   const [guardarExcedenteComoSaldoFavor, setGuardarExcedenteComoSaldoFavor] = React.useState<boolean>(false);
-  const [ingresosSubSeccion, setIngresosSubSeccion] = React.useState<'comprobantes' | 'global'>('comprobantes');
-  const [modoConciliacionIngreso, setModoConciliacionIngreso] = React.useState<'pedidos' | 'fichas'>('pedidos');
+  const [ingresosSubSeccion, setIngresosSubSeccion] = React.useState<'comprobantes' | 'global' | 'factura_publico'>('comprobantes');
+  const [compSubFiltro, setCompSubFiltro] = React.useState<'todos' | 'tickets' | 'depositos'>('todos');
+  const [modoConciliacionIngreso, setModoConciliacionIngreso] = React.useState<'pedidos' | 'fichas'>('fichas');
+  const [selectedGlobalDepositIds, setSelectedGlobalDepositIds] = React.useState<string[]>([]);
+  const [selectedGlobalComprobanteIds, setSelectedGlobalComprobanteIds] = React.useState<string[]>([]);
+
+  const [facturadosTerceros, setFacturadosTerceros] = React.useState<Record<string, boolean>>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem('facturados_terceros_tickets');
+        return saved ? JSON.parse(saved) : {};
+      } catch (e) {
+        return {};
+      }
+    }
+    return {};
+  });
+
+  const toggleFacturadoTercero = (id: string) => {
+    setFacturadosTerceros(prev => {
+      const updated = { ...prev, [id]: !prev[id] };
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('facturados_terceros_tickets', JSON.stringify(updated));
+      }
+      return updated;
+    });
+  };
+
+  const [montoManualTercerosMap, setMontoManualTercerosMap] = React.useState<Record<string, number>>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem('monto_manual_terceros_mes');
+        return saved ? JSON.parse(saved) : {};
+      } catch (e) {
+        return {};
+      }
+    }
+    return {};
+  });
+
+  const setMontoManualTercero = (mesKey: string, monto: number) => {
+    setMontoManualTercerosMap(prev => {
+      const updated = { ...prev, [mesKey]: Math.max(0, monto) };
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('monto_manual_terceros_mes', JSON.stringify(updated));
+      }
+      return updated;
+    });
+  };
+
+  const [desgloseComisionesModal, setDesgloseComisionesModal] = React.useState<{
+    isOpen: boolean;
+    targetComps: ComprobanteDeposito[];
+    ventaBruta: string;
+    propina: string;
+    comisionTransacciones: string;
+    ivaTransacciones: string;
+    otrosCargos: string;
+  }>({
+    isOpen: false,
+    targetComps: [],
+    ventaBruta: '',
+    propina: '',
+    comisionTransacciones: '',
+    ivaTransacciones: '',
+    otrosCargos: ''
+  });
 
   const parseInputNumber = (val: any): number => {
     if (val === undefined || val === null) return 0;
@@ -353,8 +423,16 @@ export default function BancoTab({
     return Math.abs(c.monto - sum) < 0.05;
   };
 
+  const getDefaultDateForSelectedMonth = React.useCallback(() => {
+    const todayStr = new Date().toISOString().substring(0, 10);
+    if (selectedMonth && todayStr.substring(0, 7) !== selectedMonth) {
+      return `${selectedMonth}-01`;
+    }
+    return todayStr;
+  }, [selectedMonth]);
+
   const [newCompForm, setNewCompForm] = React.useState<{
-    tipo: 'deposito_ventanilla' | 'corte_tarjeta';
+    tipo: 'deposito_ventanilla' | 'corte_tarjeta' | 'corte_pos' | 'corte_bbva' | 'corte_parrot' | string;
     fecha: string;
     monto: string;
     descripcion: string;
@@ -369,6 +447,13 @@ export default function BancoTab({
     propinaCredito: string;
     montoAmex: string;
     propinaAmex: string;
+    montoEfectivo: string;
+    propinaEfectivo: string;
+    montoParrotpay: string;
+    propinaParrotpay: string;
+    comisionTransacciones: string;
+    ivaTransacciones: string;
+    otrosCargos: string;
   }>({
     tipo: 'deposito_ventanilla',
     fecha: new Date().toISOString().substring(0, 10),
@@ -384,8 +469,24 @@ export default function BancoTab({
     propinaDebito: '',
     propinaCredito: '',
     montoAmex: '',
-    propinaAmex: ''
+    propinaAmex: '',
+    montoEfectivo: '',
+    propinaEfectivo: '',
+    montoParrotpay: '',
+    propinaParrotpay: '',
+    comisionTransacciones: '',
+    ivaTransacciones: '',
+    otrosCargos: ''
   });
+
+  React.useEffect(() => {
+    if (selectedMonth && !editingCompId) {
+      setNewCompForm(p => ({
+        ...p,
+        fecha: getDefaultDateForSelectedMonth()
+      }));
+    }
+  }, [selectedMonth, editingCompId, getDefaultDateForSelectedMonth]);
 
   const [compUploadLoading, setCompUploadLoading] = React.useState(false);
 
@@ -872,7 +973,7 @@ export default function BancoTab({
         
         return {
           'Fecha': fechaComp,
-          'Tipo': isVentanilla ? 'Depósito Ventanilla' : 'Corte Tarjeta',
+          'Tipo': isVentanilla ? 'Depósito Ventanilla' : 'Corte POS / Punto de Venta',
           'Estatus': estatus,
           'Banco Destino': c.cuentas_bancarias?.nombre || 'No especificado',
           'Descripción': c.descripcion || '',
@@ -1003,12 +1104,11 @@ export default function BancoTab({
 
                   <button
                     onClick={exportReconciliationStatsToExcel}
-                    disabled={!selectedCuentaId}
-                    className="px-3.5 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 shadow-md"
-                    title="Exportar Reporte Excel"
+                    className="px-3.5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 shadow-md cursor-pointer"
+                    title="Exportar Reporte Excel de Movimientos y Conciliación"
                   >
                     <FileSpreadsheet size={14} />
-                    Exportar Reporte
+                    Exportar Reporte Excel
                   </button>
 
                   <button
@@ -1793,9 +1893,20 @@ export default function BancoTab({
               >
                 <Scale size={15} /> Facturación Global y Conciliación Ventas
               </button>
+              <button
+                type="button"
+                onClick={() => setIngresosSubSeccion('factura_publico')}
+                className={`px-4 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-2 ${
+                  ingresosSubSeccion === 'factura_publico'
+                    ? 'bg-emerald-600 text-white shadow-md'
+                    : 'text-gray-500 hover:text-gray-900 dark:hover:text-white'
+                }`}
+              >
+                <FileText size={15} /> 🧾 Factura Público en General
+              </button>
             </div>
 
-            {ingresosSubSeccion === 'comprobantes' ? (
+            {ingresosSubSeccion === 'comprobantes' && (
               <div className="flex-1 flex flex-col overflow-hidden min-h-0 gap-6">
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 flex-1 min-h-0 overflow-hidden">
                   
@@ -1809,12 +1920,14 @@ export default function BancoTab({
                       <div>
                         <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block mb-1">Tipo de Comprobante</label>
                         <select
-                          value={newCompForm.tipo}
+                          value={newCompForm.tipo ?? 'deposito_ventanilla'}
                           onChange={(e) => setNewCompForm(p => ({ ...p, tipo: e.target.value as any }))}
                           className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs text-gray-900 dark:text-white focus:ring-1 focus:ring-amber-500 outline-none"
                         >
                           <option value="deposito_ventanilla">Depósito en Ventanilla</option>
-                          <option value="corte_tarjeta">Corte Diario de Tarjeta</option>
+                          <option value="corte_tarjeta">Corte POS / Punto de Venta</option>
+                          <option value="corte_bbva">Corte BBVA</option>
+                          <option value="corte_parrot">Corte Parrot</option>
                         </select>
                       </div>
 
@@ -1823,7 +1936,7 @@ export default function BancoTab({
                           <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block mb-1">Fecha</label>
                           <input
                             type="date"
-                            value={newCompForm.fecha}
+                            value={newCompForm.fecha ?? ''}
                             onChange={(e) => setNewCompForm(p => ({ ...p, fecha: e.target.value }))}
                             className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs text-gray-900 dark:text-white focus:ring-1 focus:ring-amber-500 outline-none"
                           />
@@ -1835,7 +1948,7 @@ export default function BancoTab({
                               type="number"
                               placeholder="0.00"
                               step="0.01"
-                              value={newCompForm.monto}
+                              value={newCompForm.monto ?? ''}
                               onChange={(e) => setNewCompForm(p => ({ ...p, monto: e.target.value }))}
                               className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs text-gray-900 dark:text-white focus:ring-1 focus:ring-amber-500 outline-none font-mono"
                             />
@@ -1846,8 +1959,15 @@ export default function BancoTab({
                             <div className="w-full bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-750 p-2 rounded-lg text-xs font-mono font-bold text-gray-900 dark:text-white">
                               {(() => {
                                 const tot = parseInputNumber(newCompForm.montoDebito || 0) +
+                                            parseInputNumber(newCompForm.propinaDebito || 0) +
                                             parseInputNumber(newCompForm.montoCredito || 0) +
-                                            parseInputNumber(newCompForm.montoAmex || 0);
+                                            parseInputNumber(newCompForm.propinaCredito || 0) +
+                                            parseInputNumber(newCompForm.montoAmex || 0) +
+                                            parseInputNumber(newCompForm.propinaAmex || 0) +
+                                            parseInputNumber(newCompForm.montoEfectivo || 0) +
+                                            parseInputNumber(newCompForm.propinaEfectivo || 0) +
+                                            parseInputNumber(newCompForm.montoParrotpay || 0) +
+                                            parseInputNumber(newCompForm.propinaParrotpay || 0);
                                 return formatCurrency(tot);
                               })()}
                             </div>
@@ -1855,42 +1975,200 @@ export default function BancoTab({
                         )}
                       </div>
 
-                      {newCompForm.tipo === 'corte_tarjeta' && (
-                        <div className="p-3 bg-amber-50/50 dark:bg-amber-955/20 border border-amber-200 dark:border-amber-900/40 rounded-xl space-y-2.5">
-                          <span className="text-[10px] font-bold text-amber-600 dark:text-amber-400 uppercase tracking-wider block">Desglose por Tipo de Tarjeta</span>
-                          <div className="grid grid-cols-3 gap-2 text-xs font-mono">
-                            <div>
-                              <label className="text-[9px] text-gray-500 block">Débito</label>
-                              <input
-                                type="number"
-                                step="0.01"
-                                placeholder="0.00"
-                                value={newCompForm.montoDebito}
-                                onChange={(e) => setNewCompForm(p => ({ ...p, montoDebito: e.target.value }))}
-                                className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-1.5 rounded text-xs text-gray-900 dark:text-white"
-                              />
+                      {newCompForm.tipo !== 'deposito_ventanilla' && (
+                        <div className="p-3 bg-amber-50/50 dark:bg-amber-955/20 border border-amber-200 dark:border-amber-900/40 rounded-xl space-y-3 font-sans">
+                          <span className="text-[10px] font-bold text-amber-600 dark:text-amber-400 uppercase tracking-wider block">Desglose POS / Parrot (Ventas y Tarjetas)</span>
+                          
+                          <div className="space-y-2.5 text-xs font-mono">
+                            {/* Efectivo */}
+                            <div className="grid grid-cols-2 gap-2">
+                              <div>
+                                <label className="text-[9px] text-emerald-600 dark:text-emerald-400 font-bold font-sans block mb-0.5">💵 Venta Efectivo</label>
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  placeholder="0.00"
+                                  value={newCompForm.montoEfectivo ?? ''}
+                                  onChange={(e) => setNewCompForm(p => ({ ...p, montoEfectivo: e.target.value }))}
+                                  className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-1.5 rounded text-xs text-gray-900 dark:text-white"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-[9px] text-emerald-600 dark:text-emerald-400 font-bold font-sans block mb-0.5">Prop. Efectivo</label>
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  placeholder="0.00"
+                                  value={newCompForm.propinaEfectivo ?? ''}
+                                  onChange={(e) => setNewCompForm(p => ({ ...p, propinaEfectivo: e.target.value }))}
+                                  className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-1.5 rounded text-xs text-gray-900 dark:text-white"
+                                />
+                              </div>
                             </div>
-                            <div>
-                              <label className="text-[9px] text-gray-500 block">Crédito</label>
-                              <input
-                                type="number"
-                                step="0.01"
-                                placeholder="0.00"
-                                value={newCompForm.montoCredito}
-                                onChange={(e) => setNewCompForm(p => ({ ...p, montoCredito: e.target.value }))}
-                                className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-1.5 rounded text-xs text-gray-900 dark:text-white"
-                              />
+
+                            {/* ParrotPay */}
+                            <div className="grid grid-cols-2 gap-2">
+                              <div>
+                                <label className="text-[9px] text-purple-600 dark:text-purple-400 font-bold font-sans block mb-0.5">🦜 ParrotPay</label>
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  placeholder="0.00"
+                                  value={newCompForm.montoParrotpay ?? ''}
+                                  onChange={(e) => setNewCompForm(p => ({ ...p, montoParrotpay: e.target.value }))}
+                                  className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-1.5 rounded text-xs text-gray-900 dark:text-white"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-[9px] text-purple-600 dark:text-purple-400 font-bold font-sans block mb-0.5">Prop. ParrotPay</label>
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  placeholder="0.00"
+                                  value={newCompForm.propinaParrotpay ?? ''}
+                                  onChange={(e) => setNewCompForm(p => ({ ...p, propinaParrotpay: e.target.value }))}
+                                  className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-1.5 rounded text-xs text-gray-900 dark:text-white"
+                                />
+                              </div>
                             </div>
-                            <div>
-                              <label className="text-[9px] text-gray-500 block">AMEX</label>
-                              <input
-                                type="number"
-                                step="0.01"
-                                placeholder="0.00"
-                                value={newCompForm.montoAmex}
-                                onChange={(e) => setNewCompForm(p => ({ ...p, montoAmex: e.target.value }))}
-                                className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-1.5 rounded text-xs text-gray-900 dark:text-white"
-                              />
+
+                            {/* Débito */}
+                            <div className="grid grid-cols-2 gap-2">
+                              <div>
+                                <label className="text-[9px] text-gray-500 font-sans block mb-0.5">Imp. Débito (TDD)</label>
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  placeholder="0.00"
+                                  value={newCompForm.montoDebito ?? ''}
+                                  onChange={(e) => setNewCompForm(p => ({ ...p, montoDebito: e.target.value }))}
+                                  className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-1.5 rounded text-xs text-gray-900 dark:text-white"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-[9px] text-gray-500 font-sans block mb-0.5">Prop. Débito</label>
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  placeholder="0.00"
+                                  value={newCompForm.propinaDebito ?? ''}
+                                  onChange={(e) => setNewCompForm(p => ({ ...p, propinaDebito: e.target.value }))}
+                                  className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-1.5 rounded text-xs text-gray-900 dark:text-white"
+                                />
+                              </div>
+                            </div>
+
+                            {/* Crédito */}
+                            <div className="grid grid-cols-2 gap-2">
+                              <div>
+                                <label className="text-[9px] text-gray-500 font-sans block mb-0.5">Imp. Crédito (TDC)</label>
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  placeholder="0.00"
+                                  value={newCompForm.montoCredito ?? ''}
+                                  onChange={(e) => setNewCompForm(p => ({ ...p, montoCredito: e.target.value }))}
+                                  className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-1.5 rounded text-xs text-gray-900 dark:text-white"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-[9px] text-gray-500 font-sans block mb-0.5">Prop. Crédito</label>
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  placeholder="0.00"
+                                  value={newCompForm.propinaCredito ?? ''}
+                                  onChange={(e) => setNewCompForm(p => ({ ...p, propinaCredito: e.target.value }))}
+                                  className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-1.5 rounded text-xs text-gray-900 dark:text-white"
+                                />
+                              </div>
+                            </div>
+
+                            {/* AMEX */}
+                            <div className="grid grid-cols-2 gap-2">
+                              <div>
+                                <label className="text-[9px] text-gray-500 font-sans block mb-0.5">Imp. AMEX</label>
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  placeholder="0.00"
+                                  value={newCompForm.montoAmex ?? ''}
+                                  onChange={(e) => setNewCompForm(p => ({ ...p, montoAmex: e.target.value }))}
+                                  className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-1.5 rounded text-xs text-gray-900 dark:text-white"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-[9px] text-gray-500 font-sans block mb-0.5">Prop. AMEX</label>
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  placeholder="0.00"
+                                  value={newCompForm.propinaAmex ?? ''}
+                                  onChange={(e) => setNewCompForm(p => ({ ...p, propinaAmex: e.target.value }))}
+                                  className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-1.5 rounded text-xs text-gray-900 dark:text-white"
+                                />
+                              </div>
+                            </div>
+
+                            {/* Comisiones por Transacción (Parrot/POS) */}
+                            <div className="pt-2 border-t border-amber-200 dark:border-amber-900/40 space-y-2 font-sans">
+                              <span className="text-[9px] font-bold text-rose-600 dark:text-rose-400 block uppercase">
+                                📉 Comisiones por Transacción (Bolsa Facturación)
+                              </span>
+                              <div className="grid grid-cols-3 gap-2">
+                                <div>
+                                  <label className="text-[8px] text-gray-500 block mb-0.5">Comisión ($)</label>
+                                  <input
+                                    type="number"
+                                    step="0.01"
+                                    placeholder="0.00"
+                                    value={newCompForm.comisionTransacciones ?? ''}
+                                    onChange={(e) => {
+                                      const val = e.target.value;
+                                      const num = parseInputNumber(val);
+                                      const autoIva = num > 0 ? (num * 0.16).toFixed(2) : '';
+                                      setNewCompForm(p => ({ ...p, comisionTransacciones: val, ivaTransacciones: autoIva }));
+                                    }}
+                                    className="w-full bg-white dark:bg-gray-900 border border-rose-300 dark:border-rose-900 p-1 rounded text-xs text-rose-600 dark:text-rose-400 font-mono font-bold"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="text-[8px] text-gray-500 block mb-0.5">IVA (16%)</label>
+                                  <input
+                                    type="number"
+                                    step="0.01"
+                                    placeholder="0.00"
+                                    value={newCompForm.ivaTransacciones ?? ''}
+                                    onChange={(e) => setNewCompForm(p => ({ ...p, ivaTransacciones: e.target.value }))}
+                                    className="w-full bg-white dark:bg-gray-900 border border-rose-300 dark:border-rose-900 p-1 rounded text-xs text-rose-600 dark:text-rose-400 font-mono font-bold"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="text-[8px] text-gray-500 block mb-0.5">Otros Cargos</label>
+                                  <input
+                                    type="number"
+                                    step="0.01"
+                                    placeholder="0.00"
+                                    value={newCompForm.otrosCargos ?? ''}
+                                    onChange={(e) => setNewCompForm(p => ({ ...p, otrosCargos: e.target.value }))}
+                                    className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-1 rounded text-xs text-gray-900 dark:text-white font-mono"
+                                  />
+                                </div>
+                              </div>
+                              {(() => {
+                                const com = parseInputNumber(newCompForm.comisionTransacciones || 0);
+                                const iva = parseInputNumber(newCompForm.ivaTransacciones || 0);
+                                const otros = parseInputNumber(newCompForm.otrosCargos || 0);
+                                const totalCom = com + iva + otros;
+                                return totalCom > 0 ? (
+                                  <div className="p-1.5 rounded bg-rose-50 dark:bg-rose-955/30 border border-rose-200 dark:border-rose-900/40 text-[9px]">
+                                    <div className="flex justify-between font-bold text-rose-600 dark:text-rose-400">
+                                      <span>Total a Bolsa:</span>
+                                      <span className="font-mono">{formatCurrency(totalCom)}</span>
+                                    </div>
+                                  </div>
+                                ) : null;
+                              })()}
                             </div>
                           </div>
                         </div>
@@ -1899,7 +2177,7 @@ export default function BancoTab({
                       <div>
                         <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block mb-1">Cuenta de Destino Relacionada</label>
                         <select
-                          value={newCompForm.cuentaBancariaId}
+                          value={newCompForm.cuentaBancariaId ?? ''}
                           onChange={(e) => setNewCompForm(p => ({ ...p, cuentaBancariaId: e.target.value }))}
                           className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs text-gray-900 dark:text-white focus:ring-1 focus:ring-amber-500 outline-none"
                         >
@@ -1915,7 +2193,7 @@ export default function BancoTab({
                         <textarea
                           rows={2}
                           placeholder="Ej: Depósito efectivo ventas fin de semana..."
-                          value={newCompForm.descripcion}
+                          value={newCompForm.descripcion ?? ''}
                           onChange={(e) => setNewCompForm(p => ({ ...p, descripcion: e.target.value }))}
                           className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs text-gray-900 dark:text-white focus:ring-1 focus:ring-amber-500 outline-none resize-none"
                         />
@@ -2026,7 +2304,11 @@ export default function BancoTab({
                               parseInputNumber(newCompForm.propinaDebito || 0) +
                               parseInputNumber(newCompForm.propinaCredito || 0) +
                               parseInputNumber(newCompForm.montoAmex || 0) +
-                              parseInputNumber(newCompForm.propinaAmex || 0);
+                              parseInputNumber(newCompForm.propinaAmex || 0) +
+                              parseInputNumber(newCompForm.montoEfectivo || 0) +
+                              parseInputNumber(newCompForm.propinaEfectivo || 0) +
+                              parseInputNumber(newCompForm.montoParrotpay || 0) +
+                              parseInputNumber(newCompForm.propinaParrotpay || 0);
 
                           if (!tot || tot <= 0) {
                             setNewCompForm(p => ({ ...p, error: 'Por favor ingresa un monto válido mayor a 0.' }));
@@ -2064,7 +2346,14 @@ export default function BancoTab({
                               propina_debito: parseInputNumber(newCompForm.propinaDebito || 0),
                               propina_credito: parseInputNumber(newCompForm.propinaCredito || 0),
                               monto_amex: parseInputNumber(newCompForm.montoAmex || 0),
-                              propina_amex: parseInputNumber(newCompForm.propinaAmex || 0)
+                              propina_amex: parseInputNumber(newCompForm.propinaAmex || 0),
+                              monto_efectivo: parseInputNumber(newCompForm.montoEfectivo || 0),
+                              propina_efectivo: parseInputNumber(newCompForm.propinaEfectivo || 0),
+                              monto_parrotpay: parseInputNumber(newCompForm.montoParrotpay || 0),
+                              propina_parrotpay: parseInputNumber(newCompForm.propinaParrotpay || 0),
+                              comision_transacciones: parseInputNumber(newCompForm.comisionTransacciones || 0),
+                              iva_transacciones: parseInputNumber(newCompForm.ivaTransacciones || 0),
+                              otros_cargos: parseInputNumber(newCompForm.otrosCargos || 0)
                             };
 
                             let res;
@@ -2078,10 +2367,30 @@ export default function BancoTab({
                               throw new Error(res.error);
                             }
 
+                            // Si se registraron comisiones de transacción en el ticket, registrar en la Bolsa
+                            const comVal = parseInputNumber(newCompForm.comisionTransacciones || 0);
+                            const ivaVal = parseInputNumber(newCompForm.ivaTransacciones || 0);
+                            const otrosVal = parseInputNumber(newCompForm.otrosCargos || 0);
+                            const totalComBolsa = comVal + ivaVal + otrosVal;
+
+                            if (totalComBolsa > 0 && !editingCompId && onCrearComprobante) {
+                              await onCrearComprobante({
+                                tipo: 'deposito_ventanilla',
+                                fecha: newCompForm.fecha,
+                                monto: totalComBolsa,
+                                descripcion: `Comisión Transacciones POS/Parrot (Comisión: ${formatCurrency(comVal)}, IVA: ${formatCurrency(ivaVal)}${otrosVal ? `, Otros: ${formatCurrency(otrosVal)}` : ''}) - Ticket ${newCompForm.descripcion || ''}`,
+                                cuentaBancariaId: newCompForm.cuentaBancariaId || null
+                              });
+                            }
+
+                            if (selectedMonth && payload.fecha.substring(0, 7) !== selectedMonth) {
+                              alert(`Atención: El comprobante se guardó con fecha ${payload.fecha}, la cual pertenece al período (${payload.fecha.substring(0, 7)}). Para visualizarlo en la lista de conciliación, selecciona ese período en la parte superior.`);
+                            }
+
                             setEditingCompId(null);
                             setNewCompForm({
                               tipo: 'deposito_ventanilla',
-                              fecha: new Date().toISOString().substring(0, 10),
+                              fecha: getDefaultDateForSelectedMonth(),
                               monto: '',
                               descripcion: '',
                               archivoUrl: '',
@@ -2094,7 +2403,14 @@ export default function BancoTab({
                               propinaDebito: '',
                               propinaCredito: '',
                               montoAmex: '',
-                              propinaAmex: ''
+                              propinaAmex: '',
+                              montoEfectivo: '',
+                              propinaEfectivo: '',
+                              montoParrotpay: '',
+                              propinaParrotpay: '',
+                              comisionTransacciones: '',
+                              ivaTransacciones: '',
+                              otrosCargos: ''
                             });
                           } catch (err: any) {
                             setNewCompForm(p => ({ ...p, error: err.message || 'Error al guardar.' }));
@@ -2114,12 +2430,92 @@ export default function BancoTab({
                   {/* Tabla de comprobantes */}
                   <div className="lg:col-span-2 flex flex-col min-h-0 bg-white dark:bg-gray-955 border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden shadow-sm font-sans">
                     <div className="p-3 bg-gray-50/50 dark:bg-gray-900/40 border-b border-gray-200 dark:border-gray-800 shrink-0 flex justify-between items-center flex-wrap gap-2">
-                      <h4 className="text-xs font-extrabold uppercase text-amber-500 flex items-center gap-1.5">
-                        <List size={14} /> Comprobantes Registrados y Conciliación
-                      </h4>
-                      <span className="text-[10px] font-bold text-gray-400">
-                        {comprobantes.length} comprobantes en total
-                      </span>
+                      <div className="flex items-center gap-3 flex-wrap">
+                        <h4 className="text-xs font-extrabold uppercase text-amber-500 flex items-center gap-1.5">
+                          <List size={14} /> Comprobantes Registrados
+                        </h4>
+                        
+                        {/* SUB-PESTAÑAS TICKETS VS DEPÓSITOS */}
+                        <div className="flex items-center gap-1 bg-gray-200/60 dark:bg-gray-900 p-1 rounded-xl">
+                          <button
+                            type="button"
+                            onClick={() => setCompSubFiltro('todos')}
+                            className={`px-3 py-1 rounded-lg text-[11px] font-extrabold transition-all ${
+                              compSubFiltro === 'todos'
+                                ? 'bg-white dark:bg-gray-800 text-amber-600 dark:text-amber-400 shadow-sm'
+                                : 'text-gray-500 hover:text-gray-900 dark:hover:text-white'
+                            }`}
+                          >
+                            Todos
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setCompSubFiltro('tickets')}
+                            className={`px-3 py-1 rounded-lg text-[11px] font-extrabold transition-all flex items-center gap-1.5 ${
+                              compSubFiltro === 'tickets'
+                                ? 'bg-amber-500 text-white shadow-sm'
+                                : 'text-gray-500 hover:text-gray-900 dark:hover:text-white'
+                            }`}
+                          >
+                            <Ticket size={13} /> Tickets / Cortes POS
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setCompSubFiltro('depositos')}
+                            className={`px-3 py-1 rounded-lg text-[11px] font-extrabold transition-all flex items-center gap-1.5 ${
+                              compSubFiltro === 'depositos'
+                                ? 'bg-blue-600 text-white shadow-sm'
+                                : 'text-gray-500 hover:text-gray-900 dark:hover:text-white'
+                            }`}
+                          >
+                            <Landmark size={13} /> Depósitos Ventanilla
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <select
+                          value={selectedCuentaId}
+                          onChange={(e) => setSelectedCuentaId(e.target.value)}
+                          className="bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 px-2.5 py-1 rounded-lg text-xs text-gray-900 dark:text-white font-sans font-semibold outline-none focus:ring-1 focus:ring-amber-500"
+                        >
+                          <option value="">Todas las Cuentas</option>
+                          {cuentasBancarias?.map(c => (
+                            <option key={c.id} value={c.id}>{c.nombre} ({c.moneda})</option>
+                          ))}
+                        </select>
+                        <span className="text-[10px] font-bold text-gray-400">
+                          ({comprobantes.filter(c => {
+                            if (compSubFiltro === 'tickets' && c.tipo === 'deposito_ventanilla') return false;
+                            if (compSubFiltro === 'depositos' && c.tipo !== 'deposito_ventanilla') return false;
+                            if (!selectedCuentaId) return true;
+
+                            const selCuenta = cuentasBancarias?.find(cb => cb.id === selectedCuentaId);
+                            const isCaja = selCuenta?.nombre?.toUpperCase().includes('CAJA CHICA') || selCuenta?.nombre?.toUpperCase().includes('EFECTIVO');
+                            const isParrot = selCuenta?.nombre?.toUpperCase().includes('PARROT');
+                            const isBBVA = selCuenta?.nombre?.toUpperCase().includes('BBVA');
+
+                            // Si el comprobante ya tiene una cuenta bancaria destino asignada explícitamente (ej: Parrot)
+                            if (c.cuenta_bancaria_id && c.cuenta_bancaria_id !== selectedCuentaId) {
+                              if (isCaja && (Number(c.monto_efectivo || 0) > 0 || Number(c.propina_efectivo || 0) > 0)) return true;
+                              return false;
+                            }
+
+                            if (c.cuenta_bancaria_id === selectedCuentaId) return true;
+                            if (isCaja && (Number(c.monto_efectivo || 0) > 0 || Number(c.propina_efectivo || 0) > 0)) return true;
+                            if (isParrot && (Number(c.monto_parrotpay || 0) > 0 || Number(c.propina_parrotpay || 0) > 0 || c.tipo === 'corte_parrot')) return true;
+
+                            if (isBBVA) {
+                              if (c.tipo === 'corte_parrot') return false;
+                              const tarjetaTotalBBVA = Number(c.monto_debito || 0) + Number(c.propina_debito || 0) + Number(c.monto_credito || 0) + Number(c.propina_credito || 0) + Number(c.monto_amex || 0) + Number(c.propina_amex || 0);
+                              if (tarjetaTotalBBVA > 0 || c.tipo === 'corte_bbva') return true;
+                            }
+
+                            if (!c.cuenta_bancaria_id) return true;
+                            return false;
+                          }).length} de {comprobantes.length})
+                        </span>
+                      </div>
                     </div>
 
                     <div className="flex-1 overflow-auto">
@@ -2136,105 +2532,204 @@ export default function BancoTab({
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100 dark:divide-gray-800/60">
-                          {comprobantes.map(c => {
-                            const isVentanilla = c.tipo === 'deposito_ventanilla';
-                            const sumAsoc = c.comprobantes_deposito_movimientos?.reduce((s, r) => s + Number(r.monto_asociado || 0), 0) || 0;
-                            const isFullyAssoc = Math.abs(Number(c.monto) - sumAsoc) < 0.05;
+                          {comprobantes
+                            .filter(c => {
+                              if (compSubFiltro === 'tickets' && c.tipo === 'deposito_ventanilla') return false;
+                              if (compSubFiltro === 'depositos' && c.tipo !== 'deposito_ventanilla') return false;
+                              if (!selectedCuentaId) return true;
 
-                            return (
-                              <tr key={c.id} className="hover:bg-gray-50/40 dark:hover:bg-gray-900/20 transition-all">
-                                <td className="p-3 font-mono text-gray-500">{new Date(c.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })}</td>
-                                <td className="p-3">
-                                  <div className="flex items-center gap-1.5 flex-wrap">
-                                    <span className={`text-[9px] font-black px-2 py-0.5 rounded uppercase ${
-                                      isVentanilla ? 'bg-blue-100 dark:bg-blue-955/30 text-blue-600 dark:text-blue-400' : 'bg-purple-100 dark:bg-purple-955/30 text-purple-600 dark:text-purple-400'
-                                    }`}>
-                                      {isVentanilla ? 'Depósito Ventanilla' : 'Corte Tarjeta'}
-                                    </span>
-                                    {isFullyAssoc ? (
-                                      <span className="bg-emerald-100 text-emerald-700 dark:bg-emerald-955/30 dark:text-emerald-400 text-[8px] font-black px-1.5 py-0.5 rounded uppercase">Conciliado</span>
-                                    ) : (
-                                      <span className="bg-amber-100 text-amber-700 dark:bg-amber-955/30 dark:text-amber-400 text-[8px] font-black px-1.5 py-0.5 rounded uppercase">Pendiente</span>
-                                    )}
-                                  </div>
-                                  {!isVentanilla && (
-                                    <div className="mt-1 text-[9px] text-gray-400 font-mono space-y-0.5">
-                                      {(c.monto_debito ?? 0) > 0 && <div>D: {formatCurrency(c.monto_debito!)}</div>}
-                                      {(c.monto_credito ?? 0) > 0 && <div>C: {formatCurrency(c.monto_credito!)}</div>}
-                                      {(c.monto_amex ?? 0) > 0 && <div>A: {formatCurrency(c.monto_amex!)}</div>}
+                              const selCuenta = cuentasBancarias?.find(cb => cb.id === selectedCuentaId);
+                              const isCaja = selCuenta?.nombre?.toUpperCase().includes('CAJA CHICA') || selCuenta?.nombre?.toUpperCase().includes('EFECTIVO');
+                              const isParrot = selCuenta?.nombre?.toUpperCase().includes('PARROT');
+                              const isBBVA = selCuenta?.nombre?.toUpperCase().includes('BBVA');
+
+                              if (c.cuenta_bancaria_id && c.cuenta_bancaria_id !== selectedCuentaId) {
+                                if (isCaja && (Number(c.monto_efectivo || 0) > 0 || Number(c.propina_efectivo || 0) > 0)) return true;
+                                return false;
+                              }
+
+                              if (c.cuenta_bancaria_id === selectedCuentaId) return true;
+                              if (isCaja && (Number(c.monto_efectivo || 0) > 0 || Number(c.propina_efectivo || 0) > 0)) return true;
+                              if (isParrot && (Number(c.monto_parrotpay || 0) > 0 || Number(c.propina_parrotpay || 0) > 0 || c.tipo === 'corte_parrot')) return true;
+
+                              if (isBBVA) {
+                                if (c.tipo === 'corte_parrot') return false;
+                                const tarjetaTotalBBVA = Number(c.monto_debito || 0) + Number(c.propina_debito || 0) + Number(c.monto_credito || 0) + Number(c.propina_credito || 0) + Number(c.monto_amex || 0) + Number(c.propina_amex || 0);
+                                if (tarjetaTotalBBVA > 0 || c.tipo === 'corte_bbva') return true;
+                              }
+
+                              if (!c.cuenta_bancaria_id) return true;
+                              return false;
+                            })
+                            .map(c => {
+                              const isVentanilla = c.tipo === 'deposito_ventanilla';
+                              const sumAsoc = c.comprobantes_deposito_movimientos?.reduce((s, r) => s + Number(r.monto_asociado || 0), 0) || 0;
+                              const isFullyAssoc = Math.abs(Number(c.monto) - sumAsoc) < 0.05;
+
+                              const selCuenta = cuentasBancarias?.find(cb => cb.id === selectedCuentaId);
+                              const isCajaFilter = selCuenta?.nombre?.toUpperCase().includes('CAJA CHICA') || selCuenta?.nombre?.toUpperCase().includes('EFECTIVO');
+                              const isParrotFilter = selCuenta?.nombre?.toUpperCase().includes('PARROT');
+                              const isBBVAFilter = selCuenta?.nombre?.toUpperCase().includes('BBVA');
+                              const tarjetaTotalBBVA = Number(c.monto_debito || 0) + Number(c.propina_debito || 0) + Number(c.monto_credito || 0) + Number(c.propina_credito || 0) + Number(c.monto_amex || 0) + Number(c.propina_amex || 0);
+
+                              return (
+                                <tr key={c.id} className="hover:bg-gray-50/40 dark:hover:bg-gray-900/20 transition-all">
+                                  <td className="p-3 font-mono text-gray-500">{new Date(c.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })}</td>
+                                  <td className="p-3">
+                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                      <span className={`text-[9px] font-black px-2 py-0.5 rounded uppercase ${
+                                        c.tipo === 'deposito_ventanilla' ? 'bg-blue-100 dark:bg-blue-955/30 text-blue-600 dark:text-blue-400' :
+                                        c.tipo === 'corte_bbva' ? 'bg-sky-100 dark:bg-sky-955/30 text-sky-600 dark:text-sky-400' :
+                                        c.tipo === 'corte_parrot' ? 'bg-emerald-100 dark:bg-emerald-955/30 text-emerald-600 dark:text-emerald-400' :
+                                        'bg-purple-100 dark:bg-purple-955/30 text-purple-600 dark:text-purple-400'
+                                      }`}>
+                                        {c.tipo === 'deposito_ventanilla' ? 'Depósito Ventanilla' :
+                                         c.tipo === 'corte_bbva' ? 'Corte BBVA' :
+                                         c.tipo === 'corte_parrot' ? 'Corte Parrot' :
+                                         'Corte POS'}
+                                      </span>
+                                      {isFullyAssoc ? (
+                                        <span className="bg-emerald-100 text-emerald-700 dark:bg-emerald-955/30 dark:text-emerald-400 text-[8px] font-black px-1.5 py-0.5 rounded uppercase">Conciliado</span>
+                                      ) : (
+                                        <span className="bg-amber-100 text-amber-700 dark:bg-amber-955/30 dark:text-amber-400 text-[8px] font-black px-1.5 py-0.5 rounded uppercase">Pendiente</span>
+                                      )}
                                     </div>
-                                  )}
-                                </td>
-                                <td className="p-3 text-gray-600 dark:text-gray-300 font-semibold">{c.cuentas_bancarias?.nombre || '-'}</td>
-                                <td className="p-3 text-gray-700 dark:text-gray-200">{c.descripcion || '-'}</td>
-                                <td className="p-3 text-right font-mono font-bold text-gray-900 dark:text-white">
-                                  {formatCurrency(c.monto)}
-                                  {sumAsoc > 0 && (
-                                    <div className="text-[9px] font-normal text-emerald-500">Asoc: {formatCurrency(sumAsoc)}</div>
-                                  )}
-                                </td>
-                                <td className="p-3 text-center">
-                                  {c.archivo_url ? (
-                                    <button
-                                      onClick={() => {
-                                        if (onDownloadFile) onDownloadFile(c.archivo_url!);
-                                        else if (handleViewCfdi) handleViewCfdi(c.archivo_url!);
-                                        else window.open(c.archivo_url!, '_blank');
-                                      }}
-                                      className="p-1 bg-amber-50 dark:bg-amber-955/20 text-amber-600 hover:bg-amber-100 dark:hover:bg-amber-900/30 rounded border border-amber-200 dark:border-amber-900/40 text-[9px] font-bold inline-flex items-center gap-0.5"
-                                    >
-                                      <Eye size={10} /> Ver
-                                    </button>
-                                  ) : (
-                                    <span className="text-[9px] text-gray-400 italic">Sin Ticket</span>
-                                  )}
-                                </td>
-                                <td className="p-3 text-right">
-                                  <div className="flex justify-end gap-1.5">
-                                    <button
-                                      onClick={() => {
-                                        setEditingCompId(c.id);
-                                        setNewCompForm({
-                                          tipo: c.tipo,
-                                          fecha: c.fecha,
-                                          monto: String(c.monto || ''),
-                                          archivoUrl: c.archivo_url || '',
-                                          storageProvider: c.storage_provider || 'Supabase',
-                                          cuentaBancariaId: c.cuenta_bancaria_id || '',
-                                          descripcion: c.descripcion || '',
-                                          loading: false,
-                                          error: '',
-                                          montoDebito: String(c.monto_debito || ''),
-                                          montoCredito: String(c.monto_credito || ''),
-                                          propinaDebito: String(c.propina_debito || ''),
-                                          propinaCredito: String(c.propina_credito || ''),
-                                          montoAmex: String(c.monto_amex || ''),
-                                          propinaAmex: String(c.propina_amex || '')
-                                        });
-                                      }}
-                                      className="p-1 text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-955/20 rounded font-bold text-[10px] flex items-center gap-0.5"
-                                    >
-                                      <Edit3 size={11} /> Editar
-                                    </button>
-                                    <button
-                                      onClick={() => {
-                                        if (confirm('¿Estás seguro de eliminar este comprobante?')) {
-                                          onEliminarComprobante?.(c.id);
-                                        }
-                                      }}
-                                      className="p-1 text-red-500 hover:bg-red-50 dark:hover:bg-red-955/20 rounded font-bold text-[10px]"
-                                    >
-                                      <Trash2 size={11} />
-                                    </button>
-                                  </div>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                          {comprobantes.length === 0 && (
+                                    {!isVentanilla && (
+                                      <div className="mt-1 text-[9px] font-mono space-y-0.5">
+                                        {(Number(c.monto_efectivo || 0) > 0 || Number(c.propina_efectivo || 0) > 0) && (
+                                          <div className="text-emerald-600 dark:text-emerald-400 font-bold">💵 Efec: {formatCurrency(c.monto_efectivo || 0)}{Number(c.propina_efectivo || 0) > 0 ? ` (+Prop: ${formatCurrency(c.propina_efectivo!)})` : ''}</div>
+                                        )}
+                                        {(Number(c.monto_parrotpay || 0) > 0 || Number(c.propina_parrotpay || 0) > 0) && (
+                                          <div className="text-purple-600 dark:text-purple-400 font-bold">🦜 ParrotPay: {formatCurrency(c.monto_parrotpay || 0)}{Number(c.propina_parrotpay || 0) > 0 ? ` (+Prop: ${formatCurrency(c.propina_parrotpay!)})` : ''}</div>
+                                        )}
+                                        {(Number(c.monto_debito || 0) > 0 || Number(c.propina_debito || 0) > 0) && (
+                                          <div className={isBBVAFilter ? "text-sky-600 dark:text-sky-400 font-bold" : "text-gray-500"}>💳 Débito: {formatCurrency(c.monto_debito || 0)}{Number(c.propina_debito || 0) > 0 ? ` (+Prop: ${formatCurrency(c.propina_debito!)})` : ''}</div>
+                                        )}
+                                        {(Number(c.monto_credito || 0) > 0 || Number(c.propina_credito || 0) > 0) && (
+                                          <div className={isBBVAFilter ? "text-sky-600 dark:text-sky-400 font-bold" : "text-gray-500"}>💳 Crédito: {formatCurrency(c.monto_credito || 0)}{Number(c.propina_credito || 0) > 0 ? ` (+Prop: ${formatCurrency(c.propina_credito!)})` : ''}</div>
+                                        )}
+                                        {(Number(c.monto_amex || 0) > 0 || Number(c.propina_amex || 0) > 0) && (
+                                          <div className={isBBVAFilter ? "text-sky-600 dark:text-sky-400 font-bold" : "text-gray-500"}>💳 Amex: {formatCurrency(c.monto_amex || 0)}{Number(c.propina_amex || 0) > 0 ? ` (+Prop: ${formatCurrency(c.propina_amex!)})` : ''}</div>
+                                        )}
+                                      </div>
+                                    )}
+                                  </td>
+                                  <td className="p-3 font-medium text-gray-700 dark:text-gray-300">
+                                    {cuentasBancarias?.find(cb => cb.id === c.cuenta_bancaria_id)?.nombre || '-'}
+                                  </td>
+                                  <td className="p-3 text-gray-600 dark:text-gray-400 font-mono text-[11px] max-w-[200px] truncate" title={c.descripcion || ''}>
+                                    {c.descripcion || '-'}
+                                  </td>
+                                  <td className="p-3 text-right font-mono font-bold text-gray-900 dark:text-white">
+                                    {isCajaFilter && (Number(c.monto_efectivo || 0) > 0 || Number(c.propina_efectivo || 0) > 0) ? (
+                                      <div>
+                                        <span className="text-emerald-600 dark:text-emerald-400 block">{formatCurrency(Number(c.monto_efectivo || 0) + Number(c.propina_efectivo || 0))}</span>
+                                        <span className="text-[9px] text-gray-400 font-mono block font-normal">({formatCurrency(c.monto_efectivo || 0)} Efec / {formatCurrency(c.monto)} Corte)</span>
+                                      </div>
+                                    ) : isParrotFilter && (Number(c.monto_parrotpay || 0) > 0 || Number(c.propina_parrotpay || 0) > 0) ? (
+                                      <div>
+                                        <span className="text-purple-600 dark:text-purple-400 block">{formatCurrency(Number(c.monto_parrotpay || 0) + Number(c.propina_parrotpay || 0))}</span>
+                                        <span className="text-[9px] text-gray-400 font-mono block font-normal">({formatCurrency(c.monto_parrotpay || 0)} Parrot / {formatCurrency(c.monto)} Corte)</span>
+                                      </div>
+                                    ) : isBBVAFilter && tarjetaTotalBBVA > 0 ? (
+                                      <div>
+                                        <span className="text-sky-600 dark:text-sky-400 block">{formatCurrency(tarjetaTotalBBVA)}</span>
+                                        <span className="text-[9px] text-gray-400 font-mono block font-normal">({formatCurrency(tarjetaTotalBBVA)} Tarjetas BBVA / {formatCurrency(c.monto)} Corte)</span>
+                                      </div>
+                                    ) : (
+                                      formatCurrency(c.monto)
+                                    )}
+                                    {sumAsoc > 0 && (
+                                      <div className="text-[9px] font-normal text-emerald-500">Asoc: {formatCurrency(sumAsoc)}</div>
+                                    )}
+                                  </td>
+                                  <td className="p-3 text-center">
+                                    {c.archivo_url ? (
+                                      <button
+                                        onClick={() => {
+                                          if (onDownloadFile) onDownloadFile(c.archivo_url!);
+                                          else if (handleViewCfdi) handleViewCfdi(c.archivo_url!);
+                                          else window.open(c.archivo_url!, '_blank');
+                                        }}
+                                        className="p-1 bg-amber-50 dark:bg-amber-955/20 text-amber-600 hover:bg-amber-100 dark:hover:bg-amber-900/30 rounded border border-amber-200 dark:border-amber-900/40 text-[9px] font-bold inline-flex items-center gap-0.5"
+                                      >
+                                        <Eye size={10} /> Ver
+                                      </button>
+                                    ) : (
+                                      <span className="text-[9px] text-gray-400 italic">Sin Ticket</span>
+                                    )}
+                                  </td>
+                                  <td className="p-3 text-right">
+                                    <div className="flex justify-end gap-1.5 flex-wrap">
+                                      <button
+                                        type="button"
+                                        onClick={() => setActiveCompToLink(c)}
+                                        className="p-1 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-955/20 rounded font-bold text-[10px] flex items-center gap-0.5"
+                                        title="Vincular con movimientos de la misma cuenta bancaria"
+                                      >
+                                        <Link size={11} /> Vincular Movs.
+                                      </button>
+                                      <button
+                                        onClick={() => {
+                                          setEditingCompId(c.id);
+                                          setNewCompForm({
+                                            tipo: c.tipo,
+                                            fecha: c.fecha,
+                                            monto: String(c.monto || ''),
+                                            archivoUrl: c.archivo_url || '',
+                                            storageProvider: c.storage_provider || 'Supabase',
+                                            cuentaBancariaId: c.cuenta_bancaria_id || '',
+                                            descripcion: c.descripcion || '',
+                                            loading: false,
+                                            error: '',
+                                            montoDebito: String(c.monto_debito || ''),
+                                            montoCredito: String(c.monto_credito || ''),
+                                            propinaDebito: String(c.propina_debito || ''),
+                                            propinaCredito: String(c.propina_credito || ''),
+                                            montoAmex: String(c.monto_amex || ''),
+                                            propinaAmex: String(c.propina_amex || ''),
+                                            montoEfectivo: String(c.monto_efectivo || ''),
+                                            propinaEfectivo: String(c.propina_efectivo || ''),
+                                            montoParrotpay: String(c.monto_parrotpay || ''),
+                                            propinaParrotpay: String(c.propina_parrotpay || '')
+                                          });
+                                        }}
+                                        className="p-1 text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-955/20 rounded font-bold text-[10px] flex items-center gap-0.5"
+                                      >
+                                        <Edit3 size={11} /> Editar
+                                      </button>
+                                      <button
+                                        onClick={() => {
+                                          if (confirm('¿Estás seguro de eliminar este comprobante?')) {
+                                            onEliminarComprobante?.(c.id);
+                                          }
+                                        }}
+                                        className="p-1 text-red-500 hover:bg-red-50 dark:hover:bg-red-955/20 rounded font-bold text-[10px]"
+                                      >
+                                        <Trash2 size={11} />
+                                      </button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          {comprobantes.filter(c => !selectedCuentaId || !c.cuenta_bancaria_id || c.cuenta_bancaria_id === selectedCuentaId).length === 0 && (
                             <tr>
                               <td colSpan={7} className="p-8 text-center text-gray-400 italic">
-                                No hay comprobantes registrados en el período seleccionado.
+                                {selectedCuentaId ? (
+                                  <div className="flex flex-col items-center justify-center gap-2 py-2">
+                                    <span>No hay comprobantes registrados para la cuenta bancaria seleccionada.</span>
+                                    <button
+                                      type="button"
+                                      onClick={() => setSelectedCuentaId('')}
+                                      className="px-3 py-1 bg-amber-500 text-white font-bold text-xs rounded-lg shadow-sm hover:bg-amber-600 transition-all"
+                                    >
+                                      Mostrar comprobantes de todas las cuentas
+                                    </button>
+                                  </div>
+                                ) : (
+                                  'No hay comprobantes registrados.'
+                                )}
                               </td>
                             </tr>
                           )}
@@ -2245,274 +2740,817 @@ export default function BancoTab({
 
                 </div>
               </div>
-            ) : (
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 flex-1 min-h-0 overflow-hidden">
-                {/* Depósitos bancarios */}
-                <div className="flex flex-col min-h-0 bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden shadow-sm">
-                  <div className="p-3 bg-gray-50/50 dark:bg-gray-900/40 border-b border-gray-200 dark:border-gray-800 shrink-0">
-                    <h4 className="text-xs font-extrabold uppercase text-amber-500 flex items-center gap-1.5">
-                      <CreditCard size={14} /> 1. Selecciona un Depósito Bancario
-                    </h4>
-                  </div>
-                  <div className="flex-1 overflow-auto">
-                    <table className="w-full text-left border-collapse text-xs">
-                      <thead>
-                        <tr className="bg-gray-50 dark:bg-gray-900/50 border-b border-gray-200 dark:border-gray-800 text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
-                          <th className="p-3 w-12 text-center" />
-                          <th className="p-3">Fecha</th>
-                          <th className="p-3">Concepto</th>
-                          <th className="p-3 text-right">Depósito</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-gray-100 dark:divide-gray-800/60 font-sans">
-                        {movimientos
-                          .filter((m) => m.tipo_movimiento === 'Deposito' && m.estatus_conciliacion_bancaria?.clave !== 'comprobado')
-                          .map((m) => (
-                            <tr key={m.id}
-                              onClick={() => { setSelectedGlobalDepositId(m.id); setSelectedGlobalPedidosIds([]); }}
-                              className={`cursor-pointer hover:bg-gray-50/40 dark:hover:bg-gray-900/20 transition-all ${selectedGlobalDepositId === m.id ? 'bg-amber-500/10 hover:bg-amber-500/15' : ''}`}>
-                              <td className="p-3 text-center">
-                                <input type="radio" name="global_deposit" checked={selectedGlobalDepositId === m.id}
-                                  onChange={() => { setSelectedGlobalDepositId(m.id); setSelectedGlobalPedidosIds([]); }}
-                                  className="w-3.5 h-3.5 text-amber-500 focus:ring-amber-500" />
-                              </td>
-                              <td className="p-3 font-mono text-gray-500">{new Date(m.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })}</td>
-                              <td className="p-3">
-                                <div className="font-bold text-gray-800 dark:text-gray-200">{m.concepto}</div>
-                                {m.referencia && <span className="text-[10px] text-gray-400">Ref: {m.referencia}</span>}
-                              </td>
-                              <td className="p-3 text-right font-mono font-bold text-emerald-500">+{formatCurrency(m.deposito)}</td>
-                            </tr>
-                          ))}
-                        {movimientos.filter((m) => m.tipo_movimiento === 'Deposito' && m.estatus_conciliacion_bancaria?.clave !== 'comprobado').length === 0 && (
-                          <tr><td colSpan={4} className="p-8 text-center text-gray-400 italic">No hay depósitos pendientes de conciliar en este período</td></tr>
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
+            )}
 
-                {/* Pedidos y Fichas pendientes */}
-                <div className="flex flex-col min-h-0 bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden shadow-sm">
-                  <div className="p-3 bg-gray-50/50 dark:bg-gray-900/40 border-b border-gray-200 dark:border-gray-800 shrink-0 flex justify-between items-center flex-wrap gap-2">
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => setModoConciliacionIngreso('pedidos')}
-                        className={`px-2 py-1 rounded-lg text-[10px] font-extrabold uppercase transition-all ${
-                          modoConciliacionIngreso === 'pedidos'
-                            ? 'bg-emerald-500 text-white shadow-sm'
-                            : 'bg-gray-100 dark:bg-gray-800 text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'
-                        }`}
-                      >
-                        <Layers size={11} className="inline mr-1" /> 2a. Ventas / Pedidos
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setModoConciliacionIngreso('fichas')}
-                        className={`px-2 py-1 rounded-lg text-[10px] font-extrabold uppercase transition-all ${
-                          modoConciliacionIngreso === 'fichas'
-                            ? 'bg-amber-500 text-white shadow-sm'
-                            : 'bg-gray-100 dark:bg-gray-800 text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'
-                        }`}
-                      >
-                        <CreditCard size={11} className="inline mr-1" /> 2b. Fichas / Comprobantes
-                      </button>
-                    </div>
-                    {selectedGlobalDepositId && modoConciliacionIngreso === 'pedidos' && (
-                      <button
-                        onClick={() => {
-                          const allIds = pedidosPendientes.map((p) => p.id);
-                          const allSelected = selectedGlobalPedidosIds.length === pedidosPendientes.length;
-                          setSelectedGlobalPedidosIds(allSelected ? [] : allIds);
-                        }}
-                        className="text-[10px] font-bold text-blue-500 hover:underline">
-                        {selectedGlobalPedidosIds.length === pedidosPendientes.length ? 'Desmarcar Todos' : 'Seleccionar Todos'}
-                      </button>
-                    )}
-                  </div>
-                  <div className="flex-1 overflow-auto">
-                    {!selectedGlobalDepositId ? (
-                      <div className="h-full flex flex-col items-center justify-center p-8 text-center">
-                        <CreditCard size={32} className="text-amber-500 mb-2.5 opacity-50" />
-                        <p className="text-xs font-semibold text-gray-500">Ningún depósito seleccionado</p>
-                        <p className="text-[10px] text-gray-400 mt-1 max-w-[250px]">Selecciona un depósito bancario a la izquierda para desplegar los elementos a vincular.</p>
-                      </div>
-                    ) : modoConciliacionIngreso === 'pedidos' ? (
-                      <table className="w-full text-left border-collapse text-xs">
-                        <thead>
-                          <tr className="bg-gray-50 dark:bg-gray-900/50 border-b border-gray-200 dark:border-gray-800 text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
-                            <th className="p-3 w-12 text-center" />
-                            <th className="p-3">Pedido</th>
-                            <th className="p-3">Cliente</th>
-                            <th className="p-3 text-right">Monto</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-100 dark:divide-gray-800/60 font-sans">
-                          {pedidosPendientes.map((p) => (
-                            <tr
-                              key={p.id}
-                              onClick={() => {
-                                const sel = [...selectedGlobalPedidosIds];
-                                const idx = sel.indexOf(p.id);
-                                idx > -1 ? sel.splice(idx, 1) : sel.push(p.id);
-                                setSelectedGlobalPedidosIds(sel);
+            {ingresosSubSeccion === 'global' && (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 flex-1 min-h-0 overflow-hidden">
+                {/* 1. DEPÓSITOS BANCARIOS (SELECCIÓN SIMPLE O MÚLTIPLE CON CHECKBOXES) */}
+                <div className="flex flex-col min-h-0 bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden shadow-sm font-sans">
+                  {(() => {
+                    const unconciliados = movimientos.filter((m) => {
+                      if (m.tipo_movimiento !== 'Deposito') return false;
+                      if (selectedCuentaId && m.cuenta_bancaria_id !== selectedCuentaId) return false;
+                      const clave = m.estatus_conciliacion_bancaria?.clave || 'pendiente';
+                      if (clave === 'conciliado' || clave === 'comprobado') return false;
+                      const isLinked = comprobantes.some(c => c.comprobantes_deposito_movimientos?.some(rel => rel.movimiento_id === m.id));
+                      if (isLinked) return false;
+                      return true;
+                    });
+                    const selectedMovs = unconciliados.filter(m => (selectedGlobalDepositIds || []).includes(m.id));
+                    const selectedSum = selectedMovs.reduce((acc, m) => acc + Number(m.deposito || m.monto || 0), 0);
+                    const allSelected = unconciliados.length > 0 && selectedMovs.length === unconciliados.length;
+
+                    return (
+                      <>
+                        <div className="p-3 bg-gray-50/50 dark:bg-gray-900/40 border-b border-gray-200 dark:border-gray-800 shrink-0 flex items-center justify-between flex-wrap gap-2">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h4 className="text-xs font-extrabold uppercase text-amber-500 flex items-center gap-1.5">
+                              <CreditCard size={14} /> 1. Depósitos Bancarios
+                            </h4>
+                            <select
+                              value={selectedCuentaId}
+                              onChange={(e) => {
+                                setSelectedCuentaId(e.target.value);
+                                setSelectedGlobalDepositIds([]);
+                                setSelectedGlobalComprobanteIds([]);
+                                setSelectedGlobalDepositId(null);
                               }}
-                              className={`cursor-pointer hover:bg-gray-50/40 dark:hover:bg-gray-900/20 transition-all ${selectedGlobalPedidosIds.includes(p.id) ? 'bg-blue-500/10 hover:bg-blue-500/15' : ''}`}
+                              className="bg-white dark:bg-gray-950 border border-amber-300 dark:border-amber-700 px-2 py-0.5 rounded text-[11px] font-bold text-gray-900 dark:text-white outline-none focus:ring-1 focus:ring-amber-500 cursor-pointer shadow-sm"
                             >
-                              <td className="p-3 text-center">
-                                <input
-                                  type="checkbox"
-                                  checked={selectedGlobalPedidosIds.includes(p.id)}
-                                  onChange={() => {
-                                    const sel = [...selectedGlobalPedidosIds];
-                                    const idx = sel.indexOf(p.id);
-                                    idx > -1 ? sel.splice(idx, 1) : sel.push(p.id);
-                                    setSelectedGlobalPedidosIds(sel);
-                                  }}
-                                  className="w-3.5 h-3.5 text-blue-500 focus:ring-blue-500 rounded"
-                                />
-                              </td>
-                              <td className="p-3 font-mono font-bold text-gray-800 dark:text-gray-200">#{p.numero_pedido}</td>
-                              <td className="p-3 text-gray-600 dark:text-gray-400">{p.cliente_nombre || 'N/A'}</td>
-                              <td className="p-3 text-right font-mono font-bold text-emerald-500">{formatCurrency(p.precio_total)}</td>
-                            </tr>
-                          ))}
-                          {pedidosPendientes.length === 0 && (
-                            <tr>
-                              <td colSpan={4} className="p-8 text-center text-gray-400 italic">
-                                No hay pedidos pendientes de conciliar
-                              </td>
-                            </tr>
+                              <option value="">Todas las Cuentas</option>
+                              {cuentasBancarias?.map(c => (
+                                <option key={c.id} value={c.id}>{c.nombre} ({c.moneda})</option>
+                              ))}
+                            </select>
+                            {selectedMovs.length > 0 && (
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-500 text-white shadow-sm">
+                                {selectedMovs.length} seleccionado{selectedMovs.length > 1 ? 's' : ''} (+{formatCurrency(selectedSum)})
+                              </span>
+                            )}
+                          </div>
+                          {unconciliados.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (allSelected) {
+                                  setSelectedGlobalDepositIds([]);
+                                  setSelectedGlobalDepositId(null);
+                                } else {
+                                  const ids = unconciliados.map(m => m.id);
+                                  setSelectedGlobalDepositIds(ids);
+                                  setSelectedGlobalDepositId(ids[0] || null);
+                                }
+                              }}
+                              className="text-[10px] font-bold text-blue-600 dark:text-blue-400 hover:underline"
+                            >
+                              {allSelected ? 'Desmarcar Todos' : 'Seleccionar Todos'}
+                            </button>
                           )}
-                        </tbody>
-                      </table>
-                    ) : (
-                      /* VISTA DE FICHAS Y COMPROBANTES DE DEPÓSITO (VINCULADOS Y PENDIENTES) */
-                      <table className="w-full text-left border-collapse text-xs">
-                        <thead>
-                          <tr className="bg-gray-50 dark:bg-gray-900/50 border-b border-gray-200 dark:border-gray-800 text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
-                            <th className="p-3">Fecha</th>
-                            <th className="p-3">Tipo / Ficha</th>
-                            <th className="p-3">Descripción</th>
-                            <th className="p-3 text-right">Monto</th>
-                            <th className="p-3 text-right">Acción / Estado</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-100 dark:divide-gray-800/60 font-sans">
-                          {/* 1. Comprobantes YA vinculados a este depósito seleccionado */}
-                          {comprobantes
-                            .filter(c => c.comprobantes_deposito_movimientos?.some(rel => rel.movimiento_id === selectedGlobalDepositId))
-                            .map((c) => {
-                              const isVentanilla = c.tipo === 'deposito_ventanilla';
-                              const rel = c.comprobantes_deposito_movimientos?.find(r => r.movimiento_id === selectedGlobalDepositId);
-                              return (
-                                <tr key={c.id} className="bg-emerald-500/10 dark:bg-emerald-950/20 hover:bg-emerald-500/15 transition-all border-l-4 border-l-emerald-500">
-                                  <td className="p-3 font-mono text-gray-500">{new Date(c.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })}</td>
-                                  <td className="p-3 font-bold">
-                                    <div className="flex items-center gap-1.5">
-                                      <span className={`text-[9px] px-1.5 py-0.5 rounded font-black uppercase ${isVentanilla ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'}`}>
-                                        {isVentanilla ? 'Ventanilla' : 'Tarjeta'}
-                                      </span>
-                                      <span className="text-[9px] font-black text-emerald-600 dark:text-emerald-400 bg-emerald-100 dark:bg-emerald-900/40 px-1.5 py-0.5 rounded">
-                                        ✓ Vinculado
-                                      </span>
-                                    </div>
-                                  </td>
-                                  <td className="p-3 font-bold text-gray-800 dark:text-gray-200">{c.descripcion || 'Ficha de Depósito'}</td>
-                                  <td className="p-3 text-right font-mono font-bold text-emerald-600 dark:text-emerald-400">
-                                    {formatCurrency(rel?.monto_asociado || c.monto)}
-                                  </td>
-                                  <td className="p-3 text-right">
-                                    <div className="flex justify-end items-center gap-1.5">
-                                      {c.archivo_url && (
-                                        <button
-                                          type="button"
-                                          onClick={() => onDownloadFile(c.archivo_url!)}
-                                          className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500 hover:bg-amber-600 text-white flex items-center gap-0.5"
-                                          title="Ver Ticket"
-                                        >
-                                          <Eye size={10} /> Ticket
-                                        </button>
-                                      )}
-                                      {onDesvincularComprobante && (
-                                        <button
-                                          type="button"
-                                          onClick={async () => {
-                                            if (confirm('¿Deseas desvincular esta ficha del depósito seleccionado?')) {
-                                              await onDesvincularComprobante(c.id, selectedGlobalDepositId);
-                                            }
-                                          }}
-                                          className="px-2 py-0.5 rounded text-[10px] font-bold text-red-500 hover:bg-red-500/10 border border-red-200 dark:border-red-900/30"
-                                        >
-                                          Desvincular
-                                        </button>
-                                      )}
-                                    </div>
+                        </div>
+
+                        <div className="flex-1 overflow-auto">
+                          <table className="w-full text-left border-collapse text-xs">
+                            <thead>
+                              <tr className="bg-gray-50 dark:bg-gray-900/50 border-b border-gray-200 dark:border-gray-800 text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+                                <th className="p-3 w-10 text-center" />
+                                <th className="p-3">Fecha</th>
+                                <th className="p-3">Concepto</th>
+                                <th className="p-3 text-right">Depósito</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-100 dark:divide-gray-800/60 font-sans">
+                              {unconciliados.map((m) => {
+                                const isChecked = (selectedGlobalDepositIds || []).includes(m.id);
+                                return (
+                                  <tr
+                                    key={m.id}
+                                    onClick={() => {
+                                      const current = [...(selectedGlobalDepositIds || [])];
+                                      const idx = current.indexOf(m.id);
+                                      if (idx > -1) {
+                                        current.splice(idx, 1);
+                                      } else {
+                                        current.push(m.id);
+                                      }
+                                      setSelectedGlobalDepositIds(current);
+                                      setSelectedGlobalDepositId(current[0] || null);
+                                      setSelectedGlobalPedidosIds([]);
+                                    }}
+                                    className={`cursor-pointer hover:bg-amber-50/40 dark:hover:bg-amber-950/20 transition-all ${
+                                      isChecked ? 'bg-amber-500/15 border-l-4 border-l-amber-500 font-medium' : ''
+                                    }`}
+                                  >
+                                    <td className="p-3 text-center">
+                                      <input
+                                        type="checkbox"
+                                        checked={isChecked}
+                                        onChange={() => {}} // Se maneja en el onClick de la fila
+                                        className="w-4 h-4 text-amber-500 focus:ring-amber-500 rounded cursor-pointer accent-amber-500"
+                                      />
+                                    </td>
+                                    <td className="p-3 font-mono text-gray-500">{new Date(m.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })}</td>
+                                    <td className="p-3">
+                                      <div className="font-bold text-gray-800 dark:text-gray-200">{m.concepto}</div>
+                                      {m.referencia && <span className="text-[10px] text-gray-400">Ref: {m.referencia}</span>}
+                                    </td>
+                                    <td className="p-3 text-right font-mono font-bold text-emerald-600 dark:text-emerald-400">+{formatCurrency(m.deposito || m.monto)}</td>
+                                  </tr>
+                                );
+                              })}
+                              {unconciliados.length === 0 && (
+                                <tr>
+                                  <td colSpan={4} className="p-8 text-center text-gray-400 italic">
+                                    No hay depósitos pendientes de conciliar en este período
                                   </td>
                                 </tr>
-                              );
-                            })}
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      </>
+                    );
+                  })()}
+                </div>
 
-                          {/* 2. Comprobantes PENDIENTES de vincular */}
-                          {comprobantes
-                            .filter(c => {
-                              const sumAsoc = c.comprobantes_deposito_movimientos?.reduce((s, r) => s + Number(r.monto_asociado || 0), 0) || 0;
-                              const isLinkedToThis = c.comprobantes_deposito_movimientos?.some(rel => rel.movimiento_id === selectedGlobalDepositId);
-                              return !isLinkedToThis && Math.abs(Number(c.monto) - sumAsoc) >= 0.05;
-                            })
-                            .map((c) => {
-                              const isVentanilla = c.tipo === 'deposito_ventanilla';
-                              const selMov = movimientos.find(m => m.id === selectedGlobalDepositId);
-                              const matchMonto = selMov && Math.abs(Number(selMov.deposito || selMov.monto) - Number(c.monto)) < 0.05;
-                              return (
-                                <tr key={c.id} className={`hover:bg-gray-50/40 dark:hover:bg-gray-900/20 transition-all ${matchMonto ? 'bg-amber-500/10' : ''}`}>
-                                  <td className="p-3 font-mono text-gray-500">{new Date(c.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })}</td>
-                                  <td className="p-3 font-bold">
-                                    <span className={`text-[9px] px-1.5 py-0.5 rounded ${isVentanilla ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'}`}>
-                                      {isVentanilla ? 'Ventanilla' : 'Tarjeta'}
-                                    </span>
-                                  </td>
-                                  <td className="p-3 text-gray-600 dark:text-gray-300">{c.descripcion || '-'}</td>
-                                  <td className="p-3 text-right font-mono font-bold text-gray-900 dark:text-white">{formatCurrency(c.monto)}</td>
-                                  <td className="p-3 text-right">
-                                    <button
-                                      type="button"
-                                      onClick={async () => {
-                                        if (selectedGlobalDepositId) {
-                                          const res = await onVincularComprobante?.(c.id, selectedGlobalDepositId, Number(c.monto));
-                                          if (res && !res.success) {
-                                            alert(res.error);
+                {/* 2. ASIGNACIÓN Y VINCULACIÓN A VENTAS / FICHAS */}
+                <div className="flex flex-col min-h-0 bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden shadow-sm font-sans">
+                  {(() => {
+                    const selectedMovs = movimientos.filter(m => (selectedGlobalDepositIds || []).includes(m.id));
+                    const selectedSum = selectedMovs.reduce((acc, m) => acc + Number(m.deposito || m.monto || 0), 0);
+
+                    const selCuenta = cuentasBancarias?.find(cb => cb.id === selectedCuentaId);
+                    const isCajaChicaFilter = selCuenta?.nombre?.toUpperCase().includes('CAJA CHICA') || selCuenta?.nombre?.toUpperCase().includes('EFECTIVO');
+                    const isParrotPayFilter = selCuenta?.nombre?.toUpperCase().includes('PARROT');
+
+                    const isCajaChicaTarget = selectedMovs.some(m => {
+                      const conceptUpper = (m.concepto || '').toUpperCase();
+                      const cuentaNombre = cuentasBancarias?.find(cb => cb.id === m.cuenta_bancaria_id)?.nombre?.toUpperCase() || '';
+                      return conceptUpper.includes('CAJA CHICA') || conceptUpper.includes('EFECTIVO') || cuentaNombre.includes('CAJA CHICA');
+                    }) || isCajaChicaFilter;
+
+                    const isPlatformWithCommission = selectedMovs.some(m => {
+                      const conceptUpper = (m.concepto || '').toUpperCase();
+                      return (
+                        conceptUpper.includes('SPEI RECIBIDOBANORTE') ||
+                        conceptUpper.includes('PARROT') ||
+                        conceptUpper.includes('BANORTE') ||
+                        conceptUpper.includes('DESCUENTO') ||
+                        conceptUpper.includes('COMISION') ||
+                        conceptUpper.includes('COMISIÓ') ||
+                        conceptUpper.includes('OELTRANSFER')
+                      );
+                    });
+
+                    const getCompReconciliationAmount = (item: typeof comprobantes[0], isParrot: boolean, isCaja: boolean) => {
+                      if (isCaja) {
+                        const efecSum = Number(item.monto_efectivo || 0) + Number(item.propina_efectivo || 0);
+                        return efecSum;
+                      }
+                      if (isParrot) {
+                        const parrotSum = Number(item.monto_parrotpay || 0) + Number(item.propina_parrotpay || 0);
+                        if (parrotSum > 0) return parrotSum;
+
+                        const otrosMetodosSum = Number(item.monto_efectivo || 0) + Number(item.monto_debito || 0) + Number(item.monto_credito || 0) + Number(item.monto_amex || 0);
+                        if (otrosMetodosSum === 0 && Number(item.monto || 0) > 0) {
+                          return Number(item.monto || 0);
+                        }
+
+                        return 0;
+                      }
+                      return Number(item.monto || 0);
+                    };
+
+                    const getCompPendingAmount = (item: typeof comprobantes[0], isParrot: boolean, isCaja: boolean) => {
+                      const effectiveMonto = getCompReconciliationAmount(item, isParrot, isCaja);
+                      const sumAsoc = item.comprobantes_deposito_movimientos?.reduce((s, r) => s + Number(r.monto_asociado || 0), 0) || 0;
+                      return Math.max(0, effectiveMonto - sumAsoc);
+                    };
+
+                    const unlinkedComprobantes = comprobantes.filter(c => {
+                      if (selectedCuentaId && c.cuenta_bancaria_id && c.cuenta_bancaria_id !== selectedCuentaId) {
+                        if (isCajaChicaFilter && (Number(c.monto_efectivo || 0) > 0 || Number(c.propina_efectivo || 0) > 0)) {
+                          // Incluir comprobante si tiene desglose de efectivo para Caja Chica
+                        } else if (isParrotPayFilter && (Number(c.monto_parrotpay || 0) > 0 || Number(c.propina_parrotpay || 0) > 0)) {
+                          // Incluir para ParrotPay
+                        } else {
+                          return false;
+                        }
+                      }
+                      const effectiveMonto = getCompReconciliationAmount(c, isPlatformWithCommission || isParrotPayFilter, isCajaChicaTarget);
+                      if ((isPlatformWithCommission || isParrotPayFilter || isCajaChicaTarget) && effectiveMonto === 0) return false;
+                      const pending = getCompPendingAmount(c, isPlatformWithCommission || isParrotPayFilter, isCajaChicaTarget);
+                      return pending >= 0.05;
+                    });
+
+                    const selectedComps = unlinkedComprobantes.filter(c => (selectedGlobalComprobanteIds || []).includes(c.id));
+                    const selectedCompsSum = selectedComps.reduce((acc, c) => acc + getCompPendingAmount(c, isPlatformWithCommission, isCajaChicaTarget), 0);
+                    const allCompsSelected = unlinkedComprobantes.length > 0 && selectedComps.length === unlinkedComprobantes.length;
+
+                    const handleVincularComprobantes = async (targetComps: typeof unlinkedComprobantes) => {
+                      if (targetComps.length === 0 || selectedMovs.length === 0) return;
+                      const compsSum = targetComps.reduce((acc, c) => acc + getCompPendingAmount(c, isPlatformWithCommission, isCajaChicaTarget), 0);
+                      const dif = compsSum - selectedSum;
+                      const isExactMatch = Math.abs(dif) < 0.05;
+
+                      if (!isExactMatch && !isPlatformWithCommission) {
+                        alert(
+                          `⛔ No se permite vincular esta selección.\n\n` +
+                          `El total de los tickets/fichas seleccionados debe coincidir al 100% con el o los depósitos bancarios seleccionados.\n\n` +
+                          `• Total Ticket(s): ${formatCurrency(compsSum)} (${targetComps.length} ticket/s)\n` +
+                          `• Total Depósito(s): ${formatCurrency(selectedSum)} (${selectedMovs.length} depósito/s)\n` +
+                          `• Diferencia pendiente: ${formatCurrency(dif)}`
+                        );
+                        return;
+                      }
+
+                      if (!isExactMatch && isPlatformWithCommission) {
+                        const parrotVenta = targetComps.reduce((sum, c) => {
+                          const pMonto = Number(c.monto_parrotpay || 0);
+                          return sum + (pMonto > 0 ? pMonto : Number(c.monto || 0));
+                        }, 0);
+                        const parrotPropina = targetComps.reduce((sum, c) => sum + Number(c.propina_parrotpay || 0), 0);
+                        const comisionBruta = dif > 0 ? (dif / 1.16).toFixed(2) : '0.00';
+                        const ivaBruto = dif > 0 ? (dif - parseInputNumber(comisionBruta)).toFixed(2) : '0.00';
+
+                        setDesgloseComisionesModal({
+                          isOpen: true,
+                          targetComps,
+                          ventaBruta: parrotVenta.toFixed(2),
+                          propina: parrotPropina.toFixed(2),
+                          comisionTransacciones: comisionBruta,
+                          ivaTransacciones: ivaBruto,
+                          otrosCargos: '0.00'
+                        });
+                        return;
+                      }
+
+                      for (const comp of targetComps) {
+                        for (const movId of selectedGlobalDepositIds) {
+                          const mov = movimientos.find(m => m.id === movId);
+                          const montoAsoc = (targetComps.length === 1 && selectedMovs.length > 1 && mov)
+                            ? Number(mov.deposito || mov.monto)
+                            : Number(comp.monto);
+                          const res = await onVincularComprobante?.(comp.id, movId, montoAsoc);
+                          if (res && !res.success) {
+                            alert(res.error);
+                            break;
+                          }
+                        }
+                      }
+
+                      setSelectedGlobalDepositIds([]);
+                      setSelectedGlobalComprobanteIds([]);
+                      setSelectedGlobalDepositId(null);
+                    };
+
+                    return (
+                      <>
+                        <div className="p-3 bg-gray-50/50 dark:bg-gray-900/40 border-b border-gray-200 dark:border-gray-800 shrink-0 flex justify-between items-center flex-wrap gap-2">
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => setModoConciliacionIngreso('pedidos')}
+                              className={`px-2.5 py-1 rounded-lg text-[10px] font-extrabold uppercase transition-all ${
+                                modoConciliacionIngreso === 'pedidos'
+                                  ? 'bg-emerald-500 text-white shadow-sm'
+                                  : 'bg-gray-100 dark:bg-gray-800 text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'
+                              }`}
+                            >
+                              <Layers size={11} className="inline mr-1" /> 2a. Ventas / Pedidos
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setModoConciliacionIngreso('fichas')}
+                              className={`px-2.5 py-1 rounded-lg text-[10px] font-extrabold uppercase transition-all ${
+                                modoConciliacionIngreso === 'fichas'
+                                  ? 'bg-amber-500 text-white shadow-sm'
+                                  : 'bg-gray-100 dark:bg-gray-800 text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'
+                              }`}
+                            >
+                              <CreditCard size={11} className="inline mr-1" /> 2b. Fichas / Comprobantes
+                            </button>
+                          </div>
+
+                          <div className="flex items-center gap-2 flex-wrap">
+                            {selectedMovs.length > 0 && (
+                              <div className="text-[11px] font-bold text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-955/30 px-2 py-0.5 rounded-lg border border-amber-200 dark:border-amber-900/40">
+                                Depósito(s) ({selectedMovs.length}): <span className="font-mono font-black">{formatCurrency(selectedSum)}</span>
+                              </div>
+                            )}
+
+                            {modoConciliacionIngreso === 'fichas' && selectedComps.length > 0 && (
+                              <div className="text-[11px] font-bold text-purple-600 dark:text-purple-400 bg-purple-50 dark:bg-purple-955/30 px-2 py-0.5 rounded-lg border border-purple-200 dark:border-purple-900/40">
+                                Ticket(s) ({selectedComps.length}): <span className="font-mono font-black">{formatCurrency(selectedCompsSum)}</span>
+                              </div>
+                            )}
+
+                            {selectedMovs.length === 0 && selectedComps.length === 0 && (
+                              <span className="text-[10px] text-gray-400 italic">
+                                👈 Selecciona 1 o más depósitos e indica los tickets a vincular
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="flex-1 overflow-auto">
+                          {modoConciliacionIngreso === 'pedidos' ? (
+                            <table className="w-full text-left border-collapse text-xs">
+                              <thead>
+                                <tr className="bg-gray-50 dark:bg-gray-900/50 border-b border-gray-200 dark:border-gray-800 text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+                                  <th className="p-3 w-12 text-center" />
+                                  <th className="p-3">Pedido</th>
+                                  <th className="p-3">Cliente</th>
+                                  <th className="p-3 text-right">Monto</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-gray-100 dark:divide-gray-800/60 font-sans">
+                                {pedidosPendientes.map((p) => (
+                                  <tr
+                                    key={p.id}
+                                    onClick={() => {
+                                      const sel = [...selectedGlobalPedidosIds];
+                                      const idx = sel.indexOf(p.id);
+                                      idx > -1 ? sel.splice(idx, 1) : sel.push(p.id);
+                                      setSelectedGlobalPedidosIds(sel);
+                                    }}
+                                    className={`cursor-pointer hover:bg-gray-50/40 dark:hover:bg-gray-900/20 transition-all ${selectedGlobalPedidosIds.includes(p.id) ? 'bg-blue-500/10 hover:bg-blue-500/15' : ''}`}
+                                  >
+                                    <td className="p-3 text-center">
+                                      <input
+                                        type="checkbox"
+                                        checked={selectedGlobalPedidosIds.includes(p.id)}
+                                        onChange={() => {
+                                          const sel = [...selectedGlobalPedidosIds];
+                                          const idx = sel.indexOf(p.id);
+                                          idx > -1 ? sel.splice(idx, 1) : sel.push(p.id);
+                                          setSelectedGlobalPedidosIds(sel);
+                                        }}
+                                        className="w-3.5 h-3.5 text-blue-500 focus:ring-blue-500 rounded"
+                                      />
+                                    </td>
+                                    <td className="p-3 font-mono font-bold text-gray-800 dark:text-gray-200">#{p.numero_pedido}</td>
+                                    <td className="p-3 text-gray-600 dark:text-gray-400">{p.cliente_nombre || 'N/A'}</td>
+                                    <td className="p-3 text-right font-mono font-bold text-emerald-500">{formatCurrency(p.precio_total)}</td>
+                                  </tr>
+                                ))}
+                                {pedidosPendientes.length === 0 && (
+                                  <tr>
+                                    <td colSpan={4} className="p-8 text-center text-gray-400 italic">
+                                      No hay pedidos pendientes de conciliar
+                                    </td>
+                                  </tr>
+                                )}
+                              </tbody>
+                            </table>
+                          ) : (
+                            /* VISTA UNIFICADA DE FICHAS Y COMPROBANTES PENDIENTES DE VINCULAR */
+                            <table className="w-full text-left border-collapse text-xs">
+                              <thead>
+                                <tr className="bg-gray-50 dark:bg-gray-900/50 border-b border-gray-200 dark:border-gray-800 text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+                                  <th className="p-3 w-10 text-center">
+                                    {unlinkedComprobantes.length > 0 && (
+                                      <input
+                                        type="checkbox"
+                                        checked={allCompsSelected}
+                                        onChange={() => {
+                                          if (allCompsSelected) {
+                                            setSelectedGlobalComprobanteIds([]);
+                                          } else {
+                                            setSelectedGlobalComprobanteIds(unlinkedComprobantes.map(c => c.id));
                                           }
-                                        }
+                                        }}
+                                        className="w-4 h-4 text-amber-500 focus:ring-amber-500 rounded cursor-pointer accent-amber-500"
+                                        title={allCompsSelected ? "Desmarcar Todos" : "Seleccionar Todos los Tickets"}
+                                      />
+                                    )}
+                                  </th>
+                                  <th className="p-3">Fecha</th>
+                                  <th className="p-3">Tipo / Ficha</th>
+                                  <th className="p-3">Descripción</th>
+                                  <th className="p-3 text-right">Monto Ticket</th>
+                                  <th className="p-3 text-right">Acción</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-gray-100 dark:divide-gray-800/60 font-sans">
+                                {unlinkedComprobantes.map((c) => {
+                                  const isVentanilla = c.tipo === 'deposito_ventanilla';
+                                  const isChecked = (selectedGlobalComprobanteIds || []).includes(c.id);
+
+                                  const targetForThisRow = selectedComps.length > 0 && isChecked
+                                    ? selectedComps
+                                    : [c];
+
+                                  const targetSum = targetForThisRow.reduce((s, item) => s + getCompReconciliationAmount(item, isPlatformWithCommission, isCajaChicaTarget), 0);
+                                  const rowDif = targetSum - selectedSum;
+                                  const rowExact = Math.abs(rowDif) < 0.05;
+
+                                  return (
+                                    <tr
+                                      key={c.id}
+                                      onClick={() => {
+                                        const current = [...(selectedGlobalComprobanteIds || [])];
+                                        const idx = current.indexOf(c.id);
+                                        if (idx > -1) current.splice(idx, 1);
+                                        else current.push(c.id);
+                                        setSelectedGlobalComprobanteIds(current);
                                       }}
-                                      className={`px-2.5 py-1 rounded text-[10px] font-extrabold transition-all shadow ${
-                                        matchMonto 
-                                          ? 'bg-amber-500 hover:bg-amber-600 text-white animate-pulse'
-                                          : 'bg-amber-500 hover:bg-amber-600 text-white'
+                                      className={`cursor-pointer hover:bg-amber-50/40 dark:hover:bg-amber-955/20 transition-all ${
+                                        isChecked ? 'bg-amber-500/15 border-l-4 border-l-amber-500 font-medium' : rowExact ? 'bg-emerald-500/10' : ''
                                       }`}
                                     >
-                                      Vincular con Depósito
-                                    </button>
+                                      <td className="p-3 text-center" onClick={(e) => e.stopPropagation()}>
+                                        <input
+                                          type="checkbox"
+                                          checked={isChecked}
+                                          onChange={() => {
+                                            const current = [...(selectedGlobalComprobanteIds || [])];
+                                            const idx = current.indexOf(c.id);
+                                            if (idx > -1) current.splice(idx, 1);
+                                            else current.push(c.id);
+                                            setSelectedGlobalComprobanteIds(current);
+                                          }}
+                                          className="w-4 h-4 text-amber-500 focus:ring-amber-500 rounded cursor-pointer accent-amber-500"
+                                        />
+                                      </td>
+                                      <td className="p-3 font-mono text-gray-500">{new Date(c.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })}</td>
+                                      <td className="p-3 font-bold">
+                                        <span className={`text-[9px] px-1.5 py-0.5 rounded ${isVentanilla ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'}`}>
+                                          {isVentanilla ? 'Ventanilla' : 'Tarjeta'}
+                                        </span>
+                                      </td>
+                                      <td className="p-3 text-gray-600 dark:text-gray-300">{c.descripcion || '-'}</td>
+                                      <td className="p-3 text-right">
+                                        {(() => {
+                                          const pendingVal = getCompPendingAmount(c, isPlatformWithCommission, isCajaChicaTarget);
+                                          const efecMontoTotal = Number(c.monto_efectivo || 0) + Number(c.propina_efectivo || 0);
+                                          const pMontoTotal = Number(c.monto_parrotpay || 0) + Number(c.propina_parrotpay || 0);
+                                          if (isCajaChicaTarget && efecMontoTotal > 0) {
+                                            return (
+                                              <div>
+                                                <span className="font-mono font-bold text-emerald-600 dark:text-emerald-400 block">{formatCurrency(pendingVal)}</span>
+                                                <span className="text-[9px] text-gray-400 font-mono block font-normal">({formatCurrency(efecMontoTotal)} Efec / {formatCurrency(c.monto)} Corte)</span>
+                                              </div>
+                                            );
+                                          }
+                                          if (isPlatformWithCommission && pMontoTotal > 0) {
+                                            return (
+                                              <div>
+                                                <span className="font-mono font-bold text-purple-600 dark:text-purple-400 block">{formatCurrency(pendingVal)}</span>
+                                                <span className="text-[9px] text-gray-400 font-mono block font-normal">({formatCurrency(pMontoTotal)} Parrot / {formatCurrency(c.monto)} Corte)</span>
+                                              </div>
+                                            );
+                                          }
+                                          return <span className="font-mono font-bold text-gray-900 dark:text-white">{formatCurrency(pendingVal)}</span>;
+                                        })()}
+                                      </td>
+                                      <td className="p-3 text-right" onClick={(e) => e.stopPropagation()}>
+                                        {selectedMovs.length > 0 ? (
+                                          <button
+                                            type="button"
+                                            onClick={() => handleVincularComprobantes(targetForThisRow)}
+                                            className={`px-3 py-1 rounded-lg text-[10px] font-black transition-all shadow flex items-center gap-1.5 ml-auto ${
+                                              rowExact
+                                                ? 'bg-emerald-500 hover:bg-emerald-600 text-white animate-pulse'
+                                                : isPlatformWithCommission
+                                                ? 'bg-purple-600 hover:bg-purple-700 text-white'
+                                                : 'bg-red-500 hover:bg-red-600 text-white opacity-80'
+                                            }`}
+                                          >
+                                            {rowExact
+                                              ? `✓ Vincular (${targetForThisRow.length} ticket${targetForThisRow.length > 1 ? 's' : ''})`
+                                              : isPlatformWithCommission
+                                              ? `⚡ Vincular (${targetForThisRow.length} ticket${targetForThisRow.length > 1 ? 's' : ''} + Comisión ${formatCurrency(rowDif)})`
+                                              : `🚫 No Cuadra (${formatCurrency(rowDif)})`}
+                                          </button>
+                                        ) : (
+                                          <span className="text-[10px] text-gray-400 italic">
+                                            👈 Marca depósitos a la izquierda
+                                          </span>
+                                        )}
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                                {unlinkedComprobantes.length === 0 && (
+                                  <tr>
+                                    <td colSpan={6} className="p-8 text-center text-gray-400 italic">
+                                      No hay fichas o comprobantes de depósito pendientes en este período
+                                    </td>
+                                  </tr>
+                                )}
+                              </tbody>
+                            </table>
+                          )}
+                        </div>
+                      </>
+                    );
+                  })()}
+                </div>
+              </div>
+            )}
+
+            {ingresosSubSeccion === 'factura_publico' && (
+              <div className="flex-1 flex flex-col overflow-y-auto min-h-0 gap-6 font-sans">
+                {(() => {
+                  const ticketsMes = comprobantes.filter(c => {
+                    if (c.tipo === 'deposito_ventanilla') return false;
+                    if (c.descripcion && c.descripcion.includes('COMPROBANTE_EFECTIVO_')) return false;
+                    const mes = c.fecha ? c.fecha.substring(0, 7) : '';
+                    return !selectedMonth || mes === selectedMonth;
+                  });
+
+                  let totalVentasBrutasBase = 0;
+                  let totalPropinasExcluidas = 0;
+                  let totalTercerosBase = 0;
+
+                  let totalEfectivoBase = 0;
+                  let totalBbvaBase = 0;
+                  let totalParrotBase = 0;
+
+                  let totalTercerosEfectivo = 0;
+                  let totalTercerosBbva = 0;
+                  let totalTercerosParrot = 0;
+
+                  ticketsMes.forEach(c => {
+                    const isParrotTicket = (c.cuenta_bancaria_id && cuentasBancarias?.find(cb => cb.id === c.cuenta_bancaria_id)?.nombre?.toUpperCase().includes('PARROT')) || c.tipo === 'corte_parrot';
+
+                    const efec = Number(c.monto_efectivo || 0);
+                    const parrot = Number(c.monto_parrotpay || 0);
+                    const bbva = isParrotTicket ? 0 : (Number(c.monto_debito || 0) + Number(c.monto_credito || 0) + Number(c.monto_amex || 0));
+                    const baseTotal = efec + bbva + parrot;
+
+                    const propinaTotal = Number(c.propina_efectivo || 0) + Number(c.propina_parrotpay || 0) +
+                                         (isParrotTicket ? 0 : (Number(c.propina_debito || 0) + Number(c.propina_credito || 0) + Number(c.propina_amex || 0)));
+
+                    totalVentasBrutasBase += baseTotal;
+                    totalPropinasExcluidas += propinaTotal;
+
+                    totalEfectivoBase += efec;
+                    totalBbvaBase += bbva;
+                    totalParrotBase += parrot;
+
+                    if (facturadosTerceros[c.id]) {
+                      totalTercerosBase += baseTotal;
+                      totalTercerosEfectivo += efec;
+                      totalTercerosBbva += bbva;
+                      totalTercerosParrot += parrot;
+                    }
+                  });
+
+                  const currentMonthKey = selectedMonth || 'GLOBAL';
+                  const manualTercerosVal = Number(montoManualTercerosMap[currentMonthKey] || 0);
+
+                  const totalTercerosFinal = totalTercerosBase + manualTercerosVal;
+                  const totalFacturaPublicoGeneral = Math.max(0, totalVentasBrutasBase - totalTercerosFinal);
+                  const efectivoPublicoGeneral = Math.max(0, totalEfectivoBase - totalTercerosEfectivo);
+                  const bbvaPublicoGeneral = Math.max(0, totalBbvaBase - totalTercerosBbva);
+                  const parrotPublicoGeneral = Math.max(0, totalParrotBase - totalTercerosParrot);
+
+                  const exportFacturaPublicoExcel = async () => {
+                    try {
+                      const XLSX = await import('xlsx');
+                      const wb = XLSX.utils.book_new();
+
+                      const summaryRows = [
+                        { 'Concepto': 'Ventas Efectivo (Sin Propina)', 'Venta Bruta Base': totalEfectivoBase, 'Facturado a Terceros': totalTercerosEfectivo, 'Factura Público en General': efectivoPublicoGeneral },
+                        { 'Concepto': 'Ventas Tarjetas BBVA/POS (Sin Propina)', 'Venta Bruta Base': totalBbvaBase, 'Facturado a Terceros': totalTercerosBbva, 'Factura Público en General': bbvaPublicoGeneral },
+                        { 'Concepto': 'Ventas ParrotPay (Sin Propina)', 'Venta Bruta Base': totalParrotBase, 'Facturado a Terceros': totalTercerosParrot, 'Factura Público en General': parrotPublicoGeneral },
+                        { 'Concepto': 'Monto Manual Facturado a Terceros', 'Venta Bruta Base': 0, 'Facturado a Terceros': manualTercerosVal, 'Factura Público en General': -manualTercerosVal },
+                        { 'Concepto': '--- TOTAL A FACTURAR ---', 'Venta Bruta Base': totalVentasBrutasBase, 'Facturado a Terceros': totalTercerosFinal, 'Factura Público en General': totalFacturaPublicoGeneral },
+                        { 'Concepto': 'PROPINAS TOTALES (NO CONTABILIZADAS)', 'Venta Bruta Base': 0, 'Facturado a Terceros': 0, 'Factura Público en General': totalPropinasExcluidas }
+                      ];
+
+                      const detailRows = ticketsMes.map(c => {
+                        const isParrotTicket = (c.cuenta_bancaria_id && cuentasBancarias?.find(cb => cb.id === c.cuenta_bancaria_id)?.nombre?.toUpperCase().includes('PARROT')) || c.tipo === 'corte_parrot';
+
+                        const efec = Number(c.monto_efectivo || 0);
+                        const parrot = Number(c.monto_parrotpay || 0);
+                        const bbva = isParrotTicket ? 0 : (Number(c.monto_debito || 0) + Number(c.monto_credito || 0) + Number(c.monto_amex || 0));
+                        const baseTotal = efec + bbva + parrot;
+                        const propinaTotal = Number(c.propina_efectivo || 0) + Number(c.propina_parrotpay || 0) +
+                                             (isParrotTicket ? 0 : (Number(c.propina_debito || 0) + Number(c.propina_credito || 0) + Number(c.propina_amex || 0)));
+                        const isTercero = !!facturadosTerceros[c.id];
+
+                        return {
+                          'Fecha': c.fecha ? new Date(c.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : '',
+                          'Descripción / Folio': c.descripcion || `Corte POS ${c.fecha}`,
+                          'Importe sin Propina (Base)': baseTotal,
+                          'Venta Efectivo (Base)': efec,
+                          'Venta Tarjetas BBVA (Base)': bbva,
+                          'Venta ParrotPay (Base)': parrot,
+                          'Propinas Excluidas ($)': propinaTotal,
+                          'Facturado a Terceros (Individual)': isTercero ? 'SÍ (Facturado)' : 'NO (Público General)',
+                          'Monto a Público en General': isTercero ? 0 : baseTotal
+                        };
+                      });
+
+                      const wsSummary = XLSX.utils.json_to_sheet(summaryRows);
+                      XLSX.utils.book_append_sheet(wb, wsSummary, 'Resumen Factura Global');
+
+                      const wsDetail = XLSX.utils.json_to_sheet(detailRows);
+                      XLSX.utils.book_append_sheet(wb, wsDetail, 'Detalle Tickets');
+
+                      const monthStr = selectedMonth ? `_${selectedMonth}` : '';
+                      XLSX.writeFile(wb, `Factura_Publico_En_General${monthStr}.xlsx`);
+                    } catch (err: any) {
+                      alert(`Error al exportar: ${err.message}`);
+                    }
+                  };
+
+                  return (
+                    <div className="space-y-6">
+                      {/* TARJETAS RESUMEN DE FACTURACIÓN AL PÚBLICO EN GENERAL */}
+                      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                        {/* KPI TOTAL A FACTURAR */}
+                        <div className="p-5 rounded-2xl bg-gradient-to-br from-emerald-600 to-teal-700 text-white shadow-lg flex flex-col justify-between">
+                          <div>
+                            <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-200 block">Factura Público en General</span>
+                            <h3 className="text-2xl font-black font-mono mt-1">{formatCurrency(totalFacturaPublicoGeneral)}</h3>
+                            <p className="text-[10px] text-emerald-100 mt-1">Suma de ventas netas sin propinas ni facturas a terceros</p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={exportFacturaPublicoExcel}
+                            className="mt-4 w-full py-2 bg-white/20 hover:bg-white/30 text-white rounded-xl text-xs font-black transition-all flex items-center justify-center gap-1.5 shadow"
+                          >
+                            <FileSpreadsheet size={14} /> Exportar Excel Público General
+                          </button>
+                        </div>
+
+                        {/* DESGLOSE POR MÉTODO DE PAGO */}
+                        <div className="p-5 rounded-2xl bg-white dark:bg-gray-955 border border-gray-200 dark:border-gray-800 shadow-sm flex flex-col justify-between space-y-2">
+                          <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block">💳 Desglose por Método (Público General)</span>
+                          <div className="space-y-1.5 text-xs font-mono">
+                            <div className="flex justify-between border-b border-gray-100 dark:border-gray-900 pb-1">
+                              <span className="text-gray-600 dark:text-gray-400 font-sans">💵 Efectivo:</span>
+                              <span className="font-bold text-emerald-600 dark:text-emerald-400">{formatCurrency(efectivoPublicoGeneral)}</span>
+                            </div>
+                            <div className="flex justify-between border-b border-gray-100 dark:border-gray-900 pb-1">
+                              <span className="text-gray-600 dark:text-gray-400 font-sans">💳 Tarjetas BBVA:</span>
+                              <span className="font-bold text-blue-600 dark:text-blue-400">{formatCurrency(bbvaPublicoGeneral)}</span>
+                            </div>
+                            <div className="flex justify-between border-b border-gray-100 dark:border-gray-900 pb-1">
+                              <span className="text-gray-600 dark:text-gray-400 font-sans">🦜 ParrotPay:</span>
+                              <span className="font-bold text-purple-600 dark:text-purple-400">{formatCurrency(parrotPublicoGeneral)}</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* FACTURADO A TERCEROS */}
+                        <div className="p-5 rounded-2xl bg-white dark:bg-gray-955 border border-purple-200 dark:border-purple-900/40 shadow-sm flex flex-col justify-between space-y-2">
+                          <div>
+                            <span className="text-[10px] font-bold uppercase tracking-wider text-purple-600 dark:text-purple-400 block">👤 Facturado a Terceros</span>
+                            <h3 className="text-xl font-extrabold font-mono text-purple-700 dark:text-purple-300 mt-0.5">{formatCurrency(totalTercerosFinal)}</h3>
+                            {totalTercerosBase > 0 && (
+                              <p className="text-[10px] text-gray-400 mt-0.5">
+                                Tickets marcados: {formatCurrency(totalTercerosBase)}
+                              </p>
+                            )}
+                          </div>
+
+                          <div className="pt-2 border-t border-purple-100 dark:border-purple-900/30 space-y-1">
+                            <label className="text-[10px] font-extrabold uppercase text-purple-700 dark:text-purple-300 flex items-center justify-between">
+                              <span>✏️ Importe Manual ($):</span>
+                              {manualTercerosVal > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={() => setMontoManualTercero(currentMonthKey, 0)}
+                                  className="text-[9px] text-red-500 hover:underline font-bold"
+                                >
+                                  Limpiar
+                                </button>
+                              )}
+                            </label>
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              value={manualTercerosVal || ''}
+                              onChange={(e) => setMontoManualTercero(currentMonthKey, Number(e.target.value))}
+                              placeholder="Escribe monto a descontar..."
+                              className="w-full bg-purple-50/80 dark:bg-purple-955/50 border border-purple-300 dark:border-purple-800 rounded-xl px-3 py-1.5 text-xs font-mono font-bold text-purple-900 dark:text-purple-100 outline-none focus:ring-2 focus:ring-purple-500 transition-all"
+                            />
+                          </div>
+                        </div>
+
+                        {/* PROPINAS EXCLUIDAS */}
+                        <div className="p-5 rounded-2xl bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 shadow-sm flex flex-col justify-between">
+                          <div>
+                            <span className="text-[10px] font-bold uppercase tracking-wider text-gray-500 block">🚫 Propinas (No Contabilizadas)</span>
+                            <h3 className="text-xl font-extrabold font-mono text-gray-600 dark:text-gray-400 mt-1">{formatCurrency(totalPropinasExcluidas)}</h3>
+                            <p className="text-[10px] text-gray-400 mt-1">Las propinas están totalmente excluidas de la facturación</p>
+                          </div>
+                          <span className="text-[9px] font-extrabold text-gray-400 uppercase bg-gray-200 dark:bg-gray-800 px-2 py-1 rounded w-fit">
+                            0% Impuesto / Sin Facturar
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* TABLA INTERACTIVA DE TICKETS */}
+                      <div className="bg-white dark:bg-gray-955 border border-gray-200 dark:border-gray-800 rounded-2xl overflow-hidden shadow-sm">
+                        <div className="p-4 bg-gray-50/50 dark:bg-gray-900/40 border-b border-gray-200 dark:border-gray-800 flex justify-between items-center flex-wrap gap-2">
+                          <div>
+                            <h4 className="text-xs font-black uppercase text-gray-800 dark:text-gray-200 flex items-center gap-2">
+                              <List size={16} className="text-emerald-500" /> Control de Facturación por Ticket ({ticketsMes.length})
+                            </h4>
+                            <p className="text-[10px] text-gray-400 mt-0.5">
+                              Marca la casilla "Factura de Terceros" en los tickets que ya fueron facturados individualmente a clientes para restarlos automáticamente del público en general.
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-left border-collapse text-xs">
+                            <thead>
+                              <tr className="bg-gray-50 dark:bg-gray-900/50 border-b border-gray-200 dark:border-gray-800 text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+                                <th className="p-3">Fecha</th>
+                                <th className="p-3">Descripción / Folio</th>
+                                <th className="p-3 text-right">Venta Base (Sin Propina)</th>
+                                <th className="p-3 text-right">Efectivo</th>
+                                <th className="p-3 text-right">Tarjetas BBVA</th>
+                                <th className="p-3 text-right">ParrotPay</th>
+                                <th className="p-3 text-right text-gray-400">Propinas (Excluidas)</th>
+                                <th className="p-3 text-center">Factura de Terceros (Individual)</th>
+                                <th className="p-3 text-center">Destino</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-100 dark:divide-gray-800/60">
+                              {ticketsMes.map(c => {
+                                const isParrotTicket = (c.cuenta_bancaria_id && cuentasBancarias?.find(cb => cb.id === c.cuenta_bancaria_id)?.nombre?.toUpperCase().includes('PARROT')) || c.tipo === 'corte_parrot';
+
+                                const efec = Number(c.monto_efectivo || 0);
+                                const parrot = Number(c.monto_parrotpay || 0);
+                                const bbva = isParrotTicket ? 0 : (Number(c.monto_debito || 0) + Number(c.monto_credito || 0) + Number(c.monto_amex || 0));
+                                const baseTotal = efec + bbva + parrot;
+
+                                const propinaTotal = Number(c.propina_efectivo || 0) + Number(c.propina_parrotpay || 0) +
+                                                     (isParrotTicket ? 0 : (Number(c.propina_debito || 0) + Number(c.propina_credito || 0) + Number(c.propina_amex || 0)));
+                                const isTercero = !!facturadosTerceros[c.id];
+
+                                return (
+                                  <tr key={c.id} className={`hover:bg-gray-50/80 dark:hover:bg-gray-900/50 transition-colors ${isTercero ? 'bg-purple-50/30 dark:bg-purple-955/10' : ''}`}>
+                                    <td className="p-3 font-mono font-medium text-gray-600 dark:text-gray-400">
+                                      {c.fecha ? new Date(c.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : ''}
+                                    </td>
+                                    <td className="p-3 font-bold text-gray-800 dark:text-gray-200">
+                                      {c.descripcion || `Corte POS ${c.fecha}`}
+                                    </td>
+                                    <td className="p-3 text-right font-mono font-black text-gray-900 dark:text-white">
+                                      {formatCurrency(baseTotal)}
+                                    </td>
+                                    <td className="p-3 text-right font-mono text-emerald-600 dark:text-emerald-400">
+                                      {formatCurrency(efec)}
+                                    </td>
+                                    <td className="p-3 text-right font-mono text-blue-600 dark:text-blue-400">
+                                      {formatCurrency(bbva)}
+                                    </td>
+                                    <td className="p-3 text-right font-mono text-purple-600 dark:text-purple-400">
+                                      {formatCurrency(parrot)}
+                                    </td>
+                                    <td className="p-3 text-right font-mono text-gray-400 line-through">
+                                      {formatCurrency(propinaTotal)}
+                                    </td>
+                                    <td className="p-3 text-center">
+                                      <label className="inline-flex items-center gap-2 cursor-pointer select-none">
+                                        <input
+                                          type="checkbox"
+                                          checked={isTercero}
+                                          onChange={() => toggleFacturadoTercero(c.id)}
+                                          className="w-4 h-4 text-purple-600 focus:ring-purple-500 rounded cursor-pointer"
+                                        />
+                                        <span className={`text-[10px] font-extrabold ${isTercero ? 'text-purple-600 dark:text-purple-400' : 'text-gray-400'}`}>
+                                          Facturado a Tercero
+                                        </span>
+                                      </label>
+                                    </td>
+                                    <td className="p-3 text-center">
+                                      {isTercero ? (
+                                        <span className="px-2.5 py-1 rounded-full text-[10px] font-black bg-purple-100 text-purple-700 dark:bg-purple-955/50 dark:text-purple-300">
+                                          👤 Factura Tercero
+                                        </span>
+                                      ) : (
+                                        <span className="px-2.5 py-1 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 dark:bg-emerald-955/50 dark:text-emerald-300">
+                                          🧾 Público General
+                                        </span>
+                                      )}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                              {ticketsMes.length === 0 && (
+                                <tr>
+                                  <td colSpan={9} className="p-8 text-center text-gray-400 italic">
+                                    No hay tickets o cortes registrados en este período.
                                   </td>
                                 </tr>
-                              );
-                            })}
-                          {comprobantes.filter(c => {
-                            const sumAsoc = c.comprobantes_deposito_movimientos?.reduce((s, r) => s + Number(r.monto_asociado || 0), 0) || 0;
-                            return Math.abs(Number(c.monto) - sumAsoc) >= 0.05 || c.comprobantes_deposito_movimientos?.some(rel => rel.movimiento_id === selectedGlobalDepositId);
-                          }).length === 0 && (
-                            <tr>
-                              <td colSpan={5} className="p-8 text-center text-gray-400 italic">
-                                No hay fichas o comprobantes para este depósito
-                              </td>
-                            </tr>
-                          )}
-                        </tbody>
-                      </table>
-                    )}
-                  </div>
-                </div>
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
             )}
           </div>
@@ -2573,18 +3611,19 @@ export default function BancoTab({
               {/* Búsqueda */}
               <div>
                 <label className="text-xs font-bold text-gray-500 block mb-1">
-                  {isOutflow ? 'Buscar egreso' : 'Buscar pedido'}
+                  {isOutflow ? 'Buscar egreso' : 'Buscar factura de ingreso / pedido'}
                 </label>
-                <input type="text" value={manualMatchSearch} placeholder="Concepto, monto, RFC, número..."
+                <input type="text" value={manualMatchSearch} 
+                  placeholder={isOutflow ? "Concepto, monto, RFC, número..." : "Número pedido, folio factura, cliente, monto..."}
                   onChange={(e) => setManualMatchSearch(e.target.value)}
                   className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs text-gray-900 dark:text-white focus:ring-1 focus:ring-amber-500 outline-none transition-all" />
               </div>
 
-              {/* Lista de egresos o pedidos reconciliables */}
+              {/* Lista de egresos o facturas/pedidos de ingresos reconciliables */}
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <label className="text-xs font-bold text-gray-500">
-                    {isOutflow ? 'Egresos del Sistema (Facturas / Gastos)' : 'Pedidos/Ventas del Sistema'}
+                    {isOutflow ? 'Egresos del Sistema (Facturas / Gastos)' : 'Facturas de Ingresos / Ventas del Sistema'}
                   </label>
                   <span className="text-xs font-extrabold text-emerald-600 dark:text-emerald-400 font-mono">
                     Acumulado: {formatCurrency(totalEgresosSistema)} ({isOutflow ? reconcileModal.gastosSeleccionados.length : reconcileModal.pedidosSeleccionados.length} facturas)
@@ -2677,14 +3716,30 @@ export default function BancoTab({
                     pedidosPendientes
                       .filter((p) => {
                         if (!manualMatchSearch.trim()) return true;
-                        const s = manualMatchSearch.toLowerCase();
+                        const s = manualMatchSearch.toLowerCase().trim();
+                        const numPed = String(p.numero_pedido ?? '').toLowerCase();
+                        const folio = String(p.folio_factura ?? '').toLowerCase();
+                        const cliente = String(p.cliente_nombre ?? '').toLowerCase();
+                        const precioVal = Number(p.precio_total || 0);
+                        const precioStr = String(p.precio_total ?? '');
+                        const precioFixed = precioVal.toFixed(2);
+                        const precioInt = Math.round(precioVal).toString();
+
                         return (
-                          p.numero_pedido?.toLowerCase().includes(s) || 
-                          String(p.precio_total).includes(s) ||
-                          p.cliente_nombre?.toLowerCase().includes(s)
+                          numPed.includes(s) || 
+                          folio.includes(s) ||
+                          cliente.includes(s) ||
+                          precioStr.includes(s) ||
+                          precioFixed.includes(s) ||
+                          precioInt.includes(s)
                         );
                       })
                       .map((p) => {
+                        const hasFactura = !!p.folio_factura;
+                        const titleText = hasFactura
+                          ? `Factura: ${p.folio_factura} ${p.numero_pedido ? `(Pedido #${p.numero_pedido})` : ''}`
+                          : `Pedido #${p.numero_pedido}`;
+
                         return (
                           <div key={p.id} className="flex items-center justify-between gap-3 p-2.5 hover:bg-gray-50 dark:hover:bg-gray-900/30 border-b border-gray-100 dark:border-gray-900 last:border-0 font-sans">
                             <label className="flex items-center gap-3 flex-1 min-w-0 cursor-pointer">
@@ -2706,7 +3761,14 @@ export default function BancoTab({
                                 }}
                                 className="w-4 h-4 rounded text-amber-500 focus:ring-amber-500 bg-white dark:bg-gray-950 border-gray-300 dark:border-gray-700" />
                               <div className="flex-1 min-w-0">
-                                <div className="text-xs font-semibold text-gray-800 dark:text-gray-200 truncate">Pedido #{p.numero_pedido}</div>
+                                <div className="text-xs font-semibold text-gray-800 dark:text-gray-200 truncate flex items-center gap-1.5">
+                                  <span>{titleText}</span>
+                                  {hasFactura && (
+                                    <span className="bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 px-1.5 py-0.2 rounded text-[9px] font-bold">
+                                      Facturado
+                                    </span>
+                                  )}
+                                </div>
                                 <div className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5 flex flex-wrap gap-x-2 gap-y-0.5 items-center font-medium">
                                   <span className="font-bold text-gray-700 dark:text-gray-300">{formatCurrency(p.precio_total)}</span>
                                   <span>•</span>
@@ -2715,6 +3777,14 @@ export default function BancoTab({
                                     <>
                                       <span>•</span>
                                       <span className="text-blue-600 dark:text-blue-400 font-semibold">{p.cliente_nombre}</span>
+                                    </>
+                                  )}
+                                  {p.metodo_pago && (
+                                    <>
+                                      <span>•</span>
+                                      <span className="bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-400 px-1.5 py-0.5 rounded text-[9px] font-bold">
+                                        {getMetodoPagoLabel(p.metodo_pago)}
+                                      </span>
                                     </>
                                   )}
                                 </div>
@@ -2741,7 +3811,7 @@ export default function BancoTab({
                     <div className="p-4 text-center text-xs text-gray-400 italic">No hay egresos sin conciliar</div>
                   )}
                   {!isOutflow && pedidosPendientes.length === 0 && (
-                    <div className="p-4 text-center text-xs text-gray-400 italic">No hay pedidos/ventas sin conciliar</div>
+                    <div className="p-4 text-center text-xs text-gray-400 italic">No hay facturas de ingresos ni pedidos sin conciliar</div>
                   )}
                 </div>
               </div>
@@ -3145,12 +4215,14 @@ export default function BancoTab({
                       <div>
                         <label className="text-[9px] font-bold text-gray-400 uppercase tracking-wider block mb-0.5">Tipo</label>
                         <select
-                          value={newCompForm.tipo}
+                          value={newCompForm.tipo ?? 'deposito_ventanilla'}
                           onChange={(e) => setNewCompForm(p => ({ ...p, tipo: e.target.value as any }))}
                           className="w-full bg-white dark:bg-gray-955 border border-gray-300 dark:border-gray-700 p-1.5 rounded-lg text-xs text-gray-900 dark:text-white"
                         >
                           <option value="deposito_ventanilla">Ventanilla</option>
-                          <option value="corte_tarjeta">Corte Tarjeta</option>
+                          <option value="corte_tarjeta">Corte POS / Punto de Venta</option>
+                          <option value="corte_bbva">Corte BBVA</option>
+                          <option value="corte_parrot">Corte Parrot</option>
                         </select>
                       </div>
                       {newCompForm.tipo === 'deposito_ventanilla' ? (
@@ -3160,7 +4232,7 @@ export default function BancoTab({
                             type="number"
                             placeholder="0.00"
                             step="0.01"
-                            value={newCompForm.monto}
+                            value={newCompForm.monto ?? ''}
                             onChange={(e) => setNewCompForm(p => ({ ...p, monto: e.target.value }))}
                             className="w-full bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 p-1.5 rounded-lg text-xs font-mono text-gray-900 dark:text-white"
                           />
@@ -3175,7 +4247,11 @@ export default function BancoTab({
                                           parseInputNumber(newCompForm.propinaDebito || 0) +
                                           parseInputNumber(newCompForm.propinaCredito || 0) +
                                           parseInputNumber(newCompForm.montoAmex || 0) +
-                                          parseInputNumber(newCompForm.propinaAmex || 0);
+                                          parseInputNumber(newCompForm.propinaAmex || 0) +
+                                          parseInputNumber(newCompForm.montoEfectivo || 0) +
+                                          parseInputNumber(newCompForm.propinaEfectivo || 0) +
+                                          parseInputNumber(newCompForm.montoParrotpay || 0) +
+                                          parseInputNumber(newCompForm.propinaParrotpay || 0);
                               return formatCurrency(tot);
                             })()}
                           </div>
@@ -3183,15 +4259,65 @@ export default function BancoTab({
                       )}
                     </div>
 
-                    {newCompForm.tipo === 'corte_tarjeta' && (
+                    {newCompForm.tipo !== 'deposito_ventanilla' && (
                       <div className="p-2 bg-gray-100 dark:bg-gray-900/30 border border-gray-250 dark:border-gray-800 rounded-lg space-y-2 text-[9px] font-sans">
+                        {/* Efectivo */}
                         <div className="grid grid-cols-2 gap-1.5">
                           <div>
-                            <span className="text-gray-400 font-bold block">Imp. Débito</span>
+                            <span className="text-emerald-600 dark:text-emerald-400 font-bold block">💵 Venta Efectivo</span>
+                            <input
+                              type="number"
+                              step="0.01"
+                              placeholder="0.00"
+                              value={newCompForm.montoEfectivo ?? ''}
+                              onChange={(e) => setNewCompForm(p => ({ ...p, montoEfectivo: e.target.value }))}
+                              className="w-full bg-white dark:bg-gray-955 border border-gray-300 dark:border-gray-700 p-1 rounded font-mono text-[10px] text-gray-900 dark:text-white"
+                            />
+                          </div>
+                          <div>
+                            <span className="text-emerald-600 dark:text-emerald-400 font-bold block">Prop. Efectivo</span>
+                            <input
+                              type="number"
+                              step="0.01"
+                              placeholder="0.00"
+                              value={newCompForm.propinaEfectivo ?? ''}
+                              onChange={(e) => setNewCompForm(p => ({ ...p, propinaEfectivo: e.target.value }))}
+                              className="w-full bg-white dark:bg-gray-955 border border-gray-300 dark:border-gray-700 p-1 rounded font-mono text-[10px] text-gray-900 dark:text-white"
+                            />
+                          </div>
+                        </div>
+                        {/* ParrotPay */}
+                        <div className="grid grid-cols-2 gap-1.5">
+                          <div>
+                            <span className="text-purple-600 dark:text-purple-400 font-bold block">🦜 ParrotPay</span>
+                            <input
+                              type="number"
+                              step="0.01"
+                              placeholder="0.00"
+                              value={newCompForm.montoParrotpay ?? ''}
+                              onChange={(e) => setNewCompForm(p => ({ ...p, montoParrotpay: e.target.value }))}
+                              className="w-full bg-white dark:bg-gray-955 border border-gray-300 dark:border-gray-700 p-1 rounded font-mono text-[10px] text-gray-900 dark:text-white"
+                            />
+                          </div>
+                          <div>
+                            <span className="text-purple-600 dark:text-purple-400 font-bold block">Prop. ParrotPay</span>
+                            <input
+                              type="number"
+                              step="0.01"
+                              placeholder="0.00"
+                              value={newCompForm.propinaParrotpay ?? ''}
+                              onChange={(e) => setNewCompForm(p => ({ ...p, propinaParrotpay: e.target.value }))}
+                              className="w-full bg-white dark:bg-gray-955 border border-gray-300 dark:border-gray-700 p-1 rounded font-mono text-[10px] text-gray-900 dark:text-white"
+                            />
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-1.5">
+                          <div>
+                            <span className="text-gray-400 font-bold block">Imp. Débito (TDD)</span>
                             <input
                               type="number"
                               placeholder="0.00"
-                              value={newCompForm.montoDebito}
+                              value={newCompForm.montoDebito ?? ''}
                               onChange={(e) => setNewCompForm(p => ({ ...p, montoDebito: e.target.value }))}
                               className="w-full bg-white dark:bg-gray-955 border border-gray-300 dark:border-gray-700 p-1 rounded font-mono text-[10px] text-gray-900 dark:text-white"
                             />
@@ -3201,7 +4327,7 @@ export default function BancoTab({
                             <input
                               type="number"
                               placeholder="0.00"
-                              value={newCompForm.propinaDebito}
+                              value={newCompForm.propinaDebito ?? ''}
                               onChange={(e) => setNewCompForm(p => ({ ...p, propinaDebito: e.target.value }))}
                               className="w-full bg-white dark:bg-gray-955 border border-gray-300 dark:border-gray-700 p-1 rounded font-mono text-[10px] text-gray-900 dark:text-white"
                             />
@@ -3209,11 +4335,11 @@ export default function BancoTab({
                         </div>
                         <div className="grid grid-cols-2 gap-1.5">
                           <div>
-                            <span className="text-gray-400 font-bold block">Imp. Crédito</span>
+                            <span className="text-gray-400 font-bold block">Imp. Crédito (TDC)</span>
                             <input
                               type="number"
                               placeholder="0.00"
-                              value={newCompForm.montoCredito}
+                              value={newCompForm.montoCredito ?? ''}
                               onChange={(e) => setNewCompForm(p => ({ ...p, montoCredito: e.target.value }))}
                               className="w-full bg-white dark:bg-gray-955 border border-gray-300 dark:border-gray-700 p-1 rounded font-mono text-[10px] text-gray-900 dark:text-white"
                             />
@@ -3223,7 +4349,7 @@ export default function BancoTab({
                             <input
                               type="number"
                               placeholder="0.00"
-                              value={newCompForm.propinaCredito}
+                              value={newCompForm.propinaCredito ?? ''}
                               onChange={(e) => setNewCompForm(p => ({ ...p, propinaCredito: e.target.value }))}
                               className="w-full bg-white dark:bg-gray-955 border border-gray-300 dark:border-gray-700 p-1 rounded font-mono text-[10px] text-gray-900 dark:text-white"
                             />
@@ -3235,7 +4361,7 @@ export default function BancoTab({
                             <input
                               type="number"
                               placeholder="0.00"
-                              value={newCompForm.montoAmex}
+                              value={newCompForm.montoAmex ?? ''}
                               onChange={(e) => setNewCompForm(p => ({ ...p, montoAmex: e.target.value }))}
                               className="w-full bg-white dark:bg-gray-955 border border-gray-300 dark:border-gray-700 p-1 rounded font-mono text-[10px] text-gray-900 dark:text-white"
                             />
@@ -3245,7 +4371,7 @@ export default function BancoTab({
                             <input
                               type="number"
                               placeholder="0.00"
-                              value={newCompForm.propinaAmex}
+                              value={newCompForm.propinaAmex ?? ''}
                               onChange={(e) => setNewCompForm(p => ({ ...p, propinaAmex: e.target.value }))}
                               className="w-full bg-white dark:bg-gray-955 border border-gray-300 dark:border-gray-700 p-1 rounded font-mono text-[10px] text-gray-900 dark:text-white"
                             />
@@ -3259,7 +4385,7 @@ export default function BancoTab({
                         <label className="text-[9px] font-bold text-gray-400 uppercase tracking-wider block mb-0.5">Fecha</label>
                         <input
                           type="date"
-                          value={newCompForm.fecha}
+                          value={newCompForm.fecha ?? ''}
                           onChange={(e) => setNewCompForm(p => ({ ...p, fecha: e.target.value }))}
                           className="w-full bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 p-1.5 rounded-lg text-xs text-gray-900 dark:text-white"
                         />
@@ -3303,7 +4429,7 @@ export default function BancoTab({
                           <button
                             type="button"
                             disabled={compUploadLoading}
-                            className="w-full py-1.5 bg-white hover:bg-gray-100 dark:bg-gray-950 dark:hover:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-lg text-[11px] font-bold flex items-center justify-center gap-1 text-gray-700 dark:text-gray-300"
+                            className="w-full py-1.5 bg-white hover:bg-gray-100 dark:bg-gray-955 dark:hover:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-lg text-[11px] font-bold flex items-center justify-center gap-1 text-gray-700 dark:text-gray-300"
                           >
                             {compUploadLoading ? <RefreshCw size={12} className="animate-spin" /> : <UploadCloud size={12} />}
                             {newCompForm.archivoUrl ? 'Cargado ✓' : 'Subir Ticket...'}
@@ -3313,7 +4439,7 @@ export default function BancoTab({
                         <input
                           type="url"
                           placeholder="Enlace de Google Drive..."
-                          value={newCompForm.archivoUrl}
+                          value={newCompForm.archivoUrl ?? ''}
                           onChange={(e) => setNewCompForm(p => ({ ...p, archivoUrl: e.target.value }))}
                           className="w-full bg-white dark:bg-gray-955 border border-gray-300 dark:border-gray-700 p-1.5 rounded-lg text-[11px] font-mono text-gray-900 dark:text-white"
                         />
@@ -3325,7 +4451,7 @@ export default function BancoTab({
                       <input
                         type="text"
                         placeholder="Nota (Ej: Ticket caja 1)"
-                        value={newCompForm.descripcion}
+                        value={newCompForm.descripcion ?? ''}
                         onChange={(e) => setNewCompForm(p => ({ ...p, descripcion: e.target.value }))}
                         className="w-full bg-white dark:bg-gray-955 border border-gray-300 dark:border-gray-700 p-1.5 rounded-lg text-xs text-gray-900 dark:text-white"
                       />
@@ -3345,7 +4471,11 @@ export default function BancoTab({
                             parseInputNumber(newCompForm.propinaDebito || 0) +
                             parseInputNumber(newCompForm.propinaCredito || 0) +
                             parseInputNumber(newCompForm.montoAmex || 0) +
-                            parseInputNumber(newCompForm.propinaAmex || 0);
+                            parseInputNumber(newCompForm.propinaAmex || 0) +
+                            parseInputNumber(newCompForm.montoEfectivo || 0) +
+                            parseInputNumber(newCompForm.propinaEfectivo || 0) +
+                            parseInputNumber(newCompForm.montoParrotpay || 0) +
+                            parseInputNumber(newCompForm.propinaParrotpay || 0);
 
                         if (!tot || tot <= 0) {
                           setNewCompForm(p => ({ ...p, error: 'Monto inválido.' }));
@@ -3362,15 +4492,26 @@ export default function BancoTab({
                             storage_provider: newCompForm.storageProvider,
                             cuenta_bancaria_id: activeDepositMov.cuenta_bancaria_id,
                             movimiento_bancario_id: activeDepositMov.id,
+                            monto_debito: parseInputNumber(newCompForm.montoDebito || 0),
+                            monto_credito: parseInputNumber(newCompForm.montoCredito || 0),
                             propina_debito: parseInputNumber(newCompForm.propinaDebito || 0),
                             propina_credito: parseInputNumber(newCompForm.propinaCredito || 0),
                             monto_amex: parseInputNumber(newCompForm.montoAmex || 0),
-                            propina_amex: parseInputNumber(newCompForm.propinaAmex || 0)
+                            propina_amex: parseInputNumber(newCompForm.propinaAmex || 0),
+                            monto_efectivo: parseInputNumber(newCompForm.montoEfectivo || 0),
+                            propina_efectivo: parseInputNumber(newCompForm.propinaEfectivo || 0),
+                            monto_parrotpay: parseInputNumber(newCompForm.montoParrotpay || 0),
+                            propina_parrotpay: parseInputNumber(newCompForm.propinaParrotpay || 0)
                           });
                           if (res && !res.success) throw new Error(res.error);
                           
+                          if (selectedMonth && newCompForm.fecha.substring(0, 7) !== selectedMonth) {
+                            alert(`Atención: El comprobante se guardó con fecha ${newCompForm.fecha}, la cual pertenece al período (${newCompForm.fecha.substring(0, 7)}). Para visualizarlo en la lista de conciliación, selecciona ese período en la parte superior.`);
+                          }
+
                           setNewCompForm(p => ({
                             ...p,
+                            fecha: getDefaultDateForSelectedMonth(),
                             monto: '',
                             montoDebito: '',
                             montoCredito: '',
@@ -3378,6 +4519,10 @@ export default function BancoTab({
                             propinaCredito: '',
                             montoAmex: '',
                             propinaAmex: '',
+                            montoEfectivo: '',
+                            propinaEfectivo: '',
+                            montoParrotpay: '',
+                            propinaParrotpay: '',
                             descripcion: '',
                             archivoUrl: '',
                             error: ''
@@ -3508,13 +4653,15 @@ export default function BancoTab({
           return acc + (rel ? Number(rel.monto_asociado) : 0);
         }, 0);
 
-        // Filtrar movimientos disponibles: excluir ya vinculados a ESTE comprobante, vinculados a otros comprobantes, y los ya completamente conciliados
+        // Filtrar movimientos disponibles: EXCLUSIVAMENTE de la misma cuenta bancaria del comprobante
+        const targetCuentaId = currentCompToLink.cuenta_bancaria_id || selectedCuentaId;
         const availableMovs = movimientos.filter(m => 
           m.tipo_movimiento === 'Deposito' && 
           !associatedMovs.some(am => am.id === m.id) && 
           !comprobantes.some(c => c.id !== currentCompToLink.id && c.comprobantes_deposito_movimientos?.some(rel => rel.movimiento_id === m.id)) &&
           m.estatus_conciliacion_bancaria?.clave !== 'comprobado' &&
-          (!currentCompToLink.cuenta_bancaria_id || m.cuenta_bancaria_id === currentCompToLink.cuenta_bancaria_id)
+          m.estatus_conciliacion_bancaria?.clave !== 'conciliado' &&
+          (!targetCuentaId || m.cuenta_bancaria_id === targetCuentaId)
         );
 
         // Suma de movimientos seleccionados (calculada before totalSum)
@@ -3763,9 +4910,61 @@ export default function BancoTab({
                   <button
                     disabled={linkingBatch}
                     onClick={async () => {
+                      const ids = Array.from(selectedLinkMovIds);
+                      const selectedMovObjs = ids.map(id => availableMovs.find(x => x.id === id)).filter(Boolean);
+                      const selectedSum = selectedMovObjs.reduce((acc, m) => acc + Number(m.deposito || m.monto || 0), 0);
+                      const totalSum = movsSum + selectedSum;
+                      const dif = Number(currentCompToLink.monto) - totalSum;
+                      const isExactMatch = Math.abs(dif) < 0.05;
+
+                      const isPlatformWithCommission = selectedMovObjs.some(m => {
+                        const conceptUpper = (m.concepto || '').toUpperCase();
+                        return (
+                          conceptUpper.includes('SPEI RECIBIDOBANORTE') ||
+                          conceptUpper.includes('PARROT') ||
+                          conceptUpper.includes('BANORTE') ||
+                          conceptUpper.includes('DESCUENTO') ||
+                          conceptUpper.includes('COMISION') ||
+                          conceptUpper.includes('COMISIÓ') ||
+                          conceptUpper.includes('OELTRANSFER')
+                        );
+                      });
+
+                      if (!isExactMatch && !isPlatformWithCommission) {
+                        alert(
+                          `⛔ No se permite vincular este movimiento.\n\n` +
+                          `Para movimientos bancarios normales (BBVA), el importe depositado debe coincidir al 100% con el ticket.\n\n` +
+                          `• Monto Ticket: ${formatCurrency(currentCompToLink.monto)}\n` +
+                          `• Ya Vinculados: ${formatCurrency(movsSum)}\n` +
+                          `• Depósitos Seleccionados: ${formatCurrency(selectedSum)}\n` +
+                          `• Diferencia pendiente: ${formatCurrency(dif)}`
+                        );
+                        return;
+                      }
+
+                      if (!isExactMatch && isPlatformWithCommission) {
+                        const confirmBolsa = confirm(
+                          `⚡ Movimiento de Plataforma con Comisión Detectado (Parrot / SPEI Banorte)\n\n` +
+                          `• Monto Ticket / Venta: ${formatCurrency(currentCompToLink.monto)}\n` +
+                          `• Depósito Recibido: ${formatCurrency(selectedSum)}\n` +
+                          `• Comisión Descontada: ${formatCurrency(dif)}\n\n` +
+                          `¿Deseas vincular este depósito y enviar la diferencia de ${formatCurrency(dif)} a la Bolsa de Comisiones por Plataforma?`
+                        );
+                        if (!confirmBolsa) return;
+
+                        if (onCrearComprobante && dif > 0) {
+                          await onCrearComprobante({
+                            tipo: 'deposito_ventanilla',
+                            fecha: currentCompToLink.fecha,
+                            monto: dif,
+                            descripcion: `Comisión / Descuento Plataforma Parrot (SPEI Banorte) para Ticket ${currentCompToLink.descripcion || ''}`,
+                            cuentaBancariaId: currentCompToLink.cuenta_bancaria_id || null
+                          });
+                        }
+                      }
+
                       setLinkingBatch(true);
                       try {
-                        const ids = Array.from(selectedLinkMovIds);
                         for (const movId of ids) {
                           const mov = availableMovs.find(x => x.id === movId);
                           const montoAsoc = mov ? Number(mov.deposito || mov.monto) : undefined;
@@ -3776,6 +4975,7 @@ export default function BancoTab({
                           }
                         }
                         setSelectedLinkMovIds(new Set());
+                        setActiveCompToLink(null);
                       } finally {
                         setLinkingBatch(false);
                       }
@@ -3940,6 +5140,227 @@ export default function BancoTab({
                 ) : (
                   <>Confirmar Fusión</>
                 )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DESGLOSE DE COMISIONES POR TRANSACCIÓN (PARROT / POS) */}
+      {desgloseComisionesModal.isOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200 font-sans">
+          <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-3xl w-full max-w-lg flex flex-col shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200">
+            {/* Header */}
+            <div className="p-5 border-b border-gray-150 dark:border-gray-800 flex justify-between items-center bg-gray-50/50 dark:bg-gray-900/30">
+              <div>
+                <h3 className="font-extrabold text-base text-gray-800 dark:text-white flex items-center gap-2">
+                  <CreditCard className="text-amber-500" size={18} />
+                  Desglose de Transacciones y Comisiones (POS / Parrot)
+                </h3>
+                <p className="text-[10px] text-gray-400 mt-0.5">
+                  Registra comisiones e IVA en la Bolsa de Comisiones por Plataforma para cuadrar la factura mensual.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDesgloseComisionesModal(p => ({ ...p, isOpen: false }))}
+                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            {/* Body matching user screenshot structure */}
+            <div className="p-6 space-y-4 text-xs overflow-y-auto max-h-[75vh]">
+              {(() => {
+                const selectedMovs = movimientos.filter(m => (selectedGlobalDepositIds || []).includes(m.id));
+                const selectedSum = selectedMovs.reduce((acc, m) => acc + Number(m.deposito || m.monto || 0), 0);
+                const compsSum = desgloseComisionesModal.targetComps.reduce((acc, c) => acc + Number(c.monto || 0), 0);
+
+                const com = parseInputNumber(desgloseComisionesModal.comisionTransacciones);
+                const iva = parseInputNumber(desgloseComisionesModal.ivaTransacciones);
+                const otros = parseInputNumber(desgloseComisionesModal.otrosCargos);
+                const totalCom = com + iva + otros;
+
+                const subtotalVentas = parseInputNumber(desgloseComisionesModal.ventaBruta) + parseInputNumber(desgloseComisionesModal.propina);
+                const montoNetoDepositar = subtotalVentas - totalCom;
+                const difConBanco = Math.abs(montoNetoDepositar - selectedSum);
+                const cuadraBancos = difConBanco < 0.05;
+
+                return (
+                  <>
+                    <div className="p-3 bg-amber-50/50 dark:bg-amber-955/20 border border-amber-200 dark:border-amber-900/40 rounded-2xl font-mono text-[11px] space-y-1">
+                      <div className="flex justify-between font-bold text-amber-800 dark:text-amber-300">
+                        <span>Depósito(s) Banco Seleccionado(s):</span>
+                        <span>{formatCurrency(selectedSum)}</span>
+                      </div>
+                      <div className="flex justify-between text-gray-500">
+                        <span>Ticket(s) a Vincular ({desgloseComisionesModal.targetComps.length}):</span>
+                        <span>{formatCurrency(compsSum)}</span>
+                      </div>
+                    </div>
+
+                    <div className="p-2.5 rounded-xl bg-purple-50 dark:bg-purple-955/30 border border-purple-200 dark:border-purple-900/40 text-[10px] font-sans text-purple-700 dark:text-purple-300 font-medium flex items-center gap-1.5">
+                      <span>🦜 <b>Regla ParrotPay:</b> Únicamente computa la <b>Venta ParrotPay</b> y su <b>Propina</b>. Excluye Efectivo, TDC y TDD.</span>
+                    </div>
+
+                    <div className="space-y-3 font-mono">
+                      {/* Venta Bruta */}
+                      <div className="grid grid-cols-2 gap-3 items-center">
+                        <label className="text-[11px] font-sans font-bold text-gray-700 dark:text-gray-300">Venta bruta (consumo):</label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={desgloseComisionesModal.ventaBruta}
+                          onChange={(e) => setDesgloseComisionesModal(p => ({ ...p, ventaBruta: e.target.value }))}
+                          className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-right font-mono font-bold text-gray-900 dark:text-white"
+                        />
+                      </div>
+
+                      {/* Propina */}
+                      <div className="grid grid-cols-2 gap-3 items-center">
+                        <label className="text-[11px] font-sans font-bold text-gray-700 dark:text-gray-300">Propina:</label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={desgloseComisionesModal.propina}
+                          onChange={(e) => setDesgloseComisionesModal(p => ({ ...p, propina: e.target.value }))}
+                          className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-right font-mono font-bold text-gray-900 dark:text-white"
+                        />
+                      </div>
+
+                      {/* Total Venta */}
+                      <div className="flex justify-between p-2.5 bg-gray-50 dark:bg-gray-900 rounded-xl font-bold border border-gray-200 dark:border-gray-800 text-xs">
+                        <span className="font-sans text-gray-700 dark:text-gray-200">Total Venta + Propina:</span>
+                        <span className="text-emerald-600 dark:text-emerald-400 font-mono font-black">{formatCurrency(subtotalVentas)}</span>
+                      </div>
+
+                      {/* Comisión transacciones */}
+                      <div className="grid grid-cols-2 gap-3 items-center">
+                        <label className="text-[11px] font-sans font-bold text-rose-600 dark:text-rose-400">Comisión transacciones (-):</label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={desgloseComisionesModal.comisionTransacciones}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            const num = parseInputNumber(val);
+                            const autoIva = num > 0 ? (num * 0.16).toFixed(2) : '';
+                            setDesgloseComisionesModal(p => ({ ...p, comisionTransacciones: val, ivaTransacciones: autoIva }));
+                          }}
+                          className="w-full bg-white dark:bg-gray-900 border border-rose-300 dark:border-rose-900 p-2 rounded-lg text-right font-mono font-bold text-rose-600 dark:text-rose-400"
+                        />
+                      </div>
+
+                      {/* IVA transacciones */}
+                      <div className="grid grid-cols-2 gap-3 items-center">
+                        <label className="text-[11px] font-sans font-bold text-rose-600 dark:text-rose-400">IVA transacciones 16% (-):</label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={desgloseComisionesModal.ivaTransacciones}
+                          onChange={(e) => setDesgloseComisionesModal(p => ({ ...p, ivaTransacciones: e.target.value }))}
+                          className="w-full bg-white dark:bg-gray-900 border border-rose-300 dark:border-rose-900 p-2 rounded-lg text-right font-mono font-bold text-rose-600 dark:text-rose-400"
+                        />
+                      </div>
+
+                      {/* Otros cargos */}
+                      <div className="grid grid-cols-2 gap-3 items-center">
+                        <label className="text-[11px] font-sans font-bold text-gray-500">Otros cargos (-):</label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={desgloseComisionesModal.otrosCargos}
+                          onChange={(e) => setDesgloseComisionesModal(p => ({ ...p, otrosCargos: e.target.value }))}
+                          className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-right font-mono text-gray-900 dark:text-white"
+                        />
+                      </div>
+
+                      {/* Resumen Bolsa y Neto */}
+                      <div className="space-y-2 pt-2 border-t border-gray-200 dark:border-gray-800">
+                        <div className="p-3 bg-purple-50 dark:bg-purple-955/30 border border-purple-200 dark:border-purple-900/40 rounded-xl space-y-1">
+                          <div className="flex justify-between font-bold text-purple-700 dark:text-purple-300 text-[11px]">
+                            <span className="font-sans">📦 Total a Bolsa de Comisiones por Plataforma:</span>
+                            <span>{formatCurrency(totalCom)}</span>
+                          </div>
+                          <p className="text-[9px] text-gray-500 font-sans">
+                            (Comisión: {formatCurrency(com)} + IVA: {formatCurrency(iva)}{otros > 0 ? ` + Otros: ${formatCurrency(otros)}` : ''})
+                          </p>
+                        </div>
+
+                        <div className={`p-3 rounded-xl border flex justify-between items-center ${
+                          cuadraBancos
+                            ? 'bg-emerald-50 dark:bg-emerald-955/30 border-emerald-300 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300'
+                            : 'bg-amber-50 dark:bg-amber-955/30 border-amber-300 dark:border-amber-800 text-amber-800 dark:text-amber-300'
+                        }`}>
+                          <div>
+                            <span className="font-sans font-bold block text-[11px]">Monto Neto a Depositar:</span>
+                            <span className="text-[9px] font-sans opacity-80">
+                              {cuadraBancos ? '✓ Cuadra 100% con el Banco' : `⚠️ Diferencia con banco: ${formatCurrency(montoNetoDepositar - selectedSum)}`}
+                            </span>
+                          </div>
+                          <span className="font-mono font-black text-sm">{formatCurrency(montoNetoDepositar)}</span>
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
+
+            {/* Footer buttons */}
+            <div className="p-4 border-t border-gray-150 dark:border-gray-800 flex justify-end gap-3 bg-gray-50/50 dark:bg-gray-900/30">
+              <button
+                type="button"
+                onClick={() => setDesgloseComisionesModal(p => ({ ...p, isOpen: false }))}
+                className="px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-xl text-xs font-bold hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  const com = parseInputNumber(desgloseComisionesModal.comisionTransacciones);
+                  const iva = parseInputNumber(desgloseComisionesModal.ivaTransacciones);
+                  const otros = parseInputNumber(desgloseComisionesModal.otrosCargos);
+                  const totalCom = com + iva + otros;
+
+                  const selectedMovs = movimientos.filter(m => (selectedGlobalDepositIds || []).includes(m.id));
+
+                  // 1. Crear comprobante de comisión en la Bolsa
+                  if (onCrearComprobante && totalCom > 0) {
+                    await onCrearComprobante({
+                      tipo: 'deposito_ventanilla',
+                      fecha: desgloseComisionesModal.targetComps[0]?.fecha || new Date().toISOString().split('T')[0],
+                      monto: totalCom,
+                      descripcion: `Comisión Transacciones POS/Parrot (Comisión: ${formatCurrency(com)}, IVA: ${formatCurrency(iva)}${otros > 0 ? `, Otros: ${formatCurrency(otros)}` : ''}) - Ticket(s) Vinc.`,
+                      cuentaBancariaId: desgloseComisionesModal.targetComps[0]?.cuenta_bancaria_id || null
+                    });
+                  }
+
+                  // 2. Vincular los tickets seleccionados con los depósitos bancarios seleccionados
+                  for (const comp of desgloseComisionesModal.targetComps) {
+                    for (const movId of selectedGlobalDepositIds) {
+                      const mov = movimientos.find(m => m.id === movId);
+                      const montoAsoc = (desgloseComisionesModal.targetComps.length === 1 && selectedMovs.length > 1 && mov)
+                        ? Number(mov.deposito || mov.monto)
+                        : Number(comp.monto);
+                      const res = await onVincularComprobante?.(comp.id, movId, montoAsoc);
+                      if (res && !res.success) {
+                        alert(res.error);
+                        break;
+                      }
+                    }
+                  }
+
+                  setSelectedGlobalDepositIds([]);
+                  setSelectedGlobalComprobanteIds([]);
+                  setSelectedGlobalDepositId(null);
+                  setDesgloseComisionesModal(p => ({ ...p, isOpen: false }));
+                }}
+                className="px-5 py-2 rounded-xl text-xs font-black bg-emerald-600 hover:bg-emerald-700 text-white shadow-lg flex items-center gap-1.5"
+              >
+                ✓ Confirmar y Registrar en Bolsa
               </button>
             </div>
           </div>

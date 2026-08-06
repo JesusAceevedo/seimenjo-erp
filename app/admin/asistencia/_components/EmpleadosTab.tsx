@@ -76,6 +76,12 @@ export default function EmpleadosTab({ empleados, puestos, staffList, departamen
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!form.primer_apellido || !form.primer_nombre || !empresaId) return;
+
+    const parseNum = (val: any) => {
+      const n = typeof val === 'number' ? val : parseFloat(val);
+      return isNaN(n) ? 0 : Math.round(n * 100) / 100;
+    };
+
     try {
       const payload: any = {
         empresa_id: empresaId, usuario_staff_id: form.usuario_staff_id || null,
@@ -83,15 +89,18 @@ export default function EmpleadosTab({ empleados, puestos, staffList, departamen
         primer_nombre: form.primer_nombre, segundo_nombre: form.segundo_nombre || null,
         curp: form.curp || null, rfc: form.rfc || null, nss: form.nss || null,
         telefono: form.telefono || null, banco: form.banco || null, cuenta_clabe: form.cuenta_clabe || null,
-        sueldo_mensual: form.sueldo_mensual, sueldo_diario: form.sueldo_diario, salario_diario_integrado: form.salario_diario_integrado,
-        zkteco_user_id: form.zkteco_user_id || null, exento_reloj_checador: form.exento_reloj_checador, tipo_contrato: form.tipo_contrato,
-        fecha_ingreso: form.fecha_ingreso, puesto_id: form.puesto_id || null, activo: true
+        sueldo_mensual: parseNum(form.sueldo_mensual),
+        sueldo_diario: parseNum(form.sueldo_diario),
+        salario_diario_integrado: parseNum(form.salario_diario_integrado),
+        zkteco_user_id: form.zkteco_user_id || null, exento_reloj_checador: !!form.exento_reloj_checador, tipo_contrato: form.tipo_contrato || 'indefinido',
+        fecha_ingreso: form.fecha_ingreso || new Date().toISOString().split('T')[0], puesto_id: form.puesto_id || null, activo: true
       };
       await saveEmpleado(payload, !!selected, selected?.id);
       resetForm();
       onSaved();
     } catch (err: any) {
-      alert('Error al guardar empleado: ' + err.message);
+      const errMsg = typeof err === 'object' && err?.message ? err.message : String(err);
+      alert('Error al guardar empleado: ' + errMsg);
     }
   };
 
