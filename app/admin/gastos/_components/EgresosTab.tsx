@@ -19,6 +19,7 @@ interface EgresosTabProps {
   gastosFacturados: GastoFacturado[];
   categorias: CategoriaGasto[];
   formasPago?: any[];
+  empresaRfc?: string | null;
   onOpenComprobacionAcumulada: () => void;
   onDownloadFile: (url: string) => void;
   onViewCfdi?: (xmlUrl: string) => void;
@@ -61,6 +62,7 @@ export default function EgresosTab({
   gastosFacturados,
   categorias,
   formasPago = [],
+  empresaRfc,
   onOpenComprobacionAcumulada,
   onDownloadFile,
   onViewCfdi,
@@ -329,7 +331,8 @@ export default function EgresosTab({
         (g.categoria_id && categoriasSelected.includes(g.categoria_id));
 
       // Filtros Checkbox Estado
-      const esConciliado = !!g.movimiento_bancario_id;
+      const concs = (g.conciliaciones_bancarias as any[]) || [];
+      const esConciliado = !!g.movimiento_bancario_id || concs.length > 0;
       if (!filtrosEstatus.conciliado && esConciliado) return false;
       if (!filtrosEstatus.sin_conciliar && !esConciliado) return false;
       
@@ -383,6 +386,11 @@ export default function EgresosTab({
             <span className="bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 text-[10px] font-bold px-2 py-0.5 rounded-full">
               {filtrados.length} registros
             </span>
+            {empresaRfc && (
+              <span className="bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 border border-emerald-300 dark:border-emerald-800/60 text-[10px] font-mono font-bold px-2 py-0.5 rounded-full" title="RFC oficial de la empresa configurado para validación de CFDI">
+                RFC Empresa: {empresaRfc}
+              </span>
+            )}
           </div>
           
           <div className="flex gap-2">
@@ -703,6 +711,14 @@ export default function EgresosTab({
                         {hasHijos && (
                           <span className="px-1.5 py-0.5 rounded text-[8px] font-extrabold bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-400 uppercase">
                             {hijos.length} {hijos.length === 1 ? 'Parcialidad' : 'Parcialidades'}
+                          </span>
+                        )}
+                        {g.conciliaciones_bancarias && g.conciliaciones_bancarias.length > 0 && (
+                          <span 
+                            className="px-1.5 py-0.5 rounded text-[8px] font-black bg-emerald-100 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 uppercase border border-emerald-300 dark:border-emerald-800"
+                            title={`Conciliado con ${g.conciliaciones_bancarias.length} pago(s) bancario(s)`}
+                          >
+                            💳 {g.conciliaciones_bancarias.length} {g.conciliaciones_bancarias.length === 1 ? 'Pago Conciliado' : 'Pagos Conciliados'}
                           </span>
                         )}
                       </div>
@@ -1149,6 +1165,7 @@ export default function EgresosTab({
         <CargaManualModal
           tipo="gasto"
           registroId={manualModal.id}
+          empresaRfc={empresaRfc}
           onClose={() => setManualModal({isOpen: false})}
           onSuccess={() => {
             setManualModal({isOpen: false});
@@ -1160,6 +1177,7 @@ export default function EgresosTab({
       {showXmlModal && (
         <CargaXmlMasivaModal
           tipo="gasto"
+          empresaRfc={empresaRfc}
           onClose={() => {
             setShowXmlModal(false);
             if (onRefresh) onRefresh();

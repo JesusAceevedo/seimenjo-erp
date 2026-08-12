@@ -8,9 +8,10 @@ interface CargaXmlMasivaModalProps {
   onClose: () => void;
   onSuccess: () => void;
   tipo: 'gasto' | 'venta';
+  empresaRfc?: string | null;
 }
 
-export default function CargaXmlMasivaModal({ onClose, onSuccess, tipo }: CargaXmlMasivaModalProps) {
+export default function CargaXmlMasivaModal({ onClose, onSuccess, tipo, empresaRfc }: CargaXmlMasivaModalProps) {
   const [dragActive, setDragActive] = useState(false);
   const [archivos, setArchivos] = useState<File[]>([]);
   const [procesando, setProcesando] = useState(false);
@@ -104,6 +105,17 @@ export default function CargaXmlMasivaModal({ onClose, onSuccess, tipo }: CargaX
 
       if (!empresaId) {
         throw new Error('No se pudo identificar la empresa activa en tu sesión.');
+      }
+
+      // Obtener RFC de la empresa activa para validación estricta
+      let activeEmpresaRfc = (empresaRfc || '').trim().toUpperCase();
+      if (!activeEmpresaRfc && empresaId) {
+        const { data: empData } = await supabase
+          .from('empresas')
+          .select('rfc')
+          .eq('id', empresaId)
+          .maybeSingle();
+        if (empData?.rfc) activeEmpresaRfc = empData.rfc.trim().toUpperCase();
       }
 
       // Obtener periodos cerrados de cierres_mensuales
@@ -210,6 +222,33 @@ export default function CargaXmlMasivaModal({ onClose, onSuccess, tipo }: CargaX
           const rfcReceptor = receptor?.getAttribute('Rfc') || receptor?.getAttribute('rfc') || '';
           const nombreReceptor = receptor?.getAttribute('Nombre') || receptor?.getAttribute('nombre') || '';
           const usoCfdi = receptor?.getAttribute('UsoCFDI') || receptor?.getAttribute('usoCFDI') || '';
+
+          // Validación estricta de RFC por tipo de factura (SAT multi-empresa)
+          if (activeEmpresaRfc) {
+            if (tipo === 'gasto') {
+              // Para egresos, la empresa activa DEBE ser el Receptor del comprobante
+              const cleanReceptorRfc = (rfcReceptor || '').trim().toUpperCase();
+              if (cleanReceptorRfc && cleanReceptorRfc !== activeEmpresaRfc) {
+                nuevosResultados.push({
+                  nombre: file.name,
+                  estatus: 'error',
+                  mensaje: `El XML no pertenece a esta empresa. El RFC receptor (${rfcReceptor}) no coincide con el RFC oficial de la empresa (${activeEmpresaRfc}).`
+                });
+                continue;
+              }
+            } else {
+              // Para ingresos (ventas), la empresa activa DEBE ser el Emisor del comprobante
+              const cleanEmisorRfc = (emisorRfc || '').trim().toUpperCase();
+              if (cleanEmisorRfc && cleanEmisorRfc !== activeEmpresaRfc) {
+                nuevosResultados.push({
+                  nombre: file.name,
+                  estatus: 'error',
+                  mensaje: `El XML no pertenece a esta empresa. El RFC emisor (${emisorRfc}) no coincide con el RFC oficial de la empresa (${activeEmpresaRfc}).`
+                });
+                continue;
+              }
+            }
+          }
 
           // 4. Complemento -> TimbreFiscalDigital
           const timbre = xmlDoc.getElementsByTagName('tfd:TimbreFiscalDigital')[0] || xmlDoc.getElementsByTagName('TimbreFiscalDigital')[0];

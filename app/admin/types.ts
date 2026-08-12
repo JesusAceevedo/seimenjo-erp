@@ -164,7 +164,7 @@ export interface GastoFacturado {
   metodo_pago?: string;
   es_deducible?: boolean;
   categoria_id?: string | null;
-  proveedores?: { nombre_comercial: string; rfc: string };
+  proveedores?: { id?: string; nombre_comercial: string; rfc: string };
   categorias_gasto?: { id: string; nombre: string } | null;
   xml_url?: string;
   pdf_url?: string;
@@ -172,6 +172,9 @@ export interface GastoFacturado {
   gasto_padre_id?: string | null;
   padre?: { concepto: string } | null;
   movimiento_bancario_id?: string | null;
+  movimientos_bancarios?: any | null;
+  conciliaciones_bancarias?: any[] | null;
+  comentarios?: string | null;
 }
 
 export interface VentaFacturada {

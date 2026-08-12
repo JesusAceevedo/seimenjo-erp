@@ -120,7 +120,8 @@ function calcularHorasExtra(
   sueldoDiario: number,
   horasDobles: number,
   horasTriples: number,
-  modalidad: 'lft' | 'proporcional' | 'ninguna' = 'lft'
+  modalidad: 'lft' | 'proporcional' | 'ninguna' = 'lft',
+  horasJornada: number = 8
 ) {
   if (modalidad === 'ninguna') {
     return {
@@ -129,7 +130,7 @@ function calcularHorasExtra(
       total: 0,
     };
   }
-  const horaNormal = sueldoDiario / 8;
+  const horaNormal = sueldoDiario / (horasJornada || 8);
   if (modalidad === 'proporcional') {
     const totalHoras = horasDobles + horasTriples;
     const pagoSencillo = horaNormal * totalHoras;
@@ -142,7 +143,7 @@ function calcularHorasExtra(
   return {
     pagoDoble: horaNormal * horasDobles * 2,
     pagoTriple: horaNormal * horasTriples * 3,
-    total: horaNormal * horasDobles * 2 + horaNormal * horasTriples * 3,
+    total: (horaNormal * horasDobles * 2) + (horaNormal * horasTriples * 3),
   };
 }
 
@@ -271,11 +272,29 @@ export function calcularNomina(input: NominaInput): NominaOutput {
 
   const totalPercepciones = sueldoOrdinario + pagoDoble + pagoTriple + primaDominical + primaVacacional + aguinaldo + propina;
 
+  // Exención de ISR conforme a Ley del Impuesto Sobre la Renta (LISR Art. 93 Fracciones I y XIV):
+  // 1. 50% de las horas dobles exento, topado a 5 UMAs por semana de trabajo (o proporcional al periodo)
+  // 2. 100% de las horas triples son gravadas para ISR
+  // 3. 1 UMA diaria exenta por cada domingo trabajado con prima dominical
+  const umaDiaria = UMA_DIARIA || 108.57;
+  const semanasEnPeriodo = Math.max(1, diasTrabajados / 7);
+  const topeExencionHorasExtraUma = 5 * umaDiaria * semanasEnPeriodo;
+
+  const exencionDobleRaw = pagoDoble * 0.5;
+  const horasExtraExentas = Math.min(exencionDobleRaw, topeExencionHorasExtraUma);
+  const horasExtraGravadas = (pagoDoble - horasExtraExentas) + pagoTriple;
+
+  const exencionPrimaDominical = Math.min(primaDominical, domingosTrabajados * umaDiaria);
+  const primaDominicalGravada = Math.max(0, primaDominical - exencionPrimaDominical);
+
+  // Total Ingreso Gravable para ISR
+  const ingresoGravableIsr = sueldoOrdinario + horasExtraGravadas + primaDominicalGravada + aguinaldo + propina;
+
   // Deducciones
   let isr = 0;
   let subsidio = 0;
-  if (totalPercepciones > 0 && diasTrabajados > 0) {
-    const isrRes = calcularIsr(totalPercepciones, diasTrabajados, sueldoMensual);
+  if (ingresoGravableIsr > 0 && diasTrabajados > 0) {
+    const isrRes = calcularIsr(ingresoGravableIsr, diasTrabajados, sueldoMensual);
     isr = isrRes.isr;
     subsidio = isrRes.subsidio;
   }

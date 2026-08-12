@@ -21,6 +21,7 @@ import { useCfdiViewer } from '../../_components/CfdiViewerContext';
 
 interface IngresosTabProps {
   ventasFacturadas: VentaFacturada[];
+  empresaRfc?: string | null;
   onOpenFacturacionAcumulada: () => void;
   onDownloadFile: (url: string) => void;
   onViewCfdi?: (xmlUrl: string) => void;
@@ -81,6 +82,7 @@ function EstatusFacturaBadge({ v, invoice }: { v: VentaFacturada; invoice?: any 
 
 export default function IngresosTab({
   ventasFacturadas,
+  empresaRfc,
   onOpenFacturacionAcumulada,
   onDownloadFile,
   onViewCfdi,

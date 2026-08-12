@@ -19,7 +19,10 @@ export default function NominaTab({
   empleados, puestos, checadasRaw, empresaId,
   turnos = [], horariosEmpleados = [], incidencias = []
 }: Props) {
-  const [subTab, setSubTab] = useState<'general' | 'propinas_diarias'>('general');
+  const [subTab, setSubTab] = useState<'general' | 'propinas_diarias' | 'horas_extras'>('general');
+  const [searchHorasExtra, setSearchHorasExtra] = useState('');
+  const [filtroSoloConExtras, setFiltroSoloConExtras] = useState(false);
+  const [selectedEmpHorasExtraModal, setSelectedEmpHorasExtraModal] = useState<any | null>(null);
 
   // Fecha actual en formato YYYY-MM-DD
   const todayLocalStr = new Date().toLocaleDateString('en-CA');
@@ -230,6 +233,86 @@ export default function NominaTab({
     const link = document.createElement('a');
     link.href = url;
     link.setAttribute('download', `Nomina_Detalle_${periodo.fecha_inicio}_al_${periodo.fecha_fin}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const exportToCsvHorasExtras = () => {
+    if (!resultados || resultados.length === 0) {
+      alert('Primero debes calcular la nómina para generar el reporte de Horas Extras.');
+      return;
+    }
+
+    const headers = [
+      '"Empleado"',
+      '"Puesto"',
+      '"Fecha"',
+      '"Día"',
+      '"Horario Entrada (Prog)"',
+      '"Horario Salida (Prog)"',
+      '"Entrada (Real)"',
+      '"Salida (Real)"',
+      '"Estado"',
+      '"Horas Laboradas"',
+      '"Horas Extras"',
+      '"Sueldo Diario ($)"',
+      '"Valor Hora Simple ($)"',
+      '"Pago Hora Simple ($)"'
+    ];
+
+    const emps = resultados.filter(r => {
+      const q = searchHorasExtra.toLowerCase();
+      const matchSearch = !q || (r.nombre || '').toLowerCase().includes(q) || (r.puesto || '').toLowerCase().includes(q);
+      const totalHE = (r.horasDobles || 0) + (r.horasTriples || 0);
+      const matchExtras = !filtroSoloConExtras || totalHE > 0;
+      return matchSearch && matchExtras;
+    });
+
+    const rows: string[][] = [];
+
+    emps.forEach(r => {
+      const horaSimple = r.sueldoDiario / 8;
+      (r.detallesDias || []).forEach((d: any) => {
+        const dateObj = new Date(d.fecha + 'T12:00:00');
+        const dow = dateObj.getDay();
+        const schedule = horariosEmpleados.find((h: any) => h.empleado_id === r.empleado_id && h.dia_semana === dow);
+        const turno = schedule?.turno_id ? turnos.find((t: any) => t.id === schedule.turno_id) : null;
+
+        const hInProg = d.esDescanso ? 'Descanso' : (turno ? (turno.hora_entrada_1?.substring(0, 5) || '09:00') : '09:00');
+        const hOutProg = d.esDescanso ? 'Descanso' : (turno ? (turno.hora_salida_1?.substring(0, 5) || '17:00') : '17:00');
+
+        const entradaReal = d.entradas && d.entradas.length >= 1 ? d.entradas[0] : '-';
+        const salidaReal = d.entradas && d.entradas.length >= 2 ? d.entradas[d.entradas.length - 1] : '-';
+
+        const hrsExtrasDia = d.horasExtra || 0;
+        const pagoDiaSimple = hrsExtrasDia * horaSimple;
+
+        rows.push([
+          `"${r.nombre || ''}"`,
+          `"${r.puesto || 'General'}"`,
+          `"${d.fecha}"`,
+          `"${d.diaSemana}"`,
+          `"${hInProg}"`,
+          `"${hOutProg}"`,
+          `"${entradaReal}"`,
+          `"${salidaReal}"`,
+          `"${d.estado}"`,
+          (d.horasTrabajadas || 0).toFixed(1),
+          hrsExtrasDia.toFixed(1),
+          r.sueldoDiario.toFixed(2),
+          horaSimple.toFixed(2),
+          pagoDiaSimple.toFixed(2)
+        ]);
+      });
+    });
+
+    const csvString = '\uFEFF' + [headers.join(','), ...rows.map(row => row.join(','))].join('\n');
+    const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', `Reporte_Individual_Horas_Extras_${periodo.fecha_inicio}_al_${periodo.fecha_fin}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -464,12 +547,187 @@ export default function NominaTab({
     printWindow.document.close();
   };
 
-  const totalOrdinario = resultados.reduce((s, r) => s + r.percepciones.sueldoOrdinario, 0);
-  const totalExtras = resultados.reduce((s, r) => s + r.percepciones.horasExtraDobles + r.percepciones.horasExtraTriples, 0);
-  const totalPropinas = resultados.reduce((s, r) => s + r.percepciones.propina, 0);
-  const totalIsr = resultados.reduce((s, r) => s + r.deducciones.isr, 0);
-  const totalImss = resultados.reduce((s, r) => s + r.deducciones.imssObrero, 0);
-  const totalNeto = resultados.reduce((s, r) => s + r.neto, 0);
+  const exportToPdfPrintHorasExtras = () => {
+    if (!resultados || resultados.length === 0) {
+      alert('Primero debes calcular la nómina para generar el reporte de Horas Extras en PDF.');
+      return;
+    }
+
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      alert('Por favor permite las ventanas emergentes (popups) para abrir el reporte en PDF.');
+      return;
+    }
+
+    const emps = resultados.filter(r => {
+      const q = searchHorasExtra.toLowerCase();
+      const matchSearch = !q || (r.nombre || '').toLowerCase().includes(q) || (r.puesto || '').toLowerCase().includes(q);
+      const totalHE = (r.horasDobles || 0) + (r.horasTriples || 0);
+      const matchExtras = !filtroSoloConExtras || totalHE > 0;
+      return matchSearch && matchExtras;
+    });
+
+    const formatMoney = (val: number) => `$${val.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+    const htmlContent = `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>Reporte Individual de Asistencia y Horas Extras</title>
+          <style>
+            @page { size: landscape; margin: 8mm; }
+            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 12px; color: #111827; background: #fff; }
+            .emp-page { page-break-after: always; margin-bottom: 24px; }
+            .emp-page:last-child { page-break-after: avoid; }
+            .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #d97706; padding-bottom: 8px; margin-bottom: 12px; }
+            .header h1 { font-size: 16px; font-weight: 900; margin: 0; color: #d97706; }
+            .header p { font-size: 10px; color: #4b5563; margin: 2px 0 0 0; }
+            .kpi-container { display: flex; gap: 10px; margin-bottom: 12px; }
+            .kpi-card { flex: 1; padding: 6px 8px; border-radius: 6px; border: 1px solid #e5e7eb; background: #f9fafb; }
+            .kpi-card .title { font-size: 8px; font-weight: 700; color: #6b7280; text-transform: uppercase; }
+            .kpi-card .value { font-size: 13px; font-weight: 800; margin-top: 2px; }
+            table { width: 100%; border-collapse: collapse; font-size: 9px; }
+            th { background-color: #fffbeb; color: #92400e; font-weight: 800; text-align: left; padding: 5px 6px; border-bottom: 2px solid #d97706; text-transform: uppercase; font-size: 8px; }
+            td { padding: 4px 6px; border-bottom: 1px solid #e5e7eb; }
+            tr:nth-child(even) { background-color: #fcfcfc; }
+            .text-right { text-align: right; }
+            .text-center { text-align: center; }
+            .font-bold { font-weight: 700; }
+            .font-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+            .total-row { background-color: #fffbeb !important; font-weight: 900; }
+            .signatures { display: flex; justify-content: space-around; margin-top: 35px; }
+            .sig-box { text-align: center; border-top: 1px solid #9ca3af; width: 230px; padding-top: 4px; font-size: 9.5px; font-weight: 700; color: #374151; }
+          </style>
+        </head>
+        <body>
+          ${emps.map((r, empIdx) => {
+            const horaSimple = r.sueldoDiario / 8;
+            const totalHE = (r.horasDobles || 0) + (r.horasTriples || 0);
+            const pagoSimples = totalHE * horaSimple;
+            const pagoLft = (r.percepciones?.horasExtraDobles || 0) + (r.percepciones?.horasExtraTriples || 0);
+            const horasTotales = r.totalHorasTrabajadas || (r.diasTrabajados * 8);
+            const diasPeriodo = r.diasTotalesPeriodo || 7;
+            const horasSemanales = (horasTotales / diasPeriodo) * 7;
+
+            return `
+              <div class="emp-page">
+                <div class="header">
+                  <div>
+                    <h1>DESGLOSE INDIVIDUAL DE ASISTENCIA Y HORAS EXTRAS (HOJA ${empIdx + 1} DE ${emps.length})</h1>
+                    <p>Empleado: <strong>${r.nombre || ''}</strong> | Puesto: <strong>${r.puesto || 'General'}</strong> | Período: <strong>${periodo.fecha_inicio}</strong> al <strong>${periodo.fecha_fin}</strong></p>
+                  </div>
+                  <div style="text-align: right; font-size: 9.5px; color: #4b5563;">
+                    Sueldo Diario: <strong>${formatMoney(r.sueldoDiario)}</strong><br/>
+                    Valor Hora Simple: <strong style="color: #059669;">${formatMoney(horaSimple)}/h</strong>
+                  </div>
+                </div>
+
+                <div class="kpi-container">
+                  <div class="kpi-card">
+                    <div class="title">Horas Trab. Período</div>
+                    <div class="value" style="color: #111827;">${horasTotales.toFixed(1)} hrs</div>
+                  </div>
+                  <div class="kpi-card">
+                    <div class="title">Promedio Horas / Semana</div>
+                    <div class="value" style="color: ${horasSemanales > 48 ? '#d97706' : '#111827'};">${horasSemanales.toFixed(1)} h/sem</div>
+                  </div>
+                  <div class="kpi-card">
+                    <div class="title">Total Horas Extras</div>
+                    <div class="value" style="color: #b45309;">${totalHE.toFixed(1)} hrs</div>
+                  </div>
+                  <div class="kpi-card">
+                    <div class="title">Pago a Horas Simples</div>
+                    <div class="value" style="color: #059669;">${formatMoney(pagoSimples)}</div>
+                  </div>
+                  <div class="kpi-card">
+                    <div class="title">Ref. Pago LFT (Dobles/Triples)</div>
+                    <div class="value" style="color: #2563eb;">${formatMoney(pagoLft)}</div>
+                  </div>
+                </div>
+
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Fecha</th>
+                      <th>Día</th>
+                      <th>Horario Programado</th>
+                      <th class="text-center">Entrada Real</th>
+                      <th class="text-center">Salida Real</th>
+                      <th class="text-center">Estado</th>
+                      <th class="text-center">Horas Laboradas</th>
+                      <th class="text-center">Horas Extras</th>
+                      <th class="text-right">Pago Hora Simple</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${(r.detallesDias || []).map((d: any) => {
+                      const hrsExtrasDia = d.horasExtra || 0;
+                      const pagoDiaSimple = hrsExtrasDia * horaSimple;
+
+                      const dateObj = new Date(d.fecha + 'T12:00:00');
+                      const dow = dateObj.getDay();
+                      const schedule = horariosEmpleados.find((h: any) => h.empleado_id === r.empleado_id && h.dia_semana === dow);
+                      const turno = schedule?.turno_id ? turnos.find((t: any) => t.id === schedule.turno_id) : null;
+                      const horarioProg = d.esDescanso
+                        ? '☀️ Descanso'
+                        : turno
+                        ? `${turno.hora_entrada_1?.substring(0,5)} - ${turno.hora_salida_1?.substring(0,5)}`
+                        : '09:00 - 17:00';
+
+                      const entradaReal = d.entradas && d.entradas.length >= 1 ? d.entradas[0] : '-';
+                      const salidaReal = d.entradas && d.entradas.length >= 2 ? d.entradas[d.entradas.length - 1] : '-';
+
+                      return `
+                        <tr style="${hrsExtrasDia > 0 ? 'background-color: #fffbeb;' : ''}">
+                          <td class="font-bold font-mono">${d.fecha}</td>
+                          <td style="color: #4b5563;" class="capitalize">${d.diaSemana}</td>
+                          <td class="font-mono" style="color: #374151;">${horarioProg}</td>
+                          <td class="text-center font-mono font-bold" style="color: ${entradaReal !== '-' ? '#059669' : '#9ca3af'};">${entradaReal}</td>
+                          <td class="text-center font-mono font-bold" style="color: ${salidaReal !== '-' ? '#2563eb' : '#9ca3af'};">${salidaReal}</td>
+                          <td class="text-center">${d.estado === 'descanso' ? '☀️ Descanso' : d.estado === 'justificado' ? '🛡️ Justificado' : d.estado === 'exento' ? 'Sueldo Fijo' : d.tieneChecadas ? '✅ Asistencia' : '❌ Sin checada'}</td>
+                          <td class="text-center font-mono font-bold">${d.horasTrabajadas ? `${d.horasTrabajadas.toFixed(1)} h` : '-'}</td>
+                          <td class="text-center font-mono font-bold" style="color: ${hrsExtrasDia > 0 ? '#b45309' : '#9ca3af'};">${hrsExtrasDia > 0 ? `+${hrsExtrasDia.toFixed(1)} h` : '0.0 h'}</td>
+                          <td class="text-right font-mono font-bold" style="color: #059669;">${formatMoney(pagoDiaSimple)}</td>
+                        </tr>
+                      `;
+                    }).join('')}
+                    <tr class="total-row">
+                      <td colspan="6">TOTALES DÍAS EVALUADOS</td>
+                      <td class="text-center font-mono" style="color: #111827;">${horasTotales.toFixed(1)} h</td>
+                      <td class="text-center font-mono" style="color: #b45309;">${totalHE.toFixed(1)} hrs</td>
+                      <td class="text-right font-mono" style="color: #059669; font-size: 11px;">${formatMoney(pagoSimples)}</td>
+                    </tr>
+                  </tbody>
+                </table>
+
+                <div class="signatures">
+                  <div class="sig-box">Firma del Empleado (Recibí de Conformidad)</div>
+                  <div class="sig-box">Autorizado por (Recursos Humanos / Nómina)</div>
+                </div>
+              </div>
+            `;
+          }).join('')}
+
+          <script>
+            window.onload = function() {
+              setTimeout(function() { window.print(); }, 300);
+            }
+          </script>
+        </body>
+      </html>
+    `;
+
+    printWindow.document.open();
+    printWindow.document.write(htmlContent);
+    printWindow.document.close();
+  };
+
+  const totalOrdinario = resultados.reduce((s, r) => s + (r.percepciones?.sueldoOrdinario || 0), 0);
+  const totalExtras = resultados.reduce((s, r) => s + (r.percepciones?.horasExtraDobles || 0) + (r.percepciones?.horasExtraTriples || 0), 0);
+  const totalPropinas = resultados.reduce((s, r) => s + (r.percepciones?.propina || 0), 0);
+  const totalIsr = resultados.reduce((s, r) => s + (r.deducciones?.isr || 0), 0);
+  const totalImss = resultados.reduce((s, r) => s + (r.deducciones?.imssObrero || 0), 0);
+  const totalNeto = resultados.reduce((s, r) => s + (r.neto || 0), 0);
 
   // Cálculo Dinámico de Propinas Diarias por Día (Sin considerar días futuros que no han transcurrido)
   const propinasDiariasCalc = useMemo(() => {
@@ -677,6 +935,16 @@ export default function NominaTab({
           >
             <Award size={16} /> Submódulo: Propina Diaria
           </button>
+          <button
+            onClick={() => setSubTab('horas_extras')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+              subTab === 'horas_extras'
+                ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20'
+                : 'text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-900'
+            }`}
+          >
+            <Clock size={16} /> Reporte: Horas Extras (Simples)
+          </button>
         </div>
         <div className="flex items-center gap-2">
           <span className="text-[11px] font-bold text-amber-600 dark:text-amber-400 bg-amber-500/10 px-3 py-1 rounded-xl border border-amber-500/20">
@@ -844,7 +1112,31 @@ export default function NominaTab({
             </div>
           )}
 
-          {subTab === 'general' ? (
+          {subTab === 'horas_extras' ? (
+            <div className="flex items-end col-span-5 md:col-span-5 gap-2 pt-2 border-t border-gray-100 dark:border-gray-800 mt-2 flex-wrap sm:flex-nowrap">
+              <button
+                onClick={handleCalcular}
+                disabled={calculando}
+                className="flex-1 bg-amber-600 hover:bg-amber-500 disabled:bg-amber-600/50 text-white font-bold py-2 rounded-xl transition-colors flex items-center justify-center gap-2 h-10 shadow-sm"
+              >
+                {calculando ? <><RefreshCw size={15} className="animate-spin" /> Actualizando...</> : <><Clock size={15} /> Generar / Actualizar Reporte HE</>}
+              </button>
+              <button
+                onClick={exportToCsvHorasExtras}
+                title="Exportar Reporte de Horas Extras a Excel (.csv)"
+                className="px-4 bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2 rounded-xl transition-colors flex items-center gap-2 text-xs h-10 shadow-sm whitespace-nowrap"
+              >
+                <Download size={15} /> Exportar Excel (.csv)
+              </button>
+              <button
+                onClick={exportToPdfPrintHorasExtras}
+                title="Imprimir / Exportar Reporte de Horas Extras en PDF"
+                className="px-4 bg-blue-600 hover:bg-blue-500 text-white font-bold py-2 rounded-xl transition-colors flex items-center gap-2 text-xs h-10 shadow-sm whitespace-nowrap"
+              >
+                <Printer size={15} /> Imprimir Reporte PDF
+              </button>
+            </div>
+          ) : subTab === 'general' ? (
             <div className="flex items-end col-span-5 md:col-span-5 gap-2 pt-2 border-t border-gray-100 dark:border-gray-800 mt-2">
               <button
                 onClick={handleCalcular}
@@ -980,8 +1272,8 @@ export default function NominaTab({
                         <td className="p-2 text-gray-900 dark:text-white" colSpan={5}>Totales</td>
                         <td className="p-2 text-right">${totalOrdinario.toFixed(2)}</td>
                         <td className="p-2 text-right text-amber-600">${totalExtras.toFixed(2)}</td>
-                        <td className="p-2 text-right text-blue-600">${resultados.reduce((s, r) => s + r.percepciones.primaDominical, 0).toFixed(2)}</td>
-                        <td className="p-2 text-right text-purple-600">${resultados.reduce((s, r) => s + r.percepciones.primaVacacional, 0).toFixed(2)}</td>
+                        <td className="p-2 text-right text-blue-600">${resultados.reduce((s, r) => s + (r.percepciones?.primaDominical || 0), 0).toFixed(2)}</td>
+                        <td className="p-2 text-right text-purple-600">${resultados.reduce((s, r) => s + (r.percepciones?.primaVacacional || 0), 0).toFixed(2)}</td>
                         <td className="p-2 text-right text-emerald-600">${totalPropinas.toFixed(2)}</td>
                         <td className="p-2 text-right text-rose-600">-${totalIsr.toFixed(2)}</td>
                         <td className="p-2 text-right text-rose-500">-${totalImss.toFixed(2)}</td>
@@ -1002,13 +1294,13 @@ export default function NominaTab({
             </>
           )}
         </>
-      ) : (
-        /* SUBMÓDULO: PROPINA DIARIA REPARTIBLE CON PARÁMETROS CONFIGURABLES */
+      ) : subTab === 'propinas_diarias' ? (
         <div className="space-y-6">
           {/* Panel de Configuración de Parámetros */}
           <div className="bg-white dark:bg-gray-950 p-6 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-sm space-y-4">
             <div className="flex justify-between items-center border-b border-gray-100 dark:border-gray-800 pb-3">
               <h3 className="text-sm font-bold text-gray-800 dark:text-gray-100 uppercase tracking-wide flex items-center gap-2">
+                {/* SUBMÓDULO: PROPINA DIARIA REPARTIBLE CON PARÁMETROS CONFIGURABLES */}
                 <Settings className="text-amber-500" size={18} /> Reglas Modificables de Reparto de Propina
               </h3>
               <span className="text-[10px] bg-amber-500/10 text-amber-600 px-2 py-0.5 rounded font-bold">
@@ -1282,6 +1574,197 @@ export default function NominaTab({
             </div>
           )}
         </div>
+      ) : (
+        <div className="space-y-6">
+          {/* VISTA DE REPORTE DE HORAS EXTRAS (PAGO EN HORAS SIMPLES) */}
+          {/* Tarjetas KPI de Horas Extras */}
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+            <div className="bg-white dark:bg-gray-950 p-4 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm">
+              <p className="text-[10px] text-gray-400 uppercase font-bold">Plantilla Evaluada</p>
+              <p className="text-xl font-bold text-gray-900 dark:text-white">{resultados.length} Empleados</p>
+            </div>
+            <div className="bg-white dark:bg-gray-950 p-4 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm">
+              <p className="text-[10px] text-amber-500 uppercase font-bold">Con Horas Extras</p>
+              <p className="text-xl font-bold text-amber-600 dark:text-amber-400">
+                {resultados.filter(r => ((r.horasDobles || 0) + (r.horasTriples || 0)) > 0).length} Empleados
+              </p>
+            </div>
+            <div className="bg-white dark:bg-gray-950 p-4 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm">
+              <p className="text-[10px] text-gray-400 uppercase font-bold">Total Horas Extras</p>
+              <p className="text-xl font-bold text-amber-600 dark:text-amber-400">
+                {resultados.reduce((s, r) => s + (r.horasDobles || 0) + (r.horasTriples || 0), 0).toFixed(1)} hrs
+              </p>
+            </div>
+            <div className="bg-white dark:bg-gray-950 p-4 rounded-xl border border-emerald-500/30 bg-emerald-500/5 shadow-sm">
+              <p className="text-[10px] text-emerald-600 dark:text-emerald-400 uppercase font-bold">Pago Total a Horas Simples</p>
+              <p className="text-xl font-black text-emerald-600 dark:text-emerald-400">
+                ${resultados.reduce((s, r) => s + (((r.horasDobles || 0) + (r.horasTriples || 0)) * (r.sueldoDiario / 8)), 0).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </p>
+            </div>
+            <div className="bg-white dark:bg-gray-950 p-4 rounded-xl border border-blue-500/30 bg-blue-500/5 shadow-sm">
+              <p className="text-[10px] text-blue-600 dark:text-blue-400 uppercase font-bold">Ref. Pago Doble/Triple (LFT)</p>
+              <p className="text-xl font-black text-blue-600 dark:text-blue-400">
+                ${resultados.reduce((s, r) => s + (r.percepciones?.horasExtraDobles || 0) + (r.percepciones?.horasExtraTriples || 0), 0).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </p>
+            </div>
+          </div>
+
+          {/* Filtro y Buscador */}
+          <div className="bg-white dark:bg-gray-950 p-4 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-sm flex flex-col sm:flex-row items-center justify-between gap-3">
+            <div className="relative flex-1 w-full">
+              <input
+                type="text"
+                placeholder="Buscar por empleado o puesto..."
+                value={searchHorasExtra}
+                onChange={e => setSearchHorasExtra(e.target.value)}
+                className="w-full pl-9 pr-3 py-2 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl text-xs outline-none focus:ring-2 focus:ring-amber-500 font-medium text-gray-900 dark:text-white"
+              />
+              <Info size={14} className="absolute left-3 top-3 text-gray-400" />
+            </div>
+            <label className="flex items-center gap-2 text-xs font-bold text-gray-700 dark:text-gray-300 cursor-pointer shrink-0 bg-gray-50 dark:bg-gray-900 px-3 py-2 rounded-xl border border-gray-200 dark:border-gray-800">
+              <input
+                type="checkbox"
+                checked={filtroSoloConExtras}
+                onChange={e => setFiltroSoloConExtras(e.target.checked)}
+                className="rounded text-amber-600 focus:ring-amber-500"
+              />
+              <span>Mostrar solo con Horas Extras (&gt; 0 hrs)</span>
+            </label>
+          </div>
+
+          {/* Tabla de Horas Extras */}
+          <div className="bg-white dark:bg-gray-950 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-sm overflow-hidden space-y-4 p-5">
+            <div className="flex justify-between items-center pb-2 border-b border-gray-100 dark:border-gray-800">
+              <div>
+                <h3 className="text-sm font-bold text-gray-800 dark:text-gray-100 uppercase tracking-wide flex items-center gap-2">
+                  <Clock className="text-amber-500" size={18} /> Reporte de Horas Extras Evaluadas en Hora Simple (Sueldo ÷ 8)
+                </h3>
+                <p className="text-[11px] text-gray-400 mt-0.5">
+                  Desglose de horas trabajadas en el período ({periodo.fecha_inicio} a {periodo.fecha_fin}), horas promedio por semana y su equivalente pagado a cuota por hora simple.
+                </p>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs text-left">
+                <thead className="bg-gray-50 dark:bg-gray-900 text-gray-500 dark:text-gray-400 uppercase text-[10px] font-bold border-b border-gray-200 dark:border-gray-800">
+                  <tr>
+                    <th className="p-3">Empleado / Puesto</th>
+                    <th className="p-3 text-right">Sueldo Diario</th>
+                    <th className="p-3 text-right">Valor Hora Simple</th>
+                    <th className="p-3 text-center">Horas Trab. Periodo</th>
+                    <th className="p-3 text-center">Prom. Hrs / Semana</th>
+                    <th className="p-3 text-center">Horas Extras</th>
+                    <th className="p-3 text-right">Pago Horas Simples</th>
+                    <th className="p-3 text-right">Ref. Pago LFT</th>
+                    <th className="p-3 text-center">Acciones</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+                  {resultados
+                    .filter(r => {
+                      const q = searchHorasExtra.toLowerCase();
+                      const matchSearch = !q || (r.nombre || '').toLowerCase().includes(q) || (r.puesto || '').toLowerCase().includes(q);
+                      const totalHE = (r.horasDobles || 0) + (r.horasTriples || 0);
+                      const matchExtras = !filtroSoloConExtras || totalHE > 0;
+                      return matchSearch && matchExtras;
+                    })
+                    .map(r => {
+                      const horaSimple = r.sueldoDiario / 8;
+                      const totalHE = (r.horasDobles || 0) + (r.horasTriples || 0);
+                      const pagoSimples = totalHE * horaSimple;
+                      const pagoLft = (r.percepciones?.horasExtraDobles || 0) + (r.percepciones?.horasExtraTriples || 0);
+                      const horasTotales = r.totalHorasTrabajadas || (r.diasTrabajados * 8);
+                      const diasPeriodo = r.diasTotalesPeriodo || 7;
+                      const horasSemanales = (horasTotales / diasPeriodo) * 7;
+
+                      return (
+                        <tr key={r.empleado_id} className={`hover:bg-amber-500/5 transition-colors ${totalHE > 0 ? 'bg-amber-500/5 font-semibold' : ''}`}>
+                          <td className="p-3">
+                            <div className="font-bold text-gray-900 dark:text-white flex items-center gap-1.5">
+                              {r.nombre}
+                              {r.exentoReloj && (
+                                <span className="text-[9px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded font-extrabold border border-blue-200">Sueldo Fijo</span>
+                              )}
+                            </div>
+                            <div className="text-[10px] text-gray-400">{r.puesto || 'General'}</div>
+                          </td>
+                          <td className="p-3 text-right font-mono text-gray-700 dark:text-gray-300 font-bold">
+                            ${r.sueldoDiario.toFixed(2)}
+                          </td>
+                          <td className="p-3 text-right font-mono text-gray-500 dark:text-gray-400">
+                            ${horaSimple.toFixed(2)}/h
+                          </td>
+                          <td className="p-3 text-center font-mono font-bold text-gray-900 dark:text-white">
+                            {horasTotales.toFixed(1)} hrs
+                          </td>
+                          <td className="p-3 text-center font-mono font-bold">
+                            <span className={`px-2 py-0.5 rounded-full text-[10px] ${
+                              horasSemanales > 48
+                                ? 'bg-amber-100 dark:bg-amber-955/30 text-amber-700 dark:text-amber-400 border border-amber-200'
+                                : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400'
+                            }`}>
+                              {horasSemanales.toFixed(1)} hrs/sem
+                            </span>
+                          </td>
+                          <td className="p-3 text-center font-mono font-bold">
+                            <span className={`px-2.5 py-1 rounded-xl text-xs font-black ${
+                              totalHE > 0
+                                ? 'bg-amber-500 text-white shadow-xs'
+                                : 'bg-gray-100 dark:bg-gray-800 text-gray-400'
+                            }`}>
+                              {totalHE.toFixed(1)} hrs
+                            </span>
+                          </td>
+                          <td className="p-3 text-right font-mono font-extrabold text-emerald-600 dark:text-emerald-400 text-sm">
+                            ${pagoSimples.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </td>
+                          <td className="p-3 text-right font-mono text-blue-600 dark:text-blue-400 font-bold">
+                            ${pagoLft.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </td>
+                          <td className="p-3 text-center">
+                            <button
+                              onClick={() => setSelectedEmpHorasExtraModal(r)}
+                              className="px-2.5 py-1 bg-amber-500/10 hover:bg-amber-500/20 text-amber-700 dark:text-amber-300 rounded-lg font-bold text-[10px] transition-colors inline-flex items-center gap-1 border border-amber-500/20"
+                            >
+                              <Eye size={12} /> Ver Días
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+
+                  {resultados.length === 0 && (
+                    <tr>
+                      <td colSpan={9} className="p-8 text-center text-gray-400 italic">
+                        No hay cálculos generados. Haz clic en <strong>"Generar / Actualizar Reporte HE"</strong> para procesar las checadas del período.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+                {resultados.length > 0 && (
+                  <tfoot>
+                    <tr className="bg-amber-500/10 font-bold border-t-2 border-amber-500/30">
+                      <td colSpan={5} className="p-3 text-amber-900 dark:text-amber-100 font-black">
+                        TOTALES REPORTE HORAS EXTRAS
+                      </td>
+                      <td className="p-3 text-center font-mono font-black text-amber-700 dark:text-amber-300 text-sm">
+                        {resultados.reduce((s, r) => s + (r.horasDobles || 0) + (r.horasTriples || 0), 0).toFixed(1)} hrs
+                      </td>
+                      <td className="p-3 text-right font-mono font-black text-emerald-600 dark:text-emerald-400 text-sm">
+                        ${resultados.reduce((s, r) => s + (((r.horasDobles || 0) + (r.horasTriples || 0)) * (r.sueldoDiario / 8)), 0).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </td>
+                      <td className="p-3 text-right font-mono font-bold text-blue-600 dark:text-blue-400">
+                        ${resultados.reduce((s, r) => s + (r.percepciones?.horasExtraDobles || 0) + (r.percepciones?.horasExtraTriples || 0), 0).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </td>
+                      <td></td>
+                    </tr>
+                  </tfoot>
+                )}
+              </table>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* MODAL DE DETALLE DEL EMPLEADO Y JUSTIFICACIONES EN NÓMINA GENERAL */}
@@ -1494,6 +1977,90 @@ export default function NominaTab({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DESGLOSE DIARIO DE HORAS EXTRAS */}
+      {selectedEmpHorasExtraModal && (
+        <div className="fixed inset-0 z-[60] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-gray-950 w-full max-w-2xl rounded-2xl border border-gray-200 dark:border-gray-800 shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
+            <div className="p-4 border-b border-gray-200 dark:border-gray-800 flex justify-between items-center bg-gray-50 dark:bg-gray-900 shrink-0">
+              <div>
+                <h4 className="text-sm font-black text-gray-900 dark:text-white uppercase flex items-center gap-2">
+                  <Clock className="text-amber-500" size={18} /> Desglose de Horas Extras: {selectedEmpHorasExtraModal.nombre}
+                </h4>
+                <p className="text-xs text-gray-500 mt-0.5 font-medium">
+                  {selectedEmpHorasExtraModal.puesto} · Sueldo Diario: <strong className="text-gray-900 dark:text-white">${selectedEmpHorasExtraModal.sueldoDiario?.toFixed(2)}</strong> · Valor Hora Simple: <strong className="text-emerald-600 dark:text-emerald-400">${(selectedEmpHorasExtraModal.sueldoDiario / 8).toFixed(2)}/h</strong>
+                </p>
+              </div>
+              <button onClick={() => setSelectedEmpHorasExtraModal(null)} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
+            </div>
+
+            <div className="p-4 overflow-y-auto flex-1 space-y-4">
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs text-left">
+                  <thead className="bg-gray-50 dark:bg-gray-900 text-gray-500 dark:text-gray-400 uppercase text-[10px] font-bold border-b border-gray-200 dark:border-gray-800">
+                    <tr>
+                      <th className="p-2.5">Fecha</th>
+                      <th className="p-2.5">Día</th>
+                      <th className="p-2.5">Estado / Checadas</th>
+                      <th className="p-2.5 text-center">Horas Laboradas</th>
+                      <th className="p-2.5 text-center">Horas Extras</th>
+                      <th className="p-2.5 text-right">Pago Hora Simple</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+                    {(selectedEmpHorasExtraModal.detallesDias || []).map((d: any, idx: number) => {
+                      const horaSimple = selectedEmpHorasExtraModal.sueldoDiario / 8;
+                      const hrsExtrasDia = d.horasExtra || 0;
+                      const pagoDiaSimple = hrsExtrasDia * horaSimple;
+
+                      return (
+                        <tr key={idx} className={`hover:bg-gray-50 dark:hover:bg-gray-900/50 ${hrsExtrasDia > 0 ? 'bg-amber-500/5 font-bold' : ''}`}>
+                          <td className="p-2.5 font-mono text-gray-900 dark:text-white font-bold">{d.fecha}</td>
+                          <td className="p-2.5 text-gray-500 capitalize">{d.diaSemana}</td>
+                          <td className="p-2.5">
+                            {d.entradas && d.entradas.length > 0 ? (
+                              <span className="font-mono text-[11px] text-gray-700 dark:text-gray-300">
+                                🕒 {d.entradas.join(' → ')}
+                              </span>
+                            ) : (
+                              <span className="text-[10px] text-gray-400 italic">
+                                {d.estado === 'descanso' ? '☀️ Descanso' : d.estado === 'justificado' ? '🛡️ Justificado' : 'Sin checada'}
+                              </span>
+                            )}
+                          </td>
+                          <td className="p-2.5 text-center font-mono font-bold">
+                            {d.horasTrabajadas ? `${d.horasTrabajadas.toFixed(1)} h` : '-'}
+                          </td>
+                          <td className="p-2.5 text-center font-mono font-bold">
+                            <span className={`px-2 py-0.5 rounded text-[10px] ${hrsExtrasDia > 0 ? 'bg-amber-500 text-white font-black' : 'text-gray-400'}`}>
+                              {hrsExtrasDia > 0 ? `+${hrsExtrasDia.toFixed(1)} h` : '0.0 h'}
+                            </span>
+                          </td>
+                          <td className="p-2.5 text-right font-mono font-extrabold text-emerald-600 dark:text-emerald-400">
+                            ${pagoDiaSimple.toFixed(2)}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="p-4 bg-gray-50 dark:bg-gray-900 border-t border-gray-200 dark:border-gray-800 flex justify-between items-center shrink-0">
+              <div>
+                <span className="text-[10px] text-gray-400 uppercase font-bold block">Total Horas Extras / Pago a Horas Simples</span>
+                <span className="text-lg font-black text-emerald-600 dark:text-emerald-400">
+                  {((selectedEmpHorasExtraModal.horasDobles || 0) + (selectedEmpHorasExtraModal.horasTriples || 0)).toFixed(1)} hrs = ${(((selectedEmpHorasExtraModal.horasDobles || 0) + (selectedEmpHorasExtraModal.horasTriples || 0)) * (selectedEmpHorasExtraModal.sueldoDiario / 8)).toFixed(2)}
+                </span>
+              </div>
+              <button onClick={() => setSelectedEmpHorasExtraModal(null)} className="px-5 py-2 bg-gray-900 hover:bg-gray-800 dark:bg-gray-100 dark:hover:bg-white text-white dark:text-gray-900 text-xs font-bold rounded-xl transition-colors">
+                Cerrar
+              </button>
+            </div>
           </div>
         </div>
       )}

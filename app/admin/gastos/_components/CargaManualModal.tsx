@@ -10,9 +10,10 @@ interface CargaManualModalProps {
   onSuccess: () => void;
   tipo: 'gasto' | 'venta' | 'movimiento';
   registroId?: string | null;
+  empresaRfc?: string | null;
 }
 
-export default function CargaManualModal({ onClose, onSuccess, tipo, registroId }: CargaManualModalProps) {
+export default function CargaManualModal({ onClose, onSuccess, tipo, registroId, empresaRfc }: CargaManualModalProps) {
   const [procesando, setProcesando] = useState(false);
   const [errorGlobal, setErrorGlobal] = useState('');
   const [verTodos, setVerTodos] = useState(false);
@@ -305,6 +306,34 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId 
         const rfcReceptor = receptor?.getAttribute('Rfc') || receptor?.getAttribute('rfc') || '';
         const nombreReceptor = receptor?.getAttribute('Nombre') || receptor?.getAttribute('nombre') || '';
         const usoCfdiVal = receptor?.getAttribute('UsoCFDI') || receptor?.getAttribute('usoCFDI') || 'G03';
+
+        // Validación estricta de RFC por tipo de comprobante (SAT multi-empresa)
+        let activeEmpresaRfc = (empresaRfc || '').trim().toUpperCase();
+        if (!activeEmpresaRfc) {
+          const sesionGuardada = localStorage.getItem('seimenjo_session');
+          let empId = '';
+          if (sesionGuardada) {
+            try { empId = JSON.parse(sesionGuardada).empresa_id; } catch (e) {}
+          }
+          if (empId) {
+            const { data: empData } = await supabase.from('empresas').select('rfc').eq('id', empId).maybeSingle();
+            if (empData?.rfc) activeEmpresaRfc = empData.rfc.trim().toUpperCase();
+          }
+        }
+
+        if (activeEmpresaRfc) {
+          if (tipo === 'gasto') {
+            const cleanReceptor = (rfcReceptor || '').trim().toUpperCase();
+            if (cleanReceptor && cleanReceptor !== activeEmpresaRfc) {
+              throw new Error(`El XML no corresponde a esta empresa. El RFC receptor (${rfcReceptor}) no coincide con el RFC oficial de la empresa (${activeEmpresaRfc}).`);
+            }
+          } else if (tipo === 'venta') {
+            const cleanEmisor = (emisorRfc || '').trim().toUpperCase();
+            if (cleanEmisor && cleanEmisor !== activeEmpresaRfc) {
+              throw new Error(`El XML no corresponde a esta empresa. El RFC emisor (${emisorRfc}) no coincide con el RFC oficial de la empresa (${activeEmpresaRfc}).`);
+            }
+          }
+        }
 
         const timbre = xmlDoc.getElementsByTagName('tfd:TimbreFiscalDigital')[0] || xmlDoc.getElementsByTagName('TimbreFiscalDigital')[0];
         const uuid = timbre?.getAttribute('UUID') || '';

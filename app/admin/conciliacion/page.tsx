@@ -66,7 +66,7 @@ export default function BankReconciliationModule() {
   const [estatusCatalog, setEstatusCatalog] = useState<any[]>([]);
   const [formasPago, setFormasPago] = useState<any[]>([]);
   const [categoriasMovimiento, setCategoriasMovimiento] = useState<any[]>([]);
-  const [bancoSubTab, setBancoSubTab] = useState<'movimientos' | 'ingresos_comprobantes' | 'cargas' | 'global' | 'comprobantes'>('movimientos');
+  const [bancoSubTab, setBancoSubTab] = useState<'movimientos' | 'ingresos_comprobantes' | 'cargas' | 'global' | 'comprobantes' | 'no_deducibles'>('movimientos');
   const [cuentasBancarias, setCuentasBancarias] = useState<any[]>([]);
   const [selectedCuentaId, setSelectedCuentaId] = useState<string>('');
   const [pedidosPendientes, setPedidosPendientes] = useState<any[]>([]);
@@ -232,7 +232,7 @@ export default function BankReconciliationModule() {
               pdf_url,
               ticket_url,
               metodo_pago,
-              proveedores(nombre_comercial, rfc)
+              proveedores(id, nombre_comercial, rfc, saldo_favor)
             ),
             pedido:pedidos(
               id,
@@ -333,7 +333,7 @@ export default function BankReconciliationModule() {
       // 7. Gastos reconciliables
       const { data: gReconcile } = await supabase
         .from('gastos')
-        .select('id, concepto, monto, fecha_gasto, xml_url, pdf_url, ticket_url, metodo_pago, proveedores(nombre_comercial, rfc)')
+        .select('id, concepto, monto, fecha_gasto, xml_url, pdf_url, ticket_url, metodo_pago, proveedores(id, nombre_comercial, rfc, saldo_favor)')
         .eq('empresa_id', empresaId)
         .is('movimiento_bancario_id', null)
         .is('gasto_padre_id', null)
@@ -618,17 +618,56 @@ export default function BankReconciliationModule() {
 
   const handleOpenReconcileModal = (m: any) => {
     setManualMatchSearch('');
+    const isBatch = Array.isArray(m);
+    const primaryMov = isBatch ? m[0] : m;
+
+    const linkedGastos: any[] = [];
+    const linkedPedidos: any[] = [];
+    if (!isBatch && primaryMov.conciliaciones_bancarias) {
+      primaryMov.conciliaciones_bancarias.forEach((c: any) => {
+        if (c.gasto) linkedGastos.push(c.gasto);
+        if (c.pedido) linkedPedidos.push(c.pedido);
+      });
+    }
+
+    if (linkedGastos.length > 0) {
+      setGastosReconciliables((prev) => {
+        const existingIds = new Set(prev.map((g) => g.id));
+        const newItems = linkedGastos.filter((g) => !existingIds.has(g.id));
+        return newItems.length > 0 ? [...newItems, ...prev] : prev;
+      });
+    }
+
+    if (linkedPedidos.length > 0) {
+      setPedidosPendientes((prev) => {
+        const existingIds = new Set(prev.map((p) => p.id));
+        const newItems = linkedPedidos.filter((p) => !existingIds.has(p.id));
+        return newItems.length > 0 ? [...newItems, ...prev] : prev;
+      });
+    }
+
+    // Merge XML URLs from movement and linked gastos
+    const xmlSources: string[] = [];
+    if (!isBatch && primaryMov.xml_url) {
+      xmlSources.push(...primaryMov.xml_url.split(','));
+    }
+    linkedGastos.forEach((g) => {
+      if (g.xml_url) xmlSources.push(...g.xml_url.split(','));
+    });
+    const consolidatedXmlUrl = Array.from(new Set(xmlSources.map((s) => s.trim()).filter(Boolean))).join(',');
+
     setReconcileModal({
       open: true,
-      movimiento: m,
-      xmlUrl: m.xml_url || '',
-      pdfFacturaUrl: m.pdf_factura_url || '',
-      pdfTicketUrl: m.pdf_ticket_url || '',
-      soporteReembolsoUrl: m.soporte_reembolso_url || '',
-      storageProvider: m.storage_provider || 'Supabase',
-      gastosSeleccionados: m.conciliaciones_bancarias?.filter((c: any) => !!c.gasto).map((c: any) => c.gasto.id) || [],
-      pedidosSeleccionados: m.conciliaciones_bancarias?.filter((c: any) => !!c.pedido).map((c: any) => c.pedido.id) || [],
-      estatusClave: m.estatus_conciliacion_bancaria?.clave || '',
+      movimiento: primaryMov,
+      movimientosBatch: isBatch ? m : undefined,
+      xmlUrl: isBatch ? '' : (consolidatedXmlUrl || primaryMov.xml_url || ''),
+      pdfFacturaUrl: isBatch ? '' : (primaryMov.pdf_factura_url || ''),
+      pdfTicketUrl: isBatch ? '' : (primaryMov.pdf_ticket_url || ''),
+      soporteReembolsoUrl: isBatch ? '' : (primaryMov.soporte_reembolso_url || ''),
+      storageProvider: primaryMov.storage_provider || 'Supabase',
+      gastosSeleccionados: isBatch ? [] : (primaryMov.conciliaciones_bancarias?.filter((c: any) => !!c.gasto).map((c: any) => c.gasto.id) || []),
+      pedidosSeleccionados: isBatch ? [] : (primaryMov.conciliaciones_bancarias?.filter((c: any) => !!c.pedido).map((c: any) => c.pedido.id) || []),
+      estatusClave: isBatch ? '' : (primaryMov.estatus_conciliacion_bancaria?.clave || ''),
       loading: false,
       error: ''
     });
@@ -657,7 +696,11 @@ export default function BankReconciliationModule() {
     
     try {
       const token = await getSessionToken();
-      const res = await guardarConciliacionManual(reconcileModal.movimiento.id, {
+      const targetMovId = reconcileModal.movimientosBatch && reconcileModal.movimientosBatch.length > 0
+        ? reconcileModal.movimientosBatch.map((x: any) => x.id)
+        : reconcileModal.movimiento.id;
+
+      const res = await guardarConciliacionManual(targetMovId, {
         gastosIds,
         pedidosIds,
         xmlUrl: reconcileModal.xmlUrl,
@@ -1708,10 +1751,23 @@ NOTIFY pgrst, 'reload schema';`}
               const stats = getGeneralStats();
               return (
                 <div className="mt-4 space-y-1.5">
-                  <div className="flex justify-between text-[10px] text-blue-100 border-b border-white/10 pb-1">
-                    <span>Ingresos:</span>
-                    <span className="font-mono font-bold text-emerald-300">+{formatCurrency(stats.ingresos)}</span>
+                  <div className="flex justify-between items-start text-[10px] text-blue-100 border-b border-white/10 pb-1">
+                    <span>Ingresos Total:</span>
+                    <div className="text-right">
+                      <span className="font-mono font-bold text-emerald-300 block">+{formatCurrency(stats.ingresos)}</span>
+                      {stats.ingresosPropinas > 0 && (
+                        <span className="text-[9px] font-mono text-blue-200 block font-normal mt-0.5">
+                          (Venta: {formatCurrency(stats.ingresosBase)} | Prop: {formatCurrency(stats.ingresosPropinas)})
+                        </span>
+                      )}
+                    </div>
                   </div>
+                  {stats.ingresosPropinas > 0 && (
+                    <div className="flex justify-between text-[10px] text-blue-100 border-b border-white/10 pb-1">
+                      <span>Propinas (Separadas):</span>
+                      <span className="font-mono font-bold text-amber-300">+{formatCurrency(stats.ingresosPropinas)}</span>
+                    </div>
+                  )}
                   <div className="flex justify-between text-[10px] text-blue-100 border-b border-white/10 pb-1">
                     <span>Egresos:</span>
                     <span className="font-mono font-bold text-red-300">-{formatCurrency(stats.egresos)}</span>
@@ -1768,16 +1824,22 @@ NOTIFY pgrst, 'reload schema';`}
                 </div>
                 <div className="mt-4 space-y-1.5">
                   <div className="flex justify-between items-start text-[10px] text-gray-400 dark:text-gray-500 border-b border-gray-100 dark:border-gray-900 pb-1">
-                    <span>Ingresos:</span>
+                    <span>Ingresos Total:</span>
                     <div className="text-right">
                       <span className="font-mono font-bold text-emerald-600 dark:text-emerald-500 block">+{formatCurrency(stats.ingresos)}</span>
                       {stats.ingresosPropinas > 0 && (
-                        <span className="text-[9px] font-mono text-emerald-700 dark:text-emerald-400 block font-normal">
+                        <span className="text-[9px] font-mono text-emerald-700 dark:text-emerald-400 block font-normal mt-0.5">
                           (Venta: {formatCurrency(stats.ingresosBase)} | Prop: {formatCurrency(stats.ingresosPropinas)})
                         </span>
                       )}
                     </div>
                   </div>
+                  {stats.ingresosPropinas > 0 && (
+                    <div className="flex justify-between items-center text-[10px] text-gray-400 dark:text-gray-500 border-b border-gray-100 dark:border-gray-900 pb-1">
+                      <span>Propinas (Separadas):</span>
+                      <span className="font-mono font-bold text-amber-600 dark:text-amber-400">+{formatCurrency(stats.ingresosPropinas)}</span>
+                    </div>
+                  )}
                   <div className="flex justify-between text-[10px] text-gray-400 dark:text-gray-500 border-b border-gray-100 dark:border-gray-900 pb-1">
                     <span>Egresos:</span>
                     <span className="font-mono font-bold text-red-650 dark:text-red-500">-{formatCurrency(stats.egresos)}</span>

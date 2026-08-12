@@ -1,4 +1,4 @@
--- MIGRACIÓN: Actualizar comprobantes_deposito_tipo_check para permitir nuevos tipos de corte
+wwwwwww-- MIGRACIÓN: Actualizar comprobantes_deposito_tipo_check para permitir nuevos tipos de corte
 ALTER TABLE public.comprobantes_deposito
 DROP CONSTRAINT IF EXISTS comprobantes_deposito_tipo_check;
 

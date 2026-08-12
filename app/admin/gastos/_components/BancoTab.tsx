@@ -11,7 +11,8 @@ import React from 'react';
 import {
   FileCode, FileText, CreditCard, List, Scale, Settings,
   ArrowRightLeft, Play, RefreshCw, FileSpreadsheet, Plus, Trash2, Edit3,
-  Layers, Check, X, UploadCloud, Paperclip, AlertTriangle, Filter, Eye, Link, Ticket, Landmark
+  Layers, Check, X, UploadCloud, Paperclip, AlertTriangle, Filter, Eye, Link, Ticket, Landmark,
+  Tag, Lock, Unlock
 } from 'lucide-react';
 import { formatCurrency } from '../../../../lib/formatters';
 import type { MovimientoBancario, EstatusConciliacion, GastoReconciliable, FormaPago, ComprobanteDeposito } from '../../types';
@@ -26,6 +27,7 @@ import { generarSaldoFavorDesdeConciliacion } from '../../proveedores/proveedore
 interface ReconcileModalState {
   open: boolean;
   movimiento: any | null;
+  movimientosBatch?: any[];
   xmlUrl: string;
   pdfFacturaUrl: string;
   pdfTicketUrl: string;
@@ -68,8 +70,8 @@ interface PedidoPendiente {
 
 export interface BancoTabProps {
   // Sub-tab activo
-  bancoSubTab: 'movimientos' | 'ingresos_comprobantes' | 'cargas' | 'global' | 'comprobantes';
-  setBancoSubTab: (sub: 'movimientos' | 'ingresos_comprobantes' | 'cargas' | 'global' | 'comprobantes') => void;
+  bancoSubTab: 'movimientos' | 'ingresos_comprobantes' | 'cargas' | 'global' | 'comprobantes' | 'no_deducibles';
+  setBancoSubTab: (sub: 'movimientos' | 'ingresos_comprobantes' | 'cargas' | 'global' | 'comprobantes' | 'no_deducibles') => void;
 
   token?: string;
   onStartSustituirCarga?: (carga: any) => void;
@@ -116,7 +118,7 @@ export interface BancoTabProps {
   setReconcileModal: React.Dispatch<React.SetStateAction<ReconcileModalState>>;
   manualMatchSearch: string;
   setManualMatchSearch: (v: string) => void;
-  handleOpenReconcileModal?: (m: MovimientoBancario) => void;
+  handleOpenReconcileModal?: (m: any) => void;
   handleSaveReconciliation?: (
     customGastosIds?: string[],
     customEstatusClave?: string,
@@ -170,6 +172,31 @@ export interface BancoTabProps {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
+function matchesAmount(amountVal: number | string | null | undefined, search: string): boolean {
+  if (amountVal === undefined || amountVal === null || !search.trim()) return false;
+  const num = typeof amountVal === 'number' ? amountVal : parseFloat(String(amountVal).replace(/[^0-9.-]/g, ''));
+  if (isNaN(num)) return false;
+
+  const numAbs = Math.abs(num);
+  const numStr = numAbs.toString();
+  const numFixed = numAbs.toFixed(2);
+  const numFmt = formatCurrency(numAbs).toLowerCase();
+  const numCleanDigits = numFixed.replace(/[^0-9]/g, '');
+
+  const searchLower = search.toLowerCase().trim();
+  const searchCleanDigits = searchLower.replace(/[^0-9]/g, '');
+
+  if (numStr.includes(searchLower) || numFixed.includes(searchLower) || numFmt.includes(searchLower)) {
+    return true;
+  }
+
+  if (searchCleanDigits.length >= 2 && numCleanDigits.includes(searchCleanDigits)) {
+    return true;
+  }
+
+  return false;
+}
+
 function filterMovimientos(
   movimientos: MovimientoBancario[],
   busqueda: string,
@@ -179,35 +206,154 @@ function filterMovimientos(
   categoriasSelected: string[],
   cuentaId: string
 ): MovimientoBancario[] {
+  // Pass 1: identificar todos los IDs de Gastos y Pedidos que coinciden directamente con la búsqueda o cuyos movimientos vinculados coinciden
+  const matchingGastoIds = new Set<string>();
+  const matchingPedidoIds = new Set<string>();
+
+  if (busqueda.trim()) {
+    const b = busqueda.toLowerCase().trim();
+
+    // Calcular mapa de totales acumulados combinados para cada gasto y pedido
+    const gastoCombinedTotalMap: Record<string, number> = {};
+    const pedidoCombinedTotalMap: Record<string, number> = {};
+
+    movimientos.forEach((m) => {
+      if (m.conciliaciones_bancarias) {
+        m.conciliaciones_bancarias.forEach((link: any) => {
+          if (link.gasto?.id) {
+            const gId = link.gasto.id;
+            const amt = Number(link.monto_asociado || link.gasto.monto || 0);
+            gastoCombinedTotalMap[gId] = (gastoCombinedTotalMap[gId] || 0) + amt;
+          }
+          if (link.pedido?.id) {
+            const pId = link.pedido.id;
+            const amt = Number(link.monto_asociado || link.pedido.precio_total || 0);
+            pedidoCombinedTotalMap[pId] = (pedidoCombinedTotalMap[pId] || 0) + amt;
+          }
+        });
+      }
+    });
+
+    movimientos.forEach((m) => {
+      const isDirectMatch =
+        m.concepto?.toLowerCase().includes(b) ||
+        m.referencia?.toLowerCase().includes(b) ||
+        m.rfc_proveedor?.toLowerCase().includes(b) ||
+        matchesAmount(m.monto, b) ||
+        matchesAmount(m.retiro, b) ||
+        matchesAmount(m.deposito, b);
+
+      if (m.conciliaciones_bancarias) {
+        let totalMovAcumulado = 0;
+        m.conciliaciones_bancarias.forEach((link: any) => {
+          const g = link.gasto;
+          if (g) {
+            const combinedTotal = gastoCombinedTotalMap[g.id] || g.monto;
+            totalMovAcumulado += Number(link.monto_asociado || g.monto || 0);
+
+            const gastoMatches =
+              isDirectMatch ||
+              g.concepto?.toLowerCase().includes(b) ||
+              g.uuid_fiscal?.toLowerCase().includes(b) ||
+              g.folio_factura?.toLowerCase().includes(b) ||
+              g.proveedores?.nombre_comercial?.toLowerCase().includes(b) ||
+              g.proveedores?.rfc?.toLowerCase().includes(b) ||
+              matchesAmount(g.monto, b) ||
+              matchesAmount(link.monto_asociado, b) ||
+              matchesAmount(combinedTotal, b);
+
+            if (gastoMatches) {
+              matchingGastoIds.add(g.id);
+            }
+          }
+
+          const p = link.pedido;
+          if (p) {
+            const combinedTotal = pedidoCombinedTotalMap[p.id] || p.precio_total;
+            totalMovAcumulado += Number(link.monto_asociado || p.precio_total || 0);
+
+            const pedidoMatches =
+              isDirectMatch ||
+              p.numero_pedido?.toLowerCase().includes(b) ||
+              p.folio_factura?.toLowerCase().includes(b) ||
+              p.cliente_nombre?.toLowerCase().includes(b) ||
+              p.clientes?.nombre_local?.toLowerCase().includes(b) ||
+              p.clientes?.rfc?.toLowerCase().includes(b) ||
+              matchesAmount(p.precio_total, b) ||
+              matchesAmount(link.monto_asociado, b) ||
+              matchesAmount(combinedTotal, b);
+
+            if (pedidoMatches) {
+              matchingPedidoIds.add(p.id);
+            }
+          }
+        });
+
+        if (matchesAmount(totalMovAcumulado, b)) {
+          m.conciliaciones_bancarias.forEach((link: any) => {
+            if (link.gasto?.id) matchingGastoIds.add(link.gasto.id);
+            if (link.pedido?.id) matchingPedidoIds.add(link.pedido.id);
+          });
+        }
+      }
+    });
+  }
+
   return movimientos.filter((m) => {
     if (cuentaId && m.cuenta_bancaria_id !== cuentaId) return false;
     if (busqueda.trim()) {
-      const b = busqueda.toLowerCase();
-      if (
-        !m.concepto?.toLowerCase().includes(b) &&
-        !m.referencia?.toLowerCase().includes(b) &&
-        !String(m.monto).includes(b) &&
-        !m.rfc_proveedor?.toLowerCase().includes(b)
-      ) return false;
+      const b = busqueda.toLowerCase().trim();
+      const directMatch =
+        m.concepto?.toLowerCase().includes(b) ||
+        m.referencia?.toLowerCase().includes(b) ||
+        m.rfc_proveedor?.toLowerCase().includes(b) ||
+        matchesAmount(m.monto, b) ||
+        matchesAmount(m.retiro, b) ||
+        matchesAmount(m.deposito, b);
+
+      const hasMatchingLink = m.conciliaciones_bancarias?.some((link: any) => {
+        return (
+          (link.gasto && matchingGastoIds.has(link.gasto.id)) ||
+          (link.pedido && matchingPedidoIds.has(link.pedido.id))
+        );
+      });
+
+      if (!directMatch && !hasMatchingLink) return false;
     }
     
-    // Tipo filter (exclusion checklist: checked = hide)
-    if (tiposSelected.includes(m.tipo_movimiento)) return false;
+    // Tipo filter (EXCLUSION: checked = hide)
+    if (tiposSelected.length > 0) {
+      const rawType = (m.tipo_movimiento || '').toLowerCase();
+      const isRetiro = rawType === 'retiro' || rawType === 'cargo' || rawType === 'egreso' || Number(m.retiro || 0) > 0 || (Number(m.monto || 0) < 0);
+      const isDeposito = rawType === 'deposito' || rawType === 'abono' || rawType === 'ingreso' || Number(m.deposito || 0) > 0 || (Number(m.monto || 0) > 0 && !isRetiro);
+
+      if (isDeposito && tiposSelected.includes('Deposito')) return false;
+      if (isRetiro && tiposSelected.includes('Retiro')) return false;
+    }
     
-    // Estatus filter (exclusion checklist: checked = hide)
-    const estatusClave = m.estatus_conciliacion_bancaria?.clave || 'pendiente';
-    if (estatusSelected.includes(estatusClave)) return false;
+    // Estatus filter (EXCLUSION: checked = hide)
+    if (estatusSelected.length > 0) {
+      const estatusClave = m.estatus_conciliacion_bancaria?.clave || 'pendiente';
+      if (estatusSelected.includes(estatusClave)) return false;
+    }
     
-    // Visibilidad filter (exclusion checklist: checked = hide)
+    // Visibilidad filter (EXCLUSION: checked = hide)
     if (visibilidadesSelected.length > 0) {
       if (visibilidadesSelected.includes('visibles_egresos') && m.visible_egresos) return false;
       if (visibilidadesSelected.includes('visibles_ingresos') && m.visible_ingresos) return false;
       if (visibilidadesSelected.includes('ocultos') && !m.visible_egresos && !m.visible_ingresos) return false;
     }
 
-    // Categoría filter (exclusion checklist: checked = hide)
-    const catId = m.categoria_movimiento_id || 'sin_categoria';
-    if (categoriasSelected.includes(catId)) return false;
+    // Categoría filter (EXCLUSION: checked = hide)
+    if (categoriasSelected.length > 0) {
+      const catId = m.categoria_movimiento_id || m.categoria_id || m.categorias_movimiento_bancario?.id;
+      const catNombre = m.categorias_movimiento_bancario?.nombre;
+
+      const isSinCategoria = !catId && !catNombre;
+      if (isSinCategoria && categoriasSelected.includes('sin_categoria')) return false;
+      if (catId && categoriasSelected.includes(catId)) return false;
+      if (catNombre && categoriasSelected.includes(catNombre)) return false;
+    }
     
     return true;
   });
@@ -324,6 +470,239 @@ export default function BancoTab({
     }
     return {};
   });
+
+  // ── Estados y lógica para Sección Atemporal de Movimientos No Deducibles ────────
+  const [cierresMensualesMap, setCierresMensualesMap] = React.useState<Record<string, string>>({});
+  const [filtroMesAtemporal, setFiltroMesAtemporal] = React.useState<string>('');
+  const [filtroCicloAtemporal, setFiltroCicloAtemporal] = React.useState<string>('todos');
+  const [filtroEstatusNoDeducible, setFiltroEstatusNoDeducible] = React.useState<string>('todos');
+  const [busquedaAtemporal, setBusquedaAtemporal] = React.useState<string>('');
+  const [showFiltrosAtemporal, setShowFiltrosAtemporal] = React.useState<boolean>(false);
+  const [tiposAtemporalSelected, setTiposAtemporalSelected] = React.useState<string[]>([]);
+  const [estatusAtemporalSelected, setEstatusAtemporalSelected] = React.useState<string[]>([]);
+  const [ciclosAtemporalSelected, setCiclosAtemporalSelected] = React.useState<string[]>([]);
+  const [categoriasAtemporalSelected, setCategoriasAtemporalSelected] = React.useState<string[]>([]);
+  const [pageAtemporal, setPageAtemporal] = React.useState<number>(0);
+  const pageSizeAtemporal = 10;
+
+  React.useEffect(() => {
+    const fetchCierres = async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        const companyId = session?.user?.user_metadata?.empresa_id || localStorage.getItem('seimenjo_empresa_id');
+        if (!companyId) return;
+
+        const { data } = await supabase
+          .from('cierres_mensuales')
+          .select('mes, estatus')
+          .eq('empresa_id', companyId);
+
+        if (data) {
+          const map: Record<string, string> = {};
+          data.forEach((item: { mes: string; estatus: string }) => {
+            map[item.mes] = item.estatus;
+          });
+          setCierresMensualesMap(map);
+        }
+      } catch (err) {
+        console.error('Error al cargar cierres mensuales:', err);
+      }
+    };
+    fetchCierres();
+  }, []);
+
+  const getPeriodStatusForMov = React.useCallback((fecha?: string) => {
+    if (!fecha) return { clave: 'abierto', label: 'Periodo Abierto', bgClass: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30' };
+    const mesKey = fecha.substring(0, 7);
+    const status = cierresMensualesMap[mesKey] || 'abierto';
+
+    if (status === 'cerrado_definitivo' || status === 'cerrado') {
+      return { clave: 'cerrado_definitivo', label: 'Cerrado Definitivo', bgClass: 'bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/30' };
+    } else if (status === 'pre_cerrado') {
+      return { clave: 'pre_cerrado', label: 'Pre-cerrado', bgClass: 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/30' };
+    }
+    return { clave: 'abierto', label: 'Periodo Abierto', bgClass: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30' };
+  }, [cierresMensualesMap]);
+
+  const opcionesMesesAtemporal = React.useMemo(() => {
+    const setMeses = new Set<string>();
+    movimientos.forEach((m: any) => {
+      if (m.fecha) setMeses.add(m.fecha.substring(0, 7));
+    });
+    return Array.from(setMeses).sort().reverse();
+  }, [movimientos]);
+
+  const atemporalNoDeducibles = React.useMemo(() => {
+    return movimientos.filter((m: any) => {
+      const clave = m.estatus_conciliacion_bancaria?.clave;
+      const hasPostCloseNote = m.comentarios?.includes('Conciliado después del periodo de cierre');
+      const isNoDeducibleStatus = clave === 'no_deducible' || clave === 'pendiente' || clave === 'incompleto' || clave === 'no_detectado';
+      const hasMissingProof = !m.xml_url && !m.pdf_factura_url && !m.pdf_ticket_url && !m.soporte_reembolso_url;
+
+      // Exclusión estricta de Ingresos / Depósitos (considerar ÚNICAMENTE egresos / retiros de los estados de cuenta)
+      const rawType = (m.tipo_movimiento || '').toLowerCase();
+      const isOutflow = rawType === 'retiro' || rawType === 'cargo' || rawType === 'egreso' || Number(m.retiro || 0) > 0 || (Number(m.monto || 0) < 0) || m.tipo_movimiento === 'Retiro';
+      if (!isOutflow) return false;
+
+      // Si no hay filtro de estatus seleccionado explícitamente, aplicamos el filtro por defecto de candidatos no deducibles / pendientes / post-cierre
+      if (estatusAtemporalSelected.length === 0 && filtroEstatusNoDeducible === 'todos') {
+        const isCandidate = isNoDeducibleStatus || hasMissingProof || hasPostCloseNote;
+        if (!isCandidate) return false;
+      }
+
+      // Filtro por cuenta seleccionada en cabecera principal
+      if (selectedCuentaId && m.cuenta_bancaria_id !== selectedCuentaId) {
+        return false;
+      }
+
+      // Búsqueda en texto
+      if (busquedaAtemporal.trim()) {
+        const q = busquedaAtemporal.toLowerCase().trim();
+        const inConcepto = m.concepto?.toLowerCase().includes(q);
+        const inRef = m.referencia?.toLowerCase().includes(q);
+        const inCuenta = m.cuentas_bancarias?.nombre?.toLowerCase().includes(q);
+        const inComments = m.comentarios?.toLowerCase().includes(q);
+        const inMonto = String(m.monto || m.retiro || m.deposito || '').includes(q);
+        if (!inConcepto && !inRef && !inCuenta && !inComments && !inMonto) return false;
+      }
+
+      // Filtro por Mes (Atemporal)
+      if (filtroMesAtemporal) {
+        if (!m.fecha || !m.fecha.startsWith(filtroMesAtemporal)) return false;
+      }
+
+      // Checklist: Tipo de Movimiento (EXCLUSION: checked = Ocultar)
+      if (tiposAtemporalSelected.length > 0) {
+        const rawType = (m.tipo_movimiento || '').toLowerCase();
+        const isRetiro = rawType === 'retiro' || rawType === 'cargo' || rawType === 'egreso' || Number(m.retiro || 0) > 0 || (Number(m.monto || 0) < 0);
+        const isDeposito = rawType === 'deposito' || rawType === 'abono' || rawType === 'ingreso' || Number(m.deposito || 0) > 0 || (Number(m.monto || 0) > 0 && !isRetiro);
+
+        if (isDeposito && tiposAtemporalSelected.includes('Deposito')) return false;
+        if (isRetiro && tiposAtemporalSelected.includes('Retiro')) return false;
+      }
+
+      // Checklist: Estatus Conciliación (EXCLUSION: checked = Ocultar)
+      if (estatusAtemporalSelected.length > 0) {
+        const currentClave = hasPostCloseNote ? 'conciliado_post_cierre' : (clave || 'pendiente');
+        if (estatusAtemporalSelected.includes(currentClave) || (clave && estatusAtemporalSelected.includes(clave))) {
+          return false;
+        }
+      }
+
+      // Checklist: Ciclo Contable (EXCLUSION: checked = Ocultar)
+      if (ciclosAtemporalSelected.length > 0) {
+        const pStatus = getPeriodStatusForMov(m.fecha).clave;
+        if (ciclosAtemporalSelected.includes(pStatus)) return false;
+      }
+
+      // Checklist: Categoría de movimiento (EXCLUSION: checked = Ocultar)
+      if (categoriasAtemporalSelected.length > 0) {
+        const catId = m.categoria_movimiento_id || m.categoria_id || m.categorias_movimiento_bancario?.id;
+        const catNombre = m.categorias_movimiento_bancario?.nombre;
+
+        const isSinCategoria = !catId && !catNombre;
+        if (isSinCategoria && categoriasAtemporalSelected.includes('sin_categoria')) return false;
+        if (catId && categoriasAtemporalSelected.includes(catId)) return false;
+        if (catNombre && categoriasAtemporalSelected.includes(catNombre)) return false;
+      }
+
+      // Select Estatus alternativo
+      if (filtroEstatusNoDeducible !== 'todos') {
+        if (filtroEstatusNoDeducible === 'conciliado_post_cierre' && !hasPostCloseNote) return false;
+        if (filtroEstatusNoDeducible === 'no_deducibles' && clave !== 'no_deducible') return false;
+        if (filtroEstatusNoDeducible === 'sin_comprobar' && (clave === 'comprobado' || clave === 'conciliado') && !hasPostCloseNote) return false;
+      }
+
+      // Select Ciclo alternativo
+      if (filtroCicloAtemporal !== 'todos') {
+        const pStatus = getPeriodStatusForMov(m.fecha).clave;
+        if (filtroCicloAtemporal === 'solo_cerrados' && pStatus !== 'cerrado_definitivo' && pStatus !== 'pre_cerrado') return false;
+        if (filtroCicloAtemporal === 'solo_abiertos' && pStatus !== 'abierto') return false;
+      }
+
+      return true;
+    });
+  }, [
+    movimientos,
+    busquedaAtemporal,
+    filtroMesAtemporal,
+    selectedCuentaId,
+    tiposAtemporalSelected,
+    estatusAtemporalSelected,
+    ciclosAtemporalSelected,
+    categoriasAtemporalSelected,
+    filtroCicloAtemporal,
+    filtroEstatusNoDeducible,
+    getPeriodStatusForMov
+  ]);
+
+  const exportAtemporalToExcel = async () => {
+    try {
+      const XLSX = await import('xlsx');
+      const rows = atemporalNoDeducibles.map((m: any) => {
+        const pInfo = getPeriodStatusForMov(m.fecha);
+        const hasPostCloseNote = m.comentarios?.includes('Conciliado después del periodo de cierre');
+        const isOutflow = m.tipo_movimiento === 'Retiro' || Number(m.retiro || 0) > 0;
+        return {
+          'Fecha': m.fecha ? new Date(m.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : '',
+          'Mes (Periodo)': m.fecha ? m.fecha.substring(0, 7) : '',
+          'Estado Ciclo': pInfo.label,
+          'Cuenta Bancaria': m.cuentas_bancarias?.nombre || 'BBVA',
+          'Tipo Movimiento': m.tipo_movimiento || (isOutflow ? 'Retiro' : 'Deposito'),
+          'Concepto': m.concepto || '',
+          'Referencia': m.referencia || '',
+          'Monto Total': Math.abs(Number(m.monto || m.retiro || m.deposito || 0)),
+          'Estatus Conciliación': m.estatus_conciliacion_bancaria?.nombre || (hasPostCloseNote ? 'Conciliado Post-Cierre' : 'No Deducible'),
+          'Comprobante XML': m.xml_url ? 'Sí' : 'No',
+          'Comprobante Ticket/PDF': (m.pdf_factura_url || m.pdf_ticket_url) ? 'Sí' : 'No',
+          'Soporte Reembolso': m.soporte_reembolso_url ? 'Sí' : 'No',
+          'Nota de Auditoría': m.comentarios || ''
+        };
+      });
+
+      const ws = XLSX.utils.json_to_sheet(rows);
+      const maxLens = Object.keys(rows[0] || {}).reduce((acc: any, key) => {
+        let maxL = key.length;
+        rows.forEach((row: any) => {
+          const val = String(row[key] || '');
+          if (val.length > maxL) maxL = val.length;
+        });
+        acc[key] = Math.min(maxL + 2, 40);
+        return acc;
+      }, {});
+
+      ws['!cols'] = Object.keys(maxLens).map(key => ({ wch: maxLens[key] }));
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'No Deducibles Atemporal');
+      XLSX.writeFile(wb, 'Reporte_Movimientos_No_Deducibles_Atemporal.xlsx');
+    } catch (err: any) {
+      console.error('Error al exportar reporte no deducible atemporal:', err);
+      alert(`Error al generar reporte Excel: ${err.message}`);
+    }
+  };
+
+  const totalRegistrosAtemporal = atemporalNoDeducibles.length;
+  const montoTotalAtemporal = React.useMemo(() => {
+    return atemporalNoDeducibles.reduce((acc, m) => acc + Math.abs(Number(m.monto || m.retiro || m.deposito || 0)), 0);
+  }, [atemporalNoDeducibles]);
+
+  const countCerradosAtemporal = React.useMemo(() => {
+    return atemporalNoDeducibles.filter(m => {
+      const p = getPeriodStatusForMov(m.fecha).clave;
+      return p === 'cerrado_definitivo' || p === 'pre_cerrado';
+    }).length;
+  }, [atemporalNoDeducibles, getPeriodStatusForMov]);
+
+  const countPostCierreAtemporal = React.useMemo(() => {
+    return atemporalNoDeducibles.filter(m => m.comentarios?.includes('Conciliado después del periodo de cierre')).length;
+  }, [atemporalNoDeducibles]);
+
+  const paginadosAtemporal = React.useMemo(() => {
+    const start = pageAtemporal * pageSizeAtemporal;
+    return atemporalNoDeducibles.slice(start, start + pageSizeAtemporal);
+  }, [atemporalNoDeducibles, pageAtemporal]);
+
+  const totalPaginasAtemporal = Math.max(1, Math.ceil(atemporalNoDeducibles.length / pageSizeAtemporal));
 
   const toggleFacturadoTercero = (id: string) => {
     setFacturadosTerceros(prev => {
@@ -1033,6 +1412,7 @@ export default function BancoTab({
         {([
           { key: 'movimientos', label: 'Movimientos de Cuenta', icon: <List size={14} /> },
           { key: 'ingresos_comprobantes', label: 'Ingresos y Comprobantes', icon: <CreditCard size={14} /> },
+          { key: 'no_deducibles', label: 'No Deducibles (Atemporal)', icon: <AlertTriangle size={14} /> },
           { key: 'cargas', label: 'Cargas de Estado de Cuenta', icon: <FileSpreadsheet size={14} /> },
         ] as const).map(({ key, label, icon }) => {
           const isActive = bancoSubTab === key || (key === 'ingresos_comprobantes' && (bancoSubTab === 'global' || bancoSubTab === 'comprobantes'));
@@ -1324,7 +1704,11 @@ export default function BancoTab({
                 <div className="p-3 bg-amber-500/10 border-b border-amber-200 dark:border-amber-900/50 flex items-center justify-between text-xs font-semibold animate-in slide-in-from-top-2 duration-200 gap-4 flex-wrap">
                   <div className="flex items-center gap-2">
                     <span className="text-amber-800 dark:text-amber-400 font-bold">
-                      {selectedMovimientos.length} movimientos seleccionados
+                      {selectedMovimientos.length} movimientos seleccionados ({formatCurrency(
+                        movimientos
+                          .filter(m => selectedMovimientos.includes(m.id))
+                          .reduce((s, m) => s + Math.abs(Number(m.monto) || (m.tipo_movimiento === 'Retiro' ? Number(m.retiro) : Number(m.deposito)) || 0), 0)
+                      )})
                     </span>
                     <button
                       onClick={() => setSelectedMovimientos([])}
@@ -1334,6 +1718,30 @@ export default function BancoTab({
                     </button>
                   </div>
                   <div className="flex items-center gap-4 flex-wrap">
+                    {selectedMovimientos.length > 0 && (() => {
+                      const selectedMovsObjects = movimientos.filter(m => selectedMovimientos.includes(m.id));
+                      const selectedSum = selectedMovsObjects.reduce((acc, m) => {
+                        const mVal = Math.abs(Number(m.monto) || (m.tipo_movimiento === 'Retiro' ? Number(m.retiro) : Number(m.deposito)) || 0);
+                        return acc + mVal;
+                      }, 0);
+                      const firstType = selectedMovsObjects[0]?.tipo_movimiento;
+                      const allSameType = selectedMovsObjects.length > 0 && selectedMovsObjects.every(m => m.tipo_movimiento === firstType);
+
+                      if (allSameType && handleOpenReconcileModal) {
+                        return (
+                          <button
+                            type="button"
+                            onClick={() => handleOpenReconcileModal(selectedMovsObjects)}
+                            className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-xs font-bold transition-all shadow flex items-center gap-1.5"
+                            title="Sumar y conciliar los pagos seleccionados contra una factura"
+                          >
+                            <Link size={13} /> Conciliar Pagos Seleccionados ({formatCurrency(selectedSum)})
+                          </button>
+                        );
+                      }
+                      return null;
+                    })()}
+
                     <div className="flex items-center gap-2">
                       <span className="text-[11px] text-gray-600 dark:text-gray-400 font-bold">Asignar Categoría en Lote:</span>
                       <select
@@ -1530,6 +1938,69 @@ export default function BancoTab({
 
                               return (
                                 <div className="mt-2 space-y-1.5 font-sans">
+                                  {/* BANNER VISUAL DE PAGOS VINCULADOS / DIVIDIDOS ENTRE MULTIPLES MOVIMIENTOS */}
+                                  {(() => {
+                                    const linkedMovementsMap: any[] = [];
+                                    m.conciliaciones_bancarias.forEach((link: any) => {
+                                      const isG = !!link.gasto;
+                                      const targetId = isG ? link.gasto?.id : link.pedido?.id;
+                                      if (!targetId) return;
+
+                                      movimientos.forEach((otherM: any) => {
+                                        if (otherM.id === m.id) return;
+                                        const oLink = otherM.conciliaciones_bancarias?.find((l: any) =>
+                                          (isG && l.gasto?.id === targetId) || (!isG && l.pedido?.id === targetId)
+                                        );
+                                        if (oLink && !linkedMovementsMap.some(x => x.id === otherM.id)) {
+                                          linkedMovementsMap.push({
+                                            ...otherM,
+                                            monto_asociado: oLink.monto_asociado || Math.abs(otherM.monto)
+                                          });
+                                        }
+                                      });
+                                    });
+
+                                    if (linkedMovementsMap.length === 0) return null;
+
+                                    const allMovs = [m, ...linkedMovementsMap];
+                                    const totalPagadoAcumulado = allMovs.reduce((sum, x) => sum + Math.abs(Number(x.monto)), 0);
+
+                                    return (
+                                      <div className="p-2.5 rounded-xl bg-indigo-50 dark:bg-indigo-955/40 border border-indigo-200 dark:border-indigo-800 text-[10px] text-indigo-900 dark:text-indigo-200 font-sans space-y-1 shadow-sm">
+                                        <div className="flex items-center justify-between font-extrabold flex-wrap gap-1">
+                                          <span className="flex items-center gap-1.5">
+                                            <Link size={13} className="text-indigo-600 dark:text-indigo-400" />
+                                            <span>🔗 FACTURA COMPARTIDA / DIVIDIDA EN {allMovs.length} PAGOS BANCARIOS VINCULADOS</span>
+                                          </span>
+                                          <span className="font-mono text-[10px] text-indigo-800 dark:text-indigo-200 bg-indigo-100 dark:bg-indigo-900/60 px-2 py-0.5 rounded-lg font-black">
+                                            Suma Pagos: {formatCurrency(totalPagadoAcumulado)}
+                                          </span>
+                                        </div>
+                                        <div className="flex flex-wrap gap-1.5 pt-1">
+                                          {allMovs.map((movItem: any, oidx: number) => {
+                                            const isCurrent = movItem.id === m.id;
+                                            const fDate = movItem.fecha ? new Date(movItem.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : '';
+                                            return (
+                                              <span
+                                                key={oidx}
+                                                className={`px-2 py-1 rounded-lg border text-[9px] font-mono flex items-center gap-1.5 ${
+                                                  isCurrent
+                                                    ? 'bg-indigo-600 text-white border-indigo-700 font-bold shadow-xs'
+                                                    : 'bg-white dark:bg-gray-900 text-indigo-900 dark:text-indigo-200 border-indigo-200 dark:border-indigo-800'
+                                                }`}
+                                              >
+                                                <span>{isCurrent ? '👉 Este pago:' : '🔗 Pago par:'}</span>
+                                                <span>📅 {fDate}</span>
+                                                <strong className="truncate max-w-[140px]" title={movItem.concepto}>{movItem.concepto}</strong>
+                                                <span className="font-bold">({formatCurrency(Math.abs(Number(movItem.monto)))})</span>
+                                              </span>
+                                            );
+                                          })}
+                                        </div>
+                                      </div>
+                                    );
+                                  })()}
+
                                   {/* Encabezado con el ACUMULADO DEL GASTO (Suma de Facturas) */}
                                   <div className="flex items-center justify-between bg-emerald-100/80 dark:bg-emerald-950/40 p-2 rounded-xl border border-emerald-200 dark:border-emerald-800 text-[11px]">
                                     <div className="flex items-center gap-2 flex-wrap">
@@ -3579,6 +4050,419 @@ export default function BancoTab({
           </div>
         )}
 
+        {/* ── SUB-TAB 5: MOVIMIENTOS NO DEDUCIBLES (ATEMPORAL) ─────────────── */}
+        {bancoSubTab === 'no_deducibles' && (
+          <div className="flex-1 flex flex-col gap-4 p-4 overflow-hidden min-h-0">
+            {/* TARJETAS KPI RESUMEN */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 shrink-0">
+              <div className="bg-white dark:bg-gray-950 p-3.5 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm flex items-center justify-between">
+                <div>
+                  <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block">Egresos No Deducibles</span>
+                  <span className="text-xl font-extrabold text-gray-900 dark:text-white font-mono mt-0.5 block">{totalRegistrosAtemporal}</span>
+                </div>
+                <div className="p-2.5 bg-red-500/10 text-red-500 rounded-xl">
+                  <AlertTriangle size={20} />
+                </div>
+              </div>
+
+              <div className="bg-white dark:bg-gray-950 p-3.5 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm flex items-center justify-between">
+                <div>
+                  <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block">Monto Egreso No Deducible</span>
+                  <span className="text-xl font-extrabold text-red-600 dark:text-red-400 font-mono mt-0.5 block">{formatCurrency(montoTotalAtemporal)}</span>
+                </div>
+                <div className="p-2.5 bg-red-500/10 text-red-500 rounded-xl">
+                  <Scale size={20} />
+                </div>
+              </div>
+
+              <div className="bg-white dark:bg-gray-950 p-3.5 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm flex items-center justify-between">
+                <div>
+                  <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block">En Periodos Cerrados</span>
+                  <span className="text-xl font-extrabold text-amber-600 dark:text-amber-400 font-mono mt-0.5 block">{countCerradosAtemporal}</span>
+                </div>
+                <div className="p-2.5 bg-amber-500/10 text-amber-500 rounded-xl">
+                  <Lock size={20} />
+                </div>
+              </div>
+
+              <div className="bg-white dark:bg-gray-950 p-3.5 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm flex items-center justify-between">
+                <div>
+                  <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block">Conciliados Post-Cierre</span>
+                  <span className="text-xl font-extrabold text-emerald-600 dark:text-emerald-400 font-mono mt-0.5 block">{countPostCierreAtemporal}</span>
+                </div>
+                <div className="p-2.5 bg-emerald-500/10 text-emerald-500 rounded-xl">
+                  <Tag size={20} />
+                </div>
+              </div>
+            </div>
+
+            {/* TABLA Y FILTROS ATEMPORALES */}
+            <div className="flex-1 flex flex-col min-h-0 bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden shadow-sm">
+              {/* BARRA DE FILTROS PRINCIPAL */}
+              <div className="p-3.5 bg-gray-50/50 dark:bg-gray-900/40 border-b border-gray-200 dark:border-gray-800 flex flex-col gap-3.5 shrink-0">
+                <div className="flex gap-3 items-center flex-wrap">
+                  <div className="relative flex-1 min-w-[200px]">
+                    <input
+                      type="text"
+                      placeholder="Buscar concepto, ref, rfc..."
+                      value={busquedaAtemporal}
+                      onChange={(e) => { setBusquedaAtemporal(e.target.value); setPageAtemporal(0); }}
+                      className="w-full bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 px-3 py-2 rounded-lg text-xs outline-none focus:ring-1 focus:ring-amber-500 transition-all font-mono"
+                    />
+                  </div>
+
+                  <select
+                    value={selectedCuentaId}
+                    onChange={(e) => { setSelectedCuentaId(e.target.value); setPageAtemporal(0); }}
+                    className="bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 px-3 py-2 rounded-lg text-xs outline-none focus:ring-1 focus:ring-amber-500 transition-all text-gray-900 dark:text-gray-100 font-sans cursor-pointer font-semibold"
+                  >
+                    <option value="">-- Seleccionar Cuenta --</option>
+                    {cuentasBancarias?.map(c => (
+                      <option key={c.id} value={c.id}>{c.nombre} ({c.moneda})</option>
+                    ))}
+                  </select>
+
+                  <select
+                    value={filtroMesAtemporal}
+                    onChange={(e) => { setFiltroMesAtemporal(e.target.value); setPageAtemporal(0); }}
+                    className="bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 px-3 py-2 rounded-lg text-xs font-bold outline-none focus:ring-1 focus:ring-amber-500 transition-all cursor-pointer font-sans"
+                  >
+                    <option value="">🗓️ Todos los Meses (Atemporal)</option>
+                    {opcionesMesesAtemporal.map((m) => (
+                      <option key={m} value={m}>
+                        {new Date(m + '-02').toLocaleDateString('es-MX', { year: 'numeric', month: 'long', timeZone: 'UTC' })}
+                      </option>
+                    ))}
+                  </select>
+
+                  <button
+                    onClick={exportAtemporalToExcel}
+                    className="px-3.5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 shadow-md cursor-pointer"
+                    title="Exportar Reporte Excel de Movimientos No Deducibles"
+                  >
+                    <FileSpreadsheet size={14} />
+                    Exportar Reporte Excel
+                  </button>
+
+                  <button
+                    onClick={() => setShowFiltrosAtemporal(!showFiltrosAtemporal)}
+                    className={`px-3.5 py-2 rounded-lg text-xs font-bold transition-all shrink-0 flex items-center gap-1.5 border cursor-pointer ${
+                      showFiltrosAtemporal || tiposAtemporalSelected.length > 0 || estatusAtemporalSelected.length > 0 || ciclosAtemporalSelected.length > 0 || categoriasAtemporalSelected.length > 0
+                        ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/30'
+                        : 'bg-gray-200 dark:bg-gray-800 text-gray-700 dark:text-gray-300 border-transparent hover:bg-gray-300 dark:hover:bg-gray-700'
+                    }`}
+                  >
+                    <Filter size={14} />
+                    <span>{showFiltrosAtemporal ? 'Ocultar Filtros' : 'Mostrar Filtros'}</span>
+                    {(tiposAtemporalSelected.length > 0 || estatusAtemporalSelected.length > 0 || ciclosAtemporalSelected.length > 0 || categoriasAtemporalSelected.length > 0) && (
+                      <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+                    )}
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setTiposAtemporalSelected([]);
+                      setEstatusAtemporalSelected([]);
+                      setCiclosAtemporalSelected([]);
+                      setCategoriasAtemporalSelected([]);
+                      setBusquedaAtemporal('');
+                      setFiltroMesAtemporal('');
+                      setFiltroCicloAtemporal('todos');
+                      setFiltroEstatusNoDeducible('todos');
+                      setPageAtemporal(0);
+                    }}
+                    className="px-3.5 py-2 bg-gray-200 dark:bg-gray-800 text-gray-700 dark:text-gray-300 rounded-lg text-xs font-bold hover:bg-gray-300 dark:hover:bg-gray-700 transition-all shrink-0 cursor-pointer"
+                  >
+                    Restablecer Filtros
+                  </button>
+                </div>
+
+                {/* GRID DE CHECKLISTS DE FILTRO (COLAPSABLE) */}
+                {showFiltrosAtemporal && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-xs font-sans animate-in fade-in duration-200">
+                    {/* TIPO DE MOVIMIENTO */}
+                    <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 p-3 rounded-xl flex flex-col shadow-sm">
+                      <span className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2 block">Tipo de Movimiento</span>
+                      <div className="space-y-1.5 flex-1">
+                        <label className="flex items-center gap-2 cursor-pointer text-gray-700 dark:text-gray-300 text-[11px] font-semibold hover:text-gray-900 dark:hover:text-white">
+                          <input
+                            type="checkbox"
+                            checked={tiposAtemporalSelected.includes('Deposito')}
+                            onChange={(e) => {
+                              const newTipos = e.target.checked ? [...tiposAtemporalSelected, 'Deposito'] : tiposAtemporalSelected.filter(t => t !== 'Deposito');
+                              setTiposAtemporalSelected(newTipos);
+                              setPageAtemporal(0);
+                            }}
+                            className="w-3.5 h-3.5 rounded text-amber-500 focus:ring-amber-500 border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950"
+                          />
+                          <span>Depósitos (+)</span>
+                        </label>
+                        <label className="flex items-center gap-2 cursor-pointer text-gray-700 dark:text-gray-300 text-[11px] font-semibold hover:text-gray-900 dark:hover:text-white">
+                          <input
+                            type="checkbox"
+                            checked={tiposAtemporalSelected.includes('Retiro')}
+                            onChange={(e) => {
+                              const newTipos = e.target.checked ? [...tiposAtemporalSelected, 'Retiro'] : tiposAtemporalSelected.filter(t => t !== 'Retiro');
+                              setTiposAtemporalSelected(newTipos);
+                              setPageAtemporal(0);
+                            }}
+                            className="w-3.5 h-3.5 rounded text-amber-500 focus:ring-amber-500 border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950"
+                          />
+                          <span>Retiros (-)</span>
+                        </label>
+                      </div>
+                    </div>
+
+                    {/* ESTATUS CONCILIACIÓN */}
+                    <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 p-3 rounded-xl flex flex-col shadow-sm">
+                      <span className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2 block">Estatus Conciliación</span>
+                      <div className="space-y-1.5 flex-1 max-h-32 overflow-y-auto pr-1">
+                        {[
+                          { clave: 'no_deducible', nombre: 'Movimiento no Deducible' },
+                          { clave: 'pendiente', nombre: 'Pendiente de Conciliar' },
+                          { clave: 'incompleto', nombre: 'Incompleto' },
+                          { clave: 'conciliado_post_cierre', nombre: '🏷️ Conciliado Post-Cierre' },
+                          { clave: 'comprobado', nombre: 'Comprobado' }
+                        ].map((e) => (
+                          <label key={e.clave} className="flex items-center gap-2 cursor-pointer text-gray-700 dark:text-gray-300 text-[11px] font-semibold hover:text-gray-900 dark:hover:text-white">
+                            <input
+                              type="checkbox"
+                              checked={estatusAtemporalSelected.includes(e.clave)}
+                              onChange={(chk) => {
+                                const newEstatus = chk.target.checked ? [...estatusAtemporalSelected, e.clave] : estatusAtemporalSelected.filter(es => es !== e.clave);
+                                setEstatusAtemporalSelected(newEstatus);
+                                setPageAtemporal(0);
+                              }}
+                              className="w-3.5 h-3.5 rounded text-amber-500 focus:ring-amber-500 border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950"
+                            />
+                            <span>{e.nombre}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* CICLO CONTABLE */}
+                    <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 p-3 rounded-xl flex flex-col shadow-sm">
+                      <span className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2 block">Ciclo Contable</span>
+                      <div className="space-y-1.5 flex-1">
+                        {[
+                          { clave: 'cerrado_definitivo', nombre: '🔴 Cerrado Definitivo' },
+                          { clave: 'pre_cerrado', nombre: '🟡 Pre-cerrado' },
+                          { clave: 'abierto', nombre: '🟢 Periodo Abierto' }
+                        ].map((c) => (
+                          <label key={c.clave} className="flex items-center gap-2 cursor-pointer text-gray-700 dark:text-gray-300 text-[11px] font-semibold hover:text-gray-900 dark:hover:text-white">
+                            <input
+                              type="checkbox"
+                              checked={ciclosAtemporalSelected.includes(c.clave)}
+                              onChange={(chk) => {
+                                const newCiclos = chk.target.checked ? [...ciclosAtemporalSelected, c.clave] : ciclosAtemporalSelected.filter(ci => ci !== c.clave);
+                                setCiclosAtemporalSelected(newCiclos);
+                                setPageAtemporal(0);
+                              }}
+                              className="w-3.5 h-3.5 rounded text-amber-500 focus:ring-amber-500 border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950"
+                            />
+                            <span>{c.nombre}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* CATEGORÍA DE MOVIMIENTO */}
+                    <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 p-3 rounded-xl flex flex-col shadow-sm">
+                      <span className="text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2 block">Categoría de Movimiento</span>
+                      <div className="space-y-1.5 flex-1 max-h-32 overflow-y-auto pr-1">
+                        <label className="flex items-center gap-2 cursor-pointer text-gray-700 dark:text-gray-300 text-[11px] font-semibold hover:text-gray-900 dark:hover:text-white">
+                          <input
+                            type="checkbox"
+                            checked={categoriasAtemporalSelected.includes('sin_categoria')}
+                            onChange={(chk) => {
+                              const newCats = chk.target.checked ? [...categoriasAtemporalSelected, 'sin_categoria'] : categoriasAtemporalSelected.filter(c => c !== 'sin_categoria');
+                              setCategoriasAtemporalSelected(newCats);
+                              setPageAtemporal(0);
+                            }}
+                            className="w-3.5 h-3.5 rounded text-amber-500 focus:ring-amber-500 border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950"
+                          />
+                          <span className="italic text-gray-400">Sin Categoría</span>
+                        </label>
+                        {categoriasMovimiento.map((cat) => (
+                          <label key={cat.id} className="flex items-center gap-2 cursor-pointer text-gray-700 dark:text-gray-300 text-[11px] font-semibold hover:text-gray-900 dark:hover:text-white">
+                            <input
+                              type="checkbox"
+                              checked={categoriasAtemporalSelected.includes(cat.id)}
+                              onChange={(chk) => {
+                                const newCats = chk.target.checked ? [...categoriasAtemporalSelected, cat.id] : categoriasAtemporalSelected.filter(c => c !== cat.id);
+                                setCategoriasAtemporalSelected(newCats);
+                                setPageAtemporal(0);
+                              }}
+                              className="w-3.5 h-3.5 rounded text-amber-500 focus:ring-amber-500 border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950"
+                            />
+                            <span>{cat.nombre}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* TABLA ATEMPORAL */}
+              <div className="flex-1 overflow-auto">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="border-b border-gray-200 dark:border-gray-800 bg-gray-100/70 dark:bg-gray-900/50 text-[10px] uppercase font-bold text-gray-500 tracking-wider sticky top-0 backdrop-blur-md">
+                      <th className="p-3">Fecha / Mes</th>
+                      <th className="p-3">Estado de Periodo</th>
+                      <th className="p-3">Concepto & Cuenta</th>
+                      <th className="p-3 text-right">Monto</th>
+                      <th className="p-3">Estatus Conciliación</th>
+                      <th className="p-3">Soporte Adjunto</th>
+                      <th className="p-3">Notas de Auditoría</th>
+                      <th className="p-3 text-center">Acción</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200 dark:divide-gray-800 text-xs">
+                    {paginadosAtemporal.length === 0 ? (
+                      <tr>
+                        <td colSpan={8} className="p-8 text-center text-gray-400">
+                          No se encontraron movimientos no deducibles con los filtros seleccionados.
+                        </td>
+                      </tr>
+                    ) : (
+                      paginadosAtemporal.map((m: any) => {
+                        const pInfo = getPeriodStatusForMov(m.fecha);
+                        const hasPostCloseNote = m.comentarios?.includes('Conciliado después del periodo de cierre');
+                        const isOutflow = m.tipo_movimiento === 'Retiro' || Number(m.retiro || 0) > 0;
+                        const amt = Math.abs(Number(m.monto || m.retiro || m.deposito || 0));
+
+                        return (
+                          <tr key={m.id} className="hover:bg-gray-50 dark:hover:bg-gray-900/30 transition-colors">
+                            <td className="p-3 font-mono">
+                              <div className="font-bold text-gray-900 dark:text-gray-100">
+                                {m.fecha ? new Date(m.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : '—'}
+                              </div>
+                              <div className="text-[10px] text-gray-400 font-sans font-semibold">
+                                {m.fecha ? m.fecha.substring(0, 7) : ''}
+                              </div>
+                            </td>
+
+                            <td className="p-3">
+                              <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase border ${pInfo.bgClass}`}>
+                                {pInfo.clave === 'cerrado_definitivo' ? <Lock size={10} /> : pInfo.clave === 'pre_cerrado' ? <Lock size={10} /> : <Unlock size={10} />}
+                                {pInfo.label}
+                              </span>
+                            </td>
+
+                            <td className="p-3 max-w-[260px]">
+                              <div className="font-bold text-gray-800 dark:text-gray-200 truncate" title={m.concepto}>
+                                {m.concepto}
+                              </div>
+                              <div className="text-[10px] text-gray-400 font-mono flex items-center gap-1.5 mt-0.5">
+                                <Landmark size={11} className="text-amber-500" />
+                                <span>{m.cuentas_bancarias?.nombre || 'BBVA'}</span>
+                                {m.referencia && <span>| Ref: {m.referencia}</span>}
+                              </div>
+                            </td>
+
+                            <td className="p-3 text-right font-mono font-bold">
+                              <span className={isOutflow ? 'text-red-600 dark:text-red-400' : 'text-emerald-600 dark:text-emerald-400'}>
+                                {isOutflow ? '-' : '+'}{formatCurrency(amt)}
+                              </span>
+                            </td>
+
+                            <td className="p-3">
+                              <span
+                                className="inline-block px-2.5 py-0.5 rounded-full text-[10px] font-extrabold text-white uppercase tracking-wider shadow-sm"
+                                style={{ backgroundColor: m.estatus_conciliacion_bancaria?.color || (hasPostCloseNote ? '#10B981' : '#EF4444') }}
+                              >
+                                {m.estatus_conciliacion_bancaria?.nombre || (hasPostCloseNote ? 'Conciliado Post-Cierre' : 'No Deducible')}
+                              </span>
+                            </td>
+
+                            <td className="p-3">
+                              <div className="flex flex-wrap gap-1">
+                                {m.xml_url && (
+                                  <button onClick={() => handleViewCfdi?.(m.xml_url.split(',')[0])} className="px-2 py-0.5 bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/30 rounded text-[10px] font-bold hover:bg-blue-500/20">
+                                    XML
+                                  </button>
+                                )}
+                                {m.pdf_factura_url && (
+                                  <button onClick={() => onDownloadFile?.(m.pdf_factura_url)} className="px-2 py-0.5 bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/30 rounded text-[10px] font-bold hover:bg-red-500/20">
+                                    PDF
+                                  </button>
+                                )}
+                                {m.pdf_ticket_url && (
+                                  <button onClick={() => onDownloadFile?.(m.pdf_ticket_url)} className="px-2 py-0.5 bg-violet-500/10 text-violet-600 dark:text-violet-400 border border-violet-500/30 rounded text-[10px] font-bold hover:bg-violet-500/20">
+                                    Ticket
+                                  </button>
+                                )}
+                                {m.soporte_reembolso_url && (
+                                  <button onClick={() => onDownloadFile?.(m.soporte_reembolso_url)} className="px-2 py-0.5 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 rounded text-[10px] font-bold hover:bg-emerald-500/20">
+                                    Reembolso
+                                  </button>
+                                )}
+                                {!m.xml_url && !m.pdf_factura_url && !m.pdf_ticket_url && !m.soporte_reembolso_url && (
+                                  <span className="text-[10px] text-gray-400 italic">Sin soporte</span>
+                                )}
+                              </div>
+                            </td>
+
+                            <td className="p-3 max-w-[200px]">
+                              {hasPostCloseNote ? (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-500/30 text-[10px] font-bold shadow-xs">
+                                  <Tag size={11} className="text-amber-500" />
+                                  Conciliado después de cierre
+                                </span>
+                              ) : (
+                                <span className="text-[11px] text-gray-500 truncate block" title={m.comentarios}>
+                                  {m.comentarios || 'Sin notas.'}
+                                </span>
+                              )}
+                            </td>
+
+                            <td className="p-3 text-center">
+                              {handleOpenReconcileModal && (
+                                <button
+                                  onClick={() => handleOpenReconcileModal(m)}
+                                  className="px-3 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded-lg font-bold text-[11px] shadow-sm transition-all flex items-center gap-1 mx-auto"
+                                >
+                                  <Scale size={12} /> Comprobar
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* PAGINACIÓN ATEMPORAL */}
+              <div className="p-3 border-t border-gray-200 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-900/40 flex items-center justify-between shrink-0">
+                <span className="text-xs text-gray-500 font-mono">
+                  Página {pageAtemporal + 1} de {totalPaginasAtemporal}
+                </span>
+                <div className="flex gap-2">
+                  <button
+                    disabled={pageAtemporal === 0}
+                    onClick={() => setPageAtemporal((p) => Math.max(0, p - 1))}
+                    className="px-3 py-1 border border-gray-300 dark:border-gray-700 rounded-lg text-xs font-bold disabled:opacity-40"
+                  >
+                    Anterior
+                  </button>
+                  <button
+                    disabled={pageAtemporal >= totalPaginasAtemporal - 1}
+                    onClick={() => setPageAtemporal((p) => p + 1)}
+                    className="px-3 py-1 border border-gray-300 dark:border-gray-700 rounded-lg text-xs font-bold disabled:opacity-40"
+                  >
+                    Siguiente
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         
 
         
@@ -3586,19 +4470,51 @@ export default function BancoTab({
       </div>
 
       {reconcileModal.open && reconcileModal.movimiento && (() => {
+        const batchMovs = reconcileModal.movimientosBatch && reconcileModal.movimientosBatch.length > 0
+          ? reconcileModal.movimientosBatch
+          : [reconcileModal.movimiento];
+        const isBatch = batchMovs.length > 1;
+
         const isOutflow = reconcileModal.movimiento.tipo_movimiento === 'Retiro';
-        const movMonto = Math.abs(Number(reconcileModal.movimiento.monto));
+        const movMonto = batchMovs.reduce((s, m) => s + Math.abs(Number(m.monto) || (m.tipo_movimiento === 'Retiro' ? Number(m.retiro) : Number(m.deposito)) || 0), 0);
+        const selectedGastosList = gastosReconciliables.filter((g) => reconcileModal.gastosSeleccionados.includes(g.id));
         const totalEgresosSistema = isOutflow 
-          ? gastosReconciliables
-              .filter((g) => reconcileModal.gastosSeleccionados.includes(g.id))
-              .reduce((s, g) => s + Number(g.monto), 0)
+          ? selectedGastosList.reduce((s, g) => {
+              const otherConcs = movimientos
+                .filter((otherM: any) => otherM.id !== reconcileModal.movimiento.id)
+                .flatMap((otherM: any) => otherM.conciliaciones_bancarias || [])
+                .filter((c: any) => (c.gasto?.id === g.id || c.gasto_id === g.id));
+
+              const priorOtherPayments = otherConcs.reduce((sum: number, c: any) => {
+                return sum + Math.abs(Number(c.monto_asociado || c.monto || 0));
+              }, 0);
+
+              const totalGasto = Number(g.monto || 0);
+              const pendBalance = Math.max(0, totalGasto - priorOtherPayments);
+              const effectiveAmount = priorOtherPayments > 0 ? Math.min(movMonto, pendBalance) : totalGasto;
+              return s + effectiveAmount;
+            }, 0)
           : pedidosPendientes
               .filter((p) => reconcileModal.pedidosSeleccionados.includes(p.id))
               .reduce((s, p) => s + Number(p.precio_total), 0);
-        const totalXmlsCargados = Object.values(uploadedXmlAmounts).reduce((s, val) => s + val, 0);
+
+        const totalXmlsCargados = Object.entries(uploadedXmlAmounts).reduce((s, [path, val]) => {
+          const fileName = path.split('/').pop() || '';
+          const isAlreadyInSelectedGastos = selectedGastosList.some((g) => {
+            if (!g.xml_url) return false;
+            const gPaths = g.xml_url.split(',');
+            return gPaths.some((gp: string) => gp === path || gp.endsWith(fileName) || path.endsWith(gp.split('/').pop() || ''));
+          });
+          return isAlreadyInSelectedGastos ? s : s + val;
+        }, 0);
+
         const totalComprobado = totalEgresosSistema + totalXmlsCargados;
         const dif = movMonto - totalComprobado;
         const match = Math.abs(dif) < 0.05;
+
+        const selectedProvRaw = selectedGastosList[0]?.proveedores;
+        const selectedProv = selectedProvRaw ? (Array.isArray(selectedProvRaw) ? selectedProvRaw[0] : selectedProvRaw) : null;
+        const saldoFavorProveedor = Number(selectedProv?.saldo_favor || 0);
         return (
           <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4"
             onClick={(e) => { if (e.target === e.currentTarget) setReconcileModal((p) => ({ ...p, open: false })); }}>
@@ -3606,10 +4522,14 @@ export default function BancoTab({
               <div className="flex items-start justify-between">
                 <div>
                   <h3 className="text-lg font-extrabold text-gray-900 dark:text-white">
-                    Conciliación de Movimiento - {reconcileModal.movimiento.fecha ? new Date(reconcileModal.movimiento.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : 'Sin Fecha'}
+                    {isBatch ? `Conciliación de Lote (${batchMovs.length} Pagos Seleccionados)` : `Conciliación de Movimiento - ${reconcileModal.movimiento.fecha ? new Date(reconcileModal.movimiento.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : 'Sin Fecha'}`}
                   </h3>
                   <p className="text-xs text-gray-500 mt-0.5">
-                    Movimiento: <strong>{reconcileModal.movimiento.concepto}</strong> — {formatCurrency(reconcileModal.movimiento.monto)} {reconcileModal.movimiento.fecha && `— ${new Date(reconcileModal.movimiento.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })}`}
+                    {isBatch ? (
+                      <>Suma acumulada de pagos: <strong className="text-emerald-600 font-mono text-sm">{formatCurrency(movMonto)}</strong></>
+                    ) : (
+                      <>Movimiento: <strong>{reconcileModal.movimiento.concepto}</strong> — {formatCurrency(reconcileModal.movimiento.monto)} {reconcileModal.movimiento.fecha && `— ${new Date(reconcileModal.movimiento.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })}`}</>
+                    )}
                   </p>
                 </div>
                 <button onClick={() => setReconcileModal((p) => ({ ...p, open: false }))}
@@ -3617,6 +4537,60 @@ export default function BancoTab({
                   <X size={18} />
                 </button>
               </div>
+
+              {isBatch && (
+                <div className="p-3 bg-amber-50/70 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/40 rounded-xl space-y-1 text-xs">
+                  <div className="font-bold text-amber-900 dark:text-amber-300 flex items-center gap-1.5">
+                    <span>📋 Desglose de Pagos del Estado de Cuenta a Sumar:</span>
+                  </div>
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    {batchMovs.map((m: any, idx: number) => (
+                      <span key={idx} className="px-2.5 py-1 bg-white dark:bg-gray-900 border border-amber-200 dark:border-amber-800 rounded-lg text-[10px] font-mono shadow-sm flex items-center gap-1">
+                        <span className="text-gray-500 font-sans">{m.fecha ? new Date(m.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : ''}</span>
+                        <span className="font-semibold text-gray-800 dark:text-gray-200 font-sans">{m.concepto}</span>
+                        <span className="font-bold text-red-500 dark:text-red-400">({formatCurrency(Math.abs(Number(m.monto) || Number(m.retiro) || Number(m.deposito) || 0))})</span>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {selectedProv && (
+                <div className="p-3 bg-emerald-50/70 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-900/40 rounded-xl flex items-center justify-between text-xs font-sans">
+                  <div>
+                    <span className="font-extrabold text-emerald-900 dark:text-emerald-300 block">
+                      🏢 Proveedor Seleccionado: {selectedProv.nombre_comercial} {selectedProv.rfc && <span className="font-mono text-[10px] text-emerald-700 dark:text-emerald-400">({selectedProv.rfc})</span>}
+                    </span>
+                    <span className="text-[11px] text-emerald-700 dark:text-emerald-400 mt-0.5 block">
+                      Saldo a Favor acumulado actual: <strong className="font-mono text-sm font-bold text-emerald-800 dark:text-emerald-200">{formatCurrency(saldoFavorProveedor)}</strong>
+                    </span>
+                  </div>
+                  <div className="text-right">
+                    <span className="px-2.5 py-1 bg-emerald-600 text-white rounded-lg text-[10px] font-extrabold shadow-sm">
+                      Saldo a Favor: {formatCurrency(saldoFavorProveedor)}
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {(() => {
+                const modalPeriodInfo = getPeriodStatusForMov(reconcileModal.movimiento.fecha);
+                const isModalClosed = modalPeriodInfo.clave === 'cerrado_definitivo' || modalPeriodInfo.clave === 'pre_cerrado';
+                if (!isModalClosed) return null;
+                return (
+                  <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl text-xs flex items-center gap-2.5 text-amber-800 dark:text-amber-300 font-sans">
+                    <Lock size={18} className="shrink-0 text-amber-500 animate-pulse" />
+                    <div>
+                      <span className="font-bold block text-amber-900 dark:text-amber-200">
+                        Periodo Contable Cerrado ({reconcileModal.movimiento.fecha ? reconcileModal.movimiento.fecha.substring(0, 7) : ''})
+                      </span>
+                      <span className="text-[11px] leading-relaxed block">
+                        Este movimiento pertenece a un periodo cerrado. La comprobación se guardará correctamente y agregará automáticamente la nota de auditoría: <strong>"Conciliado después del periodo de cierre"</strong>.
+                      </span>
+                    </div>
+                  </div>
+                );
+              })()}
 
               {/* Búsqueda */}
               <div>
@@ -3992,22 +4966,37 @@ export default function BancoTab({
               </div>
 
               {dif > 0.01 && isOutflow && (
-                <div className="p-3 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 rounded-xl flex items-center justify-between text-xs font-sans">
-                  <div>
-                    <span className="font-bold text-amber-900 dark:text-amber-300 block">Excedente de pago de {formatCurrency(dif)}</span>
-                    <p className="text-[11px] text-amber-700 dark:text-amber-400 mt-0.5">
-                      El pago bancario supera los comprobantes seleccionados. ¿Deseas guardar el excedente como Saldo a Favor del proveedor?
-                    </p>
+                <div className="p-3 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 rounded-xl space-y-2 text-xs font-sans">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="font-bold text-amber-900 dark:text-amber-300 block">Excedente de pago de {formatCurrency(dif)}</span>
+                      <p className="text-[11px] text-amber-700 dark:text-amber-400 mt-0.5">
+                        El pago bancario supera los comprobantes seleccionados. ¿Deseas guardar el excedente como Saldo a Favor del proveedor?
+                      </p>
+                    </div>
+                    <label className="flex items-center gap-1.5 cursor-pointer font-bold text-amber-800 dark:text-amber-300 shrink-0 ml-3">
+                      <input
+                        type="checkbox"
+                        checked={guardarExcedenteComoSaldoFavor}
+                        onChange={(e) => setGuardarExcedenteComoSaldoFavor(e.target.checked)}
+                        className="w-4 h-4 accent-amber-600 rounded cursor-pointer"
+                      />
+                      <span>Guardar Saldo a Favor</span>
+                    </label>
                   </div>
-                  <label className="flex items-center gap-1.5 cursor-pointer font-bold text-amber-800 dark:text-amber-300 shrink-0">
-                    <input
-                      type="checkbox"
-                      checked={guardarExcedenteComoSaldoFavor}
-                      onChange={(e) => setGuardarExcedenteComoSaldoFavor(e.target.checked)}
-                      className="w-4 h-4 accent-amber-600 rounded cursor-pointer"
-                    />
-                    <span>Guardar Saldo a Favor</span>
-                  </label>
+
+                  {selectedProv && (
+                    <div className="pt-2 border-t border-amber-200/60 dark:border-amber-800/60 flex items-center justify-between text-[11px] text-amber-800 dark:text-amber-300">
+                      <span>
+                        <strong>{selectedProv.nombre_comercial}</strong> — Saldo a Favor actual: <strong className="font-mono text-emerald-700 dark:text-emerald-400 font-bold">{formatCurrency(saldoFavorProveedor)}</strong>
+                      </span>
+                      {guardarExcedenteComoSaldoFavor && (
+                        <span className="font-semibold text-emerald-600 dark:text-emerald-400">
+                          Nuevo saldo a favor estimado: <strong className="font-mono">{formatCurrency(saldoFavorProveedor + dif)}</strong>
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
 

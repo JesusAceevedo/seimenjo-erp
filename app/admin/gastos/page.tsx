@@ -152,6 +152,7 @@ export default function AdvancedBillingModule() {
   // --- TAB ACTIVAS EN LA VISUALIZACIÓN ---
   const [activeTab, setActiveTab] = useState<'egresos' | 'ingresos' | 'banco'>('egresos');
   const [cfdiViewerUrl, setCfdiViewerUrl] = useState<string | null>(null);
+  const [empresaRfc, setEmpresaRfc] = useState<string | null>(null);
 
   // --- ESTADOS DE PROVEEDORES ---
   const [proveedores, setProveedores] = useState<any[]>([]);
@@ -346,10 +347,17 @@ export default function AdvancedBillingModule() {
       const empresaId = await getEmpresaId();
       if (!empresaId) return;
 
+      const { data: empData } = await supabase
+        .from('empresas')
+        .select('rfc')
+        .eq('id', empresaId)
+        .maybeSingle();
+      if (empData?.rfc) setEmpresaRfc(empData.rfc);
+
       // 1. Todos los Gastos y Egresos de la Empresa (con o sin XML, deducibles y no deducibles)
       const { data: gFac } = await supabase
         .from('gastos')
-        .select('*, proveedores(nombre_comercial, rfc), categorias_gasto(nombre), padre:gastos!gasto_padre_id(concepto), movimientos_bancarios(*, estatus_conciliacion_bancaria(*), cuentas_bancarias(*))')
+        .select('*, proveedores(nombre_comercial, rfc), categorias_gasto(nombre), padre:gastos!gasto_padre_id(concepto), movimientos_bancarios(*, estatus_conciliacion_bancaria(*), cuentas_bancarias(*)), conciliaciones_bancarias(id, monto_asociado, movimiento_bancario:movimientos_bancarios(*, estatus_conciliacion_bancaria(*), cuentas_bancarias(*)))')
         .eq('empresa_id', empresaId)
         .order('fecha_gasto', { ascending: false });
       setGastosFacturados(gFac || []);
@@ -930,7 +938,7 @@ export default function AdvancedBillingModule() {
   const handleOpenReconcileModal = async (mov: any) => {
     const { data: existingMappings } = await supabase
       .from('conciliaciones_bancarias')
-      .select('*, gasto:gastos(*, proveedores(nombre_comercial, rfc))')
+      .select('*, gasto:gastos(*, proveedores(nombre_comercial, rfc)), pedido:pedidos(*)')
       .eq('movimiento_id', mov.id);
 
     const linkedGastos = existingMappings?.map(m => m.gasto_id).filter(Boolean) as string[] || [];
@@ -947,12 +955,31 @@ export default function AdvancedBillingModule() {
         });
         return newItems.length > 0 ? [...newItems, ...prev] : prev;
       });
+      setPedidosPendientes(prev => {
+        const existingIds = new Set(prev.map(p => p.id));
+        const newItems: any[] = [];
+        existingMappings.forEach(m => {
+          if (m.pedido && !existingIds.has(m.pedido.id)) {
+            newItems.push(m.pedido);
+          }
+        });
+        return newItems.length > 0 ? [...newItems, ...prev] : prev;
+      });
     }
+
+    const xmlSources: string[] = [];
+    if (mov.xml_url) {
+      xmlSources.push(...mov.xml_url.split(','));
+    }
+    existingMappings?.forEach(m => {
+      if (m.gasto?.xml_url) xmlSources.push(...m.gasto.xml_url.split(','));
+    });
+    const consolidatedXmlUrl = Array.from(new Set(xmlSources.map(s => s.trim()).filter(Boolean))).join(',');
 
     setReconcileModal({
       open: true,
       movimiento: mov,
-      xmlUrl: mov.xml_url || '',
+      xmlUrl: consolidatedXmlUrl || mov.xml_url || '',
       pdfFacturaUrl: mov.pdf_factura_url || '',
       pdfTicketUrl: mov.pdf_ticket_url || '',
       soporteReembolsoUrl: mov.soporte_reembolso_url || '',
@@ -1890,6 +1917,7 @@ export default function AdvancedBillingModule() {
 
             {/* VISTA PRINCIPAL: EGRESOS */}
             <EgresosTab
+              empresaRfc={empresaRfc}
               gastosFacturados={gastosFacturados}
               categorias={categoriasGasto}
               formasPago={formasPago}

@@ -1055,9 +1055,9 @@ export async function autoConciliarMovimientos(token: string): Promise<{ success
   }
 }
 
-// 4. CONCILIACIÓN MANUAL (SOPORTE UNO-A-MUCHOS, MUCHOS-A-UNO Y CARGA DE DOCUMENTOS DUAL)
+// 4. CONCILIACIÓN MANUAL (SOPORTE UNO-A-MUCHOS, MUCHOS-A-UNO, MUCHOS-A-MUCHOS Y CARGA DE DOCUMENTOS DUAL)
 export async function guardarConciliacionManual(
-  movimientoId: string,
+  movimientoId: string | string[],
   payload: {
     gastosIds: string[];
     pedidosIds: string[];
@@ -1073,6 +1073,9 @@ export async function guardarConciliacionManual(
 ): Promise<{ success: boolean; error?: string }> {
   try {
     const { empresaId, userId } = await getUserEmpresaId(token);
+    const targetMovIds = Array.isArray(movimientoId) ? movimientoId.filter(Boolean) : [movimientoId];
+
+    if (targetMovIds.length === 0) throw new Error('Debe especificar al menos un movimiento bancario.');
 
     // 1. Obtener el ID del personal (usuarios_staff) para asociarlo al campo registrado_por del gasto
     const { data: staffData } = await supabaseAdmin
@@ -1081,6 +1084,8 @@ export async function guardarConciliacionManual(
       .eq('supabase_auth_id', userId)
       .maybeSingle();
     const staffId = staffData?.id || null;
+
+    const primaryMovId = targetMovIds[0];
 
     // 2. Procesar y auto-registrar en la tabla 'gastos' cualquier XML subido manualmente en este movimiento
     if (payload.xmlUrl) {
@@ -1121,6 +1126,23 @@ export async function guardarConciliacionManual(
 
                 if (!gastoId) {
                   // Extraer campos del CFDI
+                  const receptor = cfdi['cfdi:Receptor'] || cfdi['Receptor'];
+                  const rfcReceptor = receptor?.['@_Rfc'] || receptor?.['@_rfc'];
+
+                  // Validación estricta por RFC de la empresa
+                  if (rfcReceptor && empresaId) {
+                    const { data: empData } = await supabaseAdmin
+                      .from('empresas')
+                      .select('rfc')
+                      .eq('id', empresaId)
+                      .maybeSingle();
+
+                    if (empData?.rfc && rfcReceptor.trim().toUpperCase() !== empData.rfc.trim().toUpperCase()) {
+                      console.warn(`Saltando registro automático de gasto: RFC receptor del XML (${rfcReceptor}) no coincide con el RFC de la empresa activa (${empData.rfc}).`);
+                      continue;
+                    }
+                  }
+
                   const emisor = cfdi['cfdi:Emisor'] || cfdi['Emisor'];
                   const rfcEmisor = emisor?.['@_Rfc'] || emisor?.['@_rfc'];
                   const nombreEmisor = emisor?.['@_Nombre'] || emisor?.['@_nombre'];
@@ -1230,7 +1252,7 @@ export async function guardarConciliacionManual(
                       estatus_facturado: true,
                       metodo_pago: metodoPago,
                       es_deducible: true,
-                      movimiento_bancario_id: movimientoId
+                      movimiento_bancario_id: primaryMovId
                     })
                     .select('id')
                     .single();
@@ -1253,48 +1275,51 @@ export async function guardarConciliacionManual(
       }
     }
 
-    const { data: mov, error: movErr } = await supabaseAdmin
+    // 3. Obtener datos de los movimientos seleccionados
+    const { data: targetMovements, error: movsErr } = await supabaseAdmin
       .from('movimientos_bancarios')
       .select('*')
-      .eq('id', movimientoId)
-      .eq('empresa_id', empresaId)
-      .single();
+      .in('id', targetMovIds)
+      .eq('empresa_id', empresaId);
 
-    if (movErr || !mov) throw new Error('Movimiento no encontrado.');
+    if (movsErr || !targetMovements || targetMovements.length === 0) throw new Error('Movimientos no encontrados.');
 
+    const primaryMov = targetMovements.find(m => m.id === primaryMovId) || targetMovements[0];
+
+    // Limpiar conciliaciones anteriores para todos los movimientos involucrados
     await supabaseAdmin
       .from('conciliaciones_bancarias')
       .delete()
-      .eq('movimiento_id', movimientoId)
+      .in('movimiento_id', targetMovIds)
       .eq('empresa_id', empresaId);
 
     await supabaseAdmin
       .from('gastos')
       .update({ movimiento_bancario_id: null })
-      .eq('movimiento_bancario_id', movimientoId)
+      .in('movimiento_bancario_id', targetMovIds)
       .eq('empresa_id', empresaId);
 
     await supabaseAdmin
       .from('pedidos')
       .update({ movimiento_bancario_id: null })
-      .eq('movimiento_bancario_id', movimientoId)
+      .in('movimiento_bancario_id', targetMovIds)
       .eq('empresa_id', empresaId);
 
     let associatedXml = null;
     let associatedPdf = null;
     let associatedTicket = null;
 
-    if (mov.tipo_movimiento === 'Retiro' && payload.gastosIds.length > 0) {
+    if (primaryMov.tipo_movimiento === 'Retiro' && payload.gastosIds.length > 0) {
       const isNoDeducible = payload.estatusClave === 'no_deducible';
 
-      const xmlToSet = payload.xmlUrl || associatedXml || mov.xml_url || null;
-      const pdfToSet = payload.pdfFacturaUrl || associatedPdf || mov.pdf_factura_url || null;
-      const ticketToSet = payload.pdfTicketUrl || associatedTicket || mov.pdf_ticket_url || null;
+      const xmlToSet = payload.xmlUrl || associatedXml || primaryMov.xml_url || null;
+      const pdfToSet = payload.pdfFacturaUrl || associatedPdf || primaryMov.pdf_factura_url || null;
+      const ticketToSet = payload.pdfTicketUrl || associatedTicket || primaryMov.pdf_ticket_url || null;
 
       const { error: linkErr } = await supabaseAdmin
         .from('gastos')
         .update({ 
-          movimiento_bancario_id: movimientoId, 
+          movimiento_bancario_id: primaryMovId, 
           estatus_facturado: true,
           ...(isNoDeducible ? { es_deducible: false } : {}),
           ...(xmlToSet ? { xml_url: xmlToSet } : {}),
@@ -1313,32 +1338,57 @@ export async function guardarConciliacionManual(
         .eq('empresa_id', empresaId);
 
       if (gastosInfo) {
+        const xmls: string[] = [];
+        const pdfs: string[] = [];
+        const tickets: string[] = [];
         for (const g of gastosInfo) {
-          if (!associatedXml && g.xml_url) associatedXml = g.xml_url;
-          if (!associatedPdf && g.pdf_url) associatedPdf = g.pdf_url;
-          if (!associatedTicket && g.ticket_url) associatedTicket = g.ticket_url;
+          if (g.xml_url) xmls.push(...g.xml_url.split(',').filter(Boolean));
+          if (g.pdf_url) pdfs.push(...g.pdf_url.split(',').filter(Boolean));
+          if (g.ticket_url) tickets.push(...g.ticket_url.split(',').filter(Boolean));
         }
+        if (xmls.length > 0) associatedXml = Array.from(new Set(xmls)).join(',');
+        if (pdfs.length > 0) associatedPdf = Array.from(new Set(pdfs)).join(',');
+        if (tickets.length > 0) associatedTicket = Array.from(new Set(tickets)).join(',');
       }
 
-      const junctionEntries = payload.gastosIds.map((gId) => {
-        const gInfo = gastosInfo?.find((g) => g.id === gId);
-        const montoGasto = gInfo ? Number(gInfo.monto) : Math.abs(mov.monto);
-        return {
-          movimiento_id: movimientoId,
-          gasto_id: gId,
-          monto_asociado: montoGasto,
-          empresa_id: empresaId
-        };
-      });
+      // Junction entries for ALL target movements
+      const junctionEntries: any[] = [];
+      for (const mItem of targetMovements) {
+        const movMonto = Math.abs(Number(mItem.monto) || Number(mItem.retiro) || 0);
+        for (const gId of payload.gastosIds) {
+          const gInfo = gastosInfo?.find((g) => g.id === gId);
+
+          const { data: priorConcs } = await supabaseAdmin
+            .from('conciliaciones_bancarias')
+            .select('monto_asociado')
+            .eq('gasto_id', gId)
+            .neq('movimiento_id', mItem.id);
+
+          const totalPrior = (priorConcs || []).reduce((s, c) => s + Number(c.monto_asociado || 0), 0);
+          const totalGasto = gInfo ? Number(gInfo.monto || 0) : movMonto;
+          const saldoPendiente = Math.max(0, totalGasto - totalPrior);
+
+          const montoAsoc = targetMovIds.length > 1
+            ? movMonto
+            : (saldoPendiente > 0 ? Math.min(movMonto, saldoPendiente) : movMonto);
+
+          junctionEntries.push({
+            movimiento_id: mItem.id,
+            gasto_id: gId,
+            monto_asociado: montoAsoc,
+            empresa_id: empresaId
+          });
+        }
+      }
 
       const { error: jErr } = await supabaseAdmin.from('conciliaciones_bancarias').insert(junctionEntries);
       if (jErr) throw jErr;
     }
 
-    if (mov.tipo_movimiento === 'Deposito' && payload.pedidosIds.length > 0) {
+    if (primaryMov.tipo_movimiento === 'Deposito' && payload.pedidosIds.length > 0) {
       const { error: linkErr } = await supabaseAdmin
         .from('pedidos')
-        .update({ movimiento_bancario_id: movimientoId, estatus_pago: 'Liquidado' })
+        .update({ movimiento_bancario_id: primaryMovId, estatus_pago: 'Liquidado' })
         .in('id', payload.pedidosIds)
         .eq('empresa_id', empresaId);
 
@@ -1357,26 +1407,67 @@ export async function guardarConciliacionManual(
         .eq('empresa_id', empresaId);
 
       if (pedidosFiles) {
+        const xmls: string[] = [];
+        const pdfs: string[] = [];
+        const tickets: string[] = [];
         for (const f of pedidosFiles) {
-          if (!associatedXml && f.xml_url) associatedXml = f.xml_url;
-          if (!associatedPdf && f.pdf_url) associatedPdf = f.pdf_url;
-          if (!associatedTicket && f.ticket_url) associatedTicket = f.ticket_url;
+          if (f.xml_url) xmls.push(...f.xml_url.split(',').filter(Boolean));
+          if (f.pdf_url) pdfs.push(...f.pdf_url.split(',').filter(Boolean));
+          if (f.ticket_url) tickets.push(...f.ticket_url.split(',').filter(Boolean));
+        }
+        if (xmls.length > 0) associatedXml = Array.from(new Set(xmls)).join(',');
+        if (pdfs.length > 0) associatedPdf = Array.from(new Set(pdfs)).join(',');
+        if (tickets.length > 0) associatedTicket = Array.from(new Set(tickets)).join(',');
+      }
+
+      // Junction entries for ALL target movements
+      const junctionEntries: any[] = [];
+      for (const mItem of targetMovements) {
+        const movMonto = Math.abs(Number(mItem.monto) || Number(mItem.deposito) || 0);
+        for (const pId of payload.pedidosIds) {
+          const pInfo = pedidosInfo?.find((p) => p.id === pId);
+
+          const { data: priorConcs } = await supabaseAdmin
+            .from('conciliaciones_bancarias')
+            .select('monto_asociado')
+            .eq('pedido_id', pId)
+            .neq('movimiento_id', mItem.id);
+
+          const totalPrior = (priorConcs || []).reduce((s, c) => s + Number(c.monto_asociado || 0), 0);
+          const totalPedido = pInfo ? Number(pInfo.precio_total || 0) : movMonto;
+          const saldoPendiente = Math.max(0, totalPedido - totalPrior);
+
+          const montoAsoc = targetMovIds.length > 1
+            ? movMonto
+            : (saldoPendiente > 0 ? Math.min(movMonto, saldoPendiente) : movMonto);
+
+          junctionEntries.push({
+            movimiento_id: mItem.id,
+            pedido_id: pId,
+            monto_asociado: montoAsoc,
+            empresa_id: empresaId
+          });
         }
       }
 
-      const junctionEntries = payload.pedidosIds.map((pId) => {
-        const pInfo = pedidosInfo?.find((p) => p.id === pId);
-        const montoPedido = pInfo ? Number(pInfo.precio_total) : Math.abs(mov.monto);
-        return {
-          movimiento_id: movimientoId,
-          pedido_id: pId,
-          monto_asociado: montoPedido,
-          empresa_id: empresaId
-        };
-      });
-
       const { error: jErr } = await supabaseAdmin.from('conciliaciones_bancarias').insert(junctionEntries);
       if (jErr) throw jErr;
+    }
+
+    // Verificar si el periodo del movimiento pertenece a un ciclo cerrado
+    const movDateStr = primaryMov.fecha ? String(primaryMov.fecha).substring(0, 7) : null;
+    let isClosedPeriod = false;
+    if (movDateStr) {
+      const { data: cierreRecord } = await supabaseAdmin
+        .from('cierres_mensuales')
+        .select('estatus')
+        .eq('empresa_id', empresaId)
+        .eq('mes', movDateStr)
+        .maybeSingle();
+
+      if (cierreRecord && (cierreRecord.estatus === 'cerrado' || cierreRecord.estatus === 'cerrado_definitivo' || cierreRecord.estatus === 'pre_cerrado')) {
+        isClosedPeriod = true;
+      }
     }
 
     const { data: catalog } = await supabaseAdmin
@@ -1387,17 +1478,17 @@ export async function guardarConciliacionManual(
 
     let targetStatusClave = payload.estatusClave || 'pendiente';
     if (!payload.estatusClave) {
-      const hasXml = !!payload.xmlUrl || !!mov.xml_url || !!associatedXml;
-      const hasTicket = !!payload.pdfTicketUrl || !!mov.pdf_ticket_url || !!associatedTicket;
-      const hasSoporte = !!payload.soporteReembolsoUrl || !!mov.soporte_reembolso_url;
-      const isCash = esMovimientoEfectivo(mov.concepto);
+      const hasXml = !!payload.xmlUrl || !!primaryMov.xml_url || !!associatedXml;
+      const hasTicket = !!payload.pdfTicketUrl || !!primaryMov.pdf_ticket_url || !!associatedTicket;
+      const hasSoporte = !!payload.soporteReembolsoUrl || !!primaryMov.soporte_reembolso_url;
+      const isCash = esMovimientoEfectivo(primaryMov.concepto);
 
       if (hasSoporte) {
         targetStatusClave = 'comprobado';
       } else if (isCash) {
         targetStatusClave = hasTicket ? 'comprobado' : 'incompleto_comprobado';
       } else {
-        const hasInvoice = (mov.tipo_movimiento === 'Deposito') || (payload.gastosIds.length > 0);
+        const hasInvoice = (primaryMov.tipo_movimiento === 'Deposito') || (payload.gastosIds.length > 0);
         if (!hasInvoice) {
           targetStatusClave = 'no_deducible';
         } else if (hasXml) {
@@ -1412,24 +1503,71 @@ export async function guardarConciliacionManual(
 
     const updatePayload: any = {
       estatus_conciliacion_id: targetStatusId,
-      visible_egresos: mov.tipo_movimiento === 'Retiro' && payload.gastosIds.length > 0,
-      visible_ingresos: mov.tipo_movimiento === 'Deposito' && payload.pedidosIds.length > 0
+      visible_egresos: primaryMov.tipo_movimiento === 'Retiro' && payload.gastosIds.length > 0,
+      visible_ingresos: primaryMov.tipo_movimiento === 'Deposito' && payload.pedidosIds.length > 0
     };
 
-    updatePayload.xml_url = payload.xmlUrl || associatedXml || mov.xml_url || null;
-    updatePayload.pdf_factura_url = payload.pdfFacturaUrl || associatedPdf || mov.pdf_factura_url || null;
-    updatePayload.pdf_ticket_url = payload.pdfTicketUrl || associatedTicket || mov.pdf_ticket_url || null;
-    updatePayload.soporte_reembolso_url = payload.soporteReembolsoUrl || mov.soporte_reembolso_url || null;
+    const mergeUrls = (...sources: (string | null | undefined)[]) => {
+      const all = sources
+        .filter(Boolean)
+        .flatMap((s) => (s as string).split(','))
+        .map((s) => s.trim())
+        .filter(Boolean);
+      return all.length > 0 ? Array.from(new Set(all)).join(',') : null;
+    };
+
+    updatePayload.xml_url = mergeUrls(payload.xmlUrl, associatedXml, primaryMov.xml_url);
+    updatePayload.pdf_factura_url = mergeUrls(payload.pdfFacturaUrl, associatedPdf, primaryMov.pdf_factura_url);
+    updatePayload.pdf_ticket_url = mergeUrls(payload.pdfTicketUrl, associatedTicket, primaryMov.pdf_ticket_url);
+    updatePayload.soporte_reembolso_url = mergeUrls(payload.soporteReembolsoUrl, primaryMov.soporte_reembolso_url);
+    updatePayload.soporte_reembolso_url = payload.soporteReembolsoUrl || primaryMov.soporte_reembolso_url || null;
     if (payload.storageProvider !== undefined) updatePayload.storage_provider = payload.storageProvider;
-    if (payload.comentarios !== undefined) updatePayload.comentarios = payload.comentarios;
+
+    // Gestión de comentarios con nota de cierre si el periodo estaba cerrado
+    let finalComentarios = payload.comentarios !== undefined ? (payload.comentarios || '') : (primaryMov.comentarios || '');
+    if (isClosedPeriod && !finalComentarios.includes('Conciliado después del periodo de cierre')) {
+      const todayStr = new Date().toISOString().split('T')[0];
+      const postCloseTag = `[Conciliado después del periodo de cierre - Registrado el ${todayStr}]`;
+      finalComentarios = finalComentarios ? `${finalComentarios.trim()}\n${postCloseTag}` : postCloseTag;
+    }
+    updatePayload.comentarios = finalComentarios || null;
 
     const { error: updateMovErr } = await supabaseAdmin
       .from('movimientos_bancarios')
       .update(updatePayload)
-      .eq('id', movimientoId)
+      .in('id', targetMovIds)
       .eq('empresa_id', empresaId);
 
     if (updateMovErr) throw updateMovErr;
+
+    // Si el periodo estaba cerrado y se asociaron gastos, marcar es_deducible = true y agregar la nota al gasto
+    if (isClosedPeriod && payload.gastosIds && payload.gastosIds.length > 0) {
+      const todayStr = new Date().toISOString().split('T')[0];
+      const postCloseTag = `[Conciliado después del periodo de cierre - Registrado el ${todayStr}]`;
+
+      for (const gId of payload.gastosIds) {
+        const { data: gData } = await supabaseAdmin
+          .from('gastos')
+          .select('comentarios')
+          .eq('id', gId)
+          .eq('empresa_id', empresaId)
+          .maybeSingle();
+
+        let gComms = gData?.comentarios || '';
+        if (!gComms.includes('Conciliado después del periodo de cierre')) {
+          gComms = gComms ? `${gComms.trim()}\n${postCloseTag}` : postCloseTag;
+        }
+
+        await supabaseAdmin
+          .from('gastos')
+          .update({
+            es_deducible: true,
+            comentarios: gComms
+          })
+          .eq('id', gId)
+          .eq('empresa_id', empresaId);
+      }
+    }
 
     return { success: true };
   } catch (err: any) {
@@ -2421,6 +2559,52 @@ export async function fusionarMovimientosReembolso(
     return { success: false, error: err.message || 'Error al fusionar movimientos.' };
   }
 }
+
+// 12. OBTENER MOVIMIENTOS NO DEDUCIBLES DE MANERA ATEMPORAL (TODOS LOS MESES)
+export async function obtenerMovimientosNoDeduciblesAtemporal(token: string): Promise<{
+  success: boolean;
+  movimientos?: any[];
+  cierres?: any[];
+  error?: string;
+}> {
+  try {
+    const { empresaId } = await getUserEmpresaId(token);
+
+    // Obtener cierres mensuales
+    const { data: cierres } = await supabaseAdmin
+      .from('cierres_mensuales')
+      .select('mes, estatus')
+      .eq('empresa_id', empresaId);
+
+    // Obtener movimientos bancarios atemporales (todos los meses)
+    const { data: movimientos, error } = await supabaseAdmin
+      .from('movimientos_bancarios')
+      .select(`
+        *,
+        cuentas_bancarias(id, nombre),
+        estatus_conciliacion_bancaria(id, clave, nombre, color),
+        conciliaciones_bancarias(
+          id, monto_asociado,
+          gastos(id, concepto, monto, es_deducible, uuid_fiscal, xml_url, pdf_url, ticket_url, proveedores(nombre_comercial, rfc)),
+          pedidos(id, numero_pedido, precio_total, clientes(nombre_local, rfc))
+        )
+      `)
+      .eq('empresa_id', empresaId)
+      .order('fecha', { ascending: false });
+
+    if (error) throw error;
+
+    return {
+      success: true,
+      movimientos: movimientos || [],
+      cierres: cierres || []
+    };
+  } catch (err: any) {
+    console.error('Error fetching atemporal non-deductible movements:', err);
+    return { success: false, error: err.message || 'Error al cargar movimientos no deducibles atemporales' };
+  }
+}
+
 
 
 

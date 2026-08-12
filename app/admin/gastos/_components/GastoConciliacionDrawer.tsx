@@ -84,20 +84,49 @@ export default function GastoConciliacionDrawer({
     }
   };
 
-  const mov = gasto.movimientos_bancarios;
-  const tieneMovimiento = !!mov;
+  // Extraer todos los pagos bancarios asociados (soporte para múltiples pagos por factura)
+  const concEntries = (gasto.conciliaciones_bancarias as any[]) || [];
+  const pagosAsociados = concEntries.map((c: any) => ({
+    id: c.id,
+    monto_asociado: Math.abs(Number(c.monto_asociado || (c.movimiento_bancario ? c.movimiento_bancario.monto : c.movimientos_bancarios ? c.movimientos_bancarios.monto : 0))),
+    movimiento: c.movimiento_bancario || c.movimientos_bancarios
+  })).filter((p: any) => !!p.movimiento);
+
+  // Fallback si la relación 1:1 legacy existe
+  if (pagosAsociados.length === 0 && gasto.movimientos_bancarios) {
+    pagosAsociados.push({
+      id: 'legacy-' + gasto.movimientos_bancarios.id,
+      monto_asociado: Math.abs(Number(gasto.movimientos_bancarios.monto || gasto.monto)),
+      movimiento: gasto.movimientos_bancarios
+    });
+  }
+
+  const movPrimary = pagosAsociados[0]?.movimiento || gasto.movimientos_bancarios;
+  const tieneMovimiento = pagosAsociados.length > 0;
+
+  const totalFactura = Number(gasto.monto || 0);
+  const sumaPagos = pagosAsociados.reduce((sum: number, p: any) => sum + p.monto_asociado, 0);
+  const saldoPendiente = Math.max(0, totalFactura - sumaPagos);
 
   // Estatus badge styling helpers
-  const estatusNombre = mov?.estatus_conciliacion_bancaria?.nombre || (gasto.es_deducible === false ? 'No Deducible' : 'Pendiente');
-  const estatusColor = mov?.estatus_conciliacion_bancaria?.color || (gasto.es_deducible === false ? '#EF4444' : '#9CA3AF');
+  let estatusNombre = 'Pendiente';
+  let estatusColor = '#9CA3AF';
+
+  if (gasto.es_deducible === false) {
+    estatusNombre = 'No Deducible';
+    estatusColor = '#EF4444';
+  } else if (tieneMovimiento) {
+    if (sumaPagos >= totalFactura - 0.05) {
+      estatusNombre = 'Conciliado (100%)';
+      estatusColor = '#10B981';
+    } else {
+      const pct = Math.min(99, Math.round((sumaPagos / totalFactura) * 100));
+      estatusNombre = `Conciliado Parcial (${pct}%)`;
+      estatusColor = '#3B82F6';
+    }
+  }
 
   // Detect payment discrepancy manually in frontend for display
-  const esMovimientoEfectivo = (concepto: string): boolean => {
-    if (!concepto) return false;
-    const c = concepto.toUpperCase();
-    return c.includes('EFECTIVO') || c.includes('CAJERO') || c.includes('RETIRO CAJERO') || c.includes('DEPOSITO CAJERO');
-  };
-
   const obtenerMetodoPagoBanco = (concepto: string): string => {
     if (!concepto) return 'unknown';
     const c = concepto.toUpperCase();
@@ -132,7 +161,7 @@ export default function GastoConciliacionDrawer({
     return { tieneDiscrepancia: false };
   };
 
-  const disc = mov ? detectarDiscrepanciaPago(mov.concepto, gasto.metodo_pago) : { tieneDiscrepancia: false, detalle: '' };
+  const disc = movPrimary ? detectarDiscrepanciaPago(movPrimary.concepto, gasto.metodo_pago) : { tieneDiscrepancia: false, detalle: '' };
 
   return (
     <div className="fixed inset-y-0 right-0 w-full sm:w-[460px] bg-white dark:bg-gray-950 border-l border-gray-200 dark:border-gray-800 shadow-2xl flex flex-col z-50 transition-all duration-300 font-sans">
@@ -230,23 +259,30 @@ export default function GastoConciliacionDrawer({
               <span className="text-[10px] text-gray-400 dark:text-gray-550 block mb-1.5">Archivos Adjuntos</span>
               <div className="flex flex-wrap gap-2">
                 {gasto.xml_url ? (
-                  <>
-                    <button
-                      onClick={() => onDownloadFile(gasto.xml_url)}
-                      className="inline-flex items-center gap-1 px-2.5 py-1 bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 border border-blue-200 dark:border-blue-900/50 rounded-lg hover:bg-blue-100 dark:hover:bg-blue-900/60 font-bold transition-all text-[10px]"
-                    >
-                      <FileCode size={11} /> XML
-                    </button>
-                    {handleViewCfdi && (
-                      <button
-                        onClick={() => handleViewCfdi(gasto.xml_url!.split(',')[0])}
-                        className="inline-flex items-center gap-1 px-2.5 py-1 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-650 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-900/50 rounded-lg hover:bg-indigo-100 dark:hover:bg-indigo-900/60 font-bold transition-all text-[10px]"
-                        title="Ver representación impresa del XML"
-                      >
-                        <Eye size={11} /> Ver PDF de XML (CFDI)
-                      </button>
-                    )}
-                  </>
+                  gasto.xml_url.split(',').filter(Boolean).map((url: string, idx: number) => {
+                    const fname = url.split('/').pop() || 'XML';
+                    const isMulti = gasto.xml_url.split(',').filter(Boolean).length > 1;
+                    return (
+                      <React.Fragment key={idx}>
+                        <button
+                          onClick={() => onDownloadFile(url)}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 border border-blue-200 dark:border-blue-900/50 rounded-lg hover:bg-blue-100 dark:hover:bg-blue-900/60 font-bold transition-all text-[10px]"
+                          title={fname}
+                        >
+                          <FileCode size={11} /> XML {isMulti ? `#${idx + 1}` : ''}
+                        </button>
+                        {handleViewCfdi && (
+                          <button
+                            onClick={() => handleViewCfdi(url)}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-650 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-900/50 rounded-lg hover:bg-indigo-100 dark:hover:bg-indigo-900/60 font-bold transition-all text-[10px]"
+                            title="Ver representación impresa del XML"
+                          >
+                            <Eye size={11} /> Ver PDF {isMulti ? `#${idx + 1}` : 'CFDI'}
+                          </button>
+                        )}
+                      </React.Fragment>
+                    );
+                  })
                 ) : (
                   <span className="text-[10px] text-gray-400 dark:text-gray-600 italic bg-gray-100 dark:bg-gray-900 px-2 py-1 rounded-lg border border-gray-200 dark:border-gray-800">
                     XML no disponible
@@ -279,12 +315,12 @@ export default function GastoConciliacionDrawer({
           </div>
         </div>
 
-        {/* SECTION 2: Conciliación Bancaria */}
+        {/* SECTION 2: Conciliación Bancaria (Múltiples Pagos) */}
         <div className="bg-gray-50 dark:bg-gray-900/40 border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden">
           <div className="px-3 py-2 bg-gray-100 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider flex items-center justify-between">
             <div className="flex items-center gap-1.5">
               <CreditCard size={12} />
-              <span>Detalles de Conciliación Bancaria</span>
+              <span>Conciliación Bancaria ({pagosAsociados.length} Pago{pagosAsociados.length !== 1 ? 's' : ''})</span>
             </div>
             <span
               className="inline-block px-2 py-0.5 rounded-full text-[9px] font-black text-white uppercase tracking-wider"
@@ -295,11 +331,29 @@ export default function GastoConciliacionDrawer({
           </div>
 
           <div className="p-3 space-y-3 text-xs">
+            {/* Resumen de Montos Conciliados vs Factura */}
+            <div className="grid grid-cols-3 gap-2 bg-white dark:bg-gray-950 p-2.5 rounded-lg border border-gray-200 dark:border-gray-800 text-center">
+              <div>
+                <span className="text-[9px] text-gray-400 font-semibold uppercase block">Total Factura</span>
+                <span className="font-mono font-bold text-gray-900 dark:text-white text-xs">{formatCurrency(totalFactura)}</span>
+              </div>
+              <div>
+                <span className="text-[9px] text-emerald-600 dark:text-emerald-400 font-semibold uppercase block">Pagos Conciliados</span>
+                <span className="font-mono font-black text-emerald-600 dark:text-emerald-400 text-xs">{formatCurrency(sumaPagos)}</span>
+              </div>
+              <div>
+                <span className="text-[9px] text-amber-600 dark:text-amber-400 font-semibold uppercase block">Saldo Pendiente</span>
+                <span className={`font-mono font-black text-xs ${saldoPendiente > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-gray-400'}`}>
+                  {formatCurrency(saldoPendiente)}
+                </span>
+              </div>
+            </div>
+
             {tieneMovimiento ? (
               <>
-                {/* Discrepancy warning if any */}
+                {/* Warning de discrepancia si aplica */}
                 {disc.tieneDiscrepancia && (
-                  <div className="p-2.5 bg-amber-50 dark:bg-amber-950/20 border border-amber-250 dark:border-amber-900/30 text-amber-800 dark:text-amber-400 rounded-lg flex gap-2 line-height-relaxed">
+                  <div className="p-2.5 bg-amber-50 dark:bg-amber-950/20 border border-amber-250 dark:border-amber-900/30 text-amber-800 dark:text-amber-400 rounded-lg flex gap-2">
                     <AlertTriangle size={14} className="shrink-0 mt-0.5 text-amber-500" />
                     <div className="text-[10px] font-medium">
                       <strong>Discrepancia de Pago:</strong> {disc.detalle}
@@ -307,70 +361,38 @@ export default function GastoConciliacionDrawer({
                   </div>
                 )}
 
-                <div className="grid grid-cols-2 gap-2.5">
-                  <div>
-                    <span className="text-[10px] text-gray-400 dark:text-gray-550 block">Fecha Movimiento</span>
-                    <span className="font-mono font-bold text-gray-850 dark:text-gray-250">
-                      {new Date(mov.fecha).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' })}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-[10px] text-gray-400 dark:text-gray-550 block">Cuenta Bancaria</span>
-                    <span className="font-bold text-gray-850 dark:text-gray-250 block">
-                      {mov.cuentas_bancarias?.nombre || 'BBVA'}
-                    </span>
-                  </div>
-                </div>
+                {/* Lista de Pagos Bancarios Asociados */}
+                <div className="space-y-2">
+                  <span className="text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider block">
+                    Pagos Bancarios Enlazados ({pagosAsociados.length})
+                  </span>
 
-                <div className="border-t border-gray-200 dark:border-gray-800 pt-2">
-                  <span className="text-[10px] text-gray-400 dark:text-gray-550 block">Concepto en Banco</span>
-                  <p className="font-mono text-[10px] text-gray-700 dark:text-gray-300 font-semibold break-all mt-0.5">
-                    {mov.concepto}
-                  </p>
-                </div>
-
-                <div className="border-t border-gray-200 dark:border-gray-800 pt-2 grid grid-cols-2 gap-2">
-                  <div>
-                    <span className="text-[10px] text-gray-400 dark:text-gray-550 block">Importe Banco</span>
-                    <span className="text-sm font-black text-gray-900 dark:text-white font-mono">
-                      {formatCurrency(mov.monto)}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-[10px] text-gray-400 dark:text-gray-550 block">Tipo Movimiento</span>
-                    <span className={`font-bold uppercase tracking-wider text-[10px] ${mov.tipo_movimiento === 'Retiro' ? 'text-red-500' : 'text-emerald-500'}`}>
-                      {mov.tipo_movimiento}
-                    </span>
-                  </div>
-                </div>
-
-                {mov.conciliaciones_bancarias && mov.conciliaciones_bancarias.length > 0 && (() => {
-                  const acum = mov.conciliaciones_bancarias.reduce((sum: number, c: any) => sum + Number(c.monto_asociado || (c.gasto ? c.gasto.monto : 0)), 0);
-                  const otros = mov.conciliaciones_bancarias.filter((c: any) => c.gasto && c.gasto.id !== gasto.id);
-                  return (
-                    <div className="border-t border-gray-200 dark:border-gray-800 pt-2.5 space-y-1.5 font-sans">
-                      <div className="flex items-center justify-between text-xs bg-emerald-50 dark:bg-emerald-950/30 p-2 rounded-lg border border-emerald-200 dark:border-emerald-800">
-                        <span className="font-extrabold text-emerald-900 dark:text-emerald-300">
-                          📊 Acumulado del Gasto:
-                        </span>
-                        <span className="font-mono font-black text-emerald-600 dark:text-emerald-400">
-                          {formatCurrency(acum)} ({mov.conciliaciones_bancarias.length} facturas)
-                        </span>
-                      </div>
-                      {otros.length > 0 && (
-                        <div className="space-y-1 mt-1">
-                          <span className="text-[10px] text-gray-500 font-semibold block">Otras facturas asociadas a este movimiento:</span>
-                          {otros.map((c: any, idx: number) => (
-                            <div key={idx} className="flex justify-between items-center bg-gray-100 dark:bg-gray-900 p-1.5 rounded-md text-[10px]">
-                              <span className="truncate max-w-[220px] text-gray-700 dark:text-gray-300">{c.gasto.concepto || 'Factura'}</span>
-                              <span className="font-mono font-bold text-gray-900 dark:text-white">{formatCurrency(c.monto_asociado || c.gasto.monto)}</span>
-                            </div>
-                          ))}
+                  {pagosAsociados.map((item: any, idx: number) => {
+                    const mov = item.movimiento;
+                    const fechaFmt = mov.fecha ? new Date(mov.fecha).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
+                    return (
+                      <div key={item.id || idx} className="p-2.5 bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-lg space-y-1.5">
+                        <div className="flex justify-between items-center text-[10px]">
+                          <span className="font-mono font-bold text-gray-800 dark:text-gray-200">
+                            📅 {fechaFmt}
+                          </span>
+                          <span className="font-semibold text-gray-500 dark:text-gray-400">
+                            🏦 {mov.cuentas_bancarias?.nombre || 'BBVA / Banco'}
+                          </span>
                         </div>
-                      )}
-                    </div>
-                  );
-                })()}
+                        <p className="font-mono text-[10px] text-gray-700 dark:text-gray-300 truncate" title={mov.concepto}>
+                          {mov.concepto}
+                        </p>
+                        <div className="flex justify-between items-center border-t border-gray-100 dark:border-gray-800 pt-1.5 text-[10px]">
+                          <span className="text-gray-500">Monto Movimiento: <strong className="font-mono text-gray-900 dark:text-white">{formatCurrency(mov.monto)}</strong></span>
+                          <span className="text-emerald-600 dark:text-emerald-400 font-bold">
+                            Aplicado a Factura: <strong className="font-mono">{formatCurrency(item.monto_asociado)}</strong>
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </>
             ) : (
               <div className="text-center py-5 text-gray-400 dark:text-gray-500 space-y-1">

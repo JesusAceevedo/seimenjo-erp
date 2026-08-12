@@ -579,6 +579,7 @@ export async function calcularNominaCompleta(
     const todayLocalStr = new Date().toLocaleDateString('en-CA');
     const isExentoReloj = !!emp.exento_reloj_checador || !emp.zkteco_user_id || String(emp.zkteco_user_id).trim() === '' || String(emp.zkteco_user_id).trim() === '0';
 
+    let totalHorasTrabajadasAcc = 0;
     let faltasNoJustificadasCount = 0;
     const detallesDias = dateArray.map(d => {
       const dateObj = new Date(d + 'T12:00:00');
@@ -586,7 +587,6 @@ export async function calcularNominaCompleta(
       const schedule = horariosList.find((h: any) => h.empleado_id === emp.id && h.dia_semana === dow);
       const descansoMensual = descansosMensualesList.find((dm: any) => dm.empleado_id === emp.id && dm.fecha === d);
       
-      // El día es de descanso si se asignó en el Calendario Mensual o en el Horario Semanal por defecto
       const esDescanso = descansoMensual
         ? !!descansoMensual.es_descanso
         : !!(schedule && schedule.es_dia_descanso);
@@ -604,20 +604,57 @@ export async function calcularNominaCompleta(
       const tieneChecadas = logsDia.length >= 1;
       const esFuturo = d > todayLocalStr;
 
-    let estado: 'asistencia' | 'descanso' | 'justificado' | 'exento' | 'falta' | 'futuro' = 'asistencia';
-    if (esFuturo) estado = 'futuro';
-    else if (d === todayLocalStr && !incluirHoyEnFaltas && !tieneChecadas && !esDescanso && !isExentoReloj && !tieneIncidencia) {
-      // Si d es HOY y aún no ha terminado la jornada o se eligió no contabilizar hoy como falta antes de tiempo
-      estado = 'futuro';
-    }
-    else if (tieneIncidencia) estado = 'justificado';
-    else if (esDescanso) estado = 'descanso';
-    else if (isExentoReloj) estado = 'exento';
-    else if (tieneChecadas) estado = 'asistencia';
-    else {
-      estado = 'falta';
-      faltasNoJustificadasCount++;
-    }
+      let horasTrabajadasDia = 0;
+      let horasExtraDia = 0;
+      if (logsDia.length >= 2) {
+        const entrada = new Date(logsDia[0].timestamp);
+        const salida = new Date(logsDia[logsDia.length - 1].timestamp);
+
+        const turno = schedule?.turno_id ? turnosList.find((t: any) => t.id === schedule.turno_id) : null;
+        if (turno && turno.hora_entrada_1 && turno.hora_salida_1) {
+          const [hIn, mIn] = turno.hora_entrada_1.split(':').map(Number);
+          const [hOut, mOut] = turno.hora_salida_1.split(':').map(Number);
+
+          const scheduledEntrada = new Date(`${d}T${String(hIn).padStart(2, '0')}:${String(mIn).padStart(2, '0')}:00`);
+          let scheduledSalida = new Date(`${d}T${String(hOut).padStart(2, '0')}:${String(mOut).padStart(2, '0')}:00`);
+          if (scheduledSalida < scheduledEntrada) {
+            scheduledSalida.setDate(scheduledSalida.getDate() + 1);
+          }
+
+          // Si llegó antes de la hora de entrada de su horario, el conteo de trabajo inicia a la hora de entrada del turno
+          const effectiveEntrada = entrada < scheduledEntrada ? scheduledEntrada : entrada;
+          horasTrabajadasDia = Math.max(0, (salida.getTime() - effectiveEntrada.getTime()) / (1000 * 60 * 60));
+
+          // Las horas extras se cuentan a partir de la hora de salida de su horario
+          if (salida > scheduledSalida) {
+            horasExtraDia = (salida.getTime() - scheduledSalida.getTime()) / (1000 * 60 * 60);
+          } else {
+            horasExtraDia = 0;
+          }
+        } else {
+          horasTrabajadasDia = (salida.getTime() - entrada.getTime()) / (1000 * 60 * 60);
+          horasExtraDia = Math.max(0, horasTrabajadasDia - 8);
+        }
+
+        totalHorasTrabajadasAcc += horasTrabajadasDia;
+      } else if (isExentoReloj && !esDescanso) {
+        horasTrabajadasDia = 8;
+        totalHorasTrabajadasAcc += 8;
+      }
+
+      let estado: 'asistencia' | 'descanso' | 'justificado' | 'exento' | 'falta' | 'futuro' = 'asistencia';
+      if (esFuturo) estado = 'futuro';
+      else if (d === todayLocalStr && !incluirHoyEnFaltas && !tieneChecadas && !esDescanso && !isExentoReloj && !tieneIncidencia) {
+        estado = 'futuro';
+      }
+      else if (tieneIncidencia) estado = 'justificado';
+      else if (esDescanso) estado = 'descanso';
+      else if (isExentoReloj) estado = 'exento';
+      else if (tieneChecadas) estado = 'asistencia';
+      else {
+        estado = 'falta';
+        faltasNoJustificadasCount++;
+      }
 
       return {
         fecha: d,
@@ -627,6 +664,8 @@ export async function calcularNominaCompleta(
         incidenciaNombre: incidenciaObj ? (incidenciaObj.tipo || 'Justificación') : null,
         tieneChecadas,
         entradas: logsDia.map((l: any) => new Date(l.timestamp).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })),
+        horasTrabajadas: Math.round(horasTrabajadasDia * 100) / 100,
+        horasExtra: Math.round(horasExtraDia * 100) / 100,
         estado
       };
     });
@@ -643,7 +682,18 @@ export async function calcularNominaCompleta(
     let domingosTrabajados = 0;
 
     if (!isExentoReloj) {
-      for (const d of dateArray) {
+      // Art. 66, 67 y 68 LFT: El tiempo extraordinario no debe exceder de 3 horas diarias ni de 9 horas en una semana.
+      // Las primeras 9 horas extraordinarias semanales (topadas a 3h por día) son DOBLES (200%).
+      // Cualquier excedente (más de 3h en un día o a partir de la 10a hora extra semanal) es TRIPLE (300%).
+      let horasDoblesSemanaActual = 0;
+
+      for (let i = 0; i < dateArray.length; i++) {
+        // Reinicio del contador semanal cada 7 días
+        if (i > 0 && i % 7 === 0) {
+          horasDoblesSemanaActual = 0;
+        }
+
+        const d = dateArray[i];
         const dateObj = new Date(d + 'T12:00:00');
         const dow = dateObj.getDay();
         const schedule = horariosList.find((h: any) => h.empleado_id === emp.id && h.dia_semana === dow);
@@ -662,23 +712,44 @@ export async function calcularNominaCompleta(
         if (logsDia.length >= 2) {
           const entrada = new Date(logsDia[0].timestamp);
           const salida = new Date(logsDia[logsDia.length - 1].timestamp);
-          const horasTrabajadas = (salida.getTime() - entrada.getTime()) / (1000 * 60 * 60);
-
-          if (horasTrabajadas > 8) {
-            const extras = horasTrabajadas - 8;
-            horasDobles += Math.min(extras, 1.5);
-            horasTriples += Math.max(0, extras - 1.5);
-          }
 
           const turno = schedule?.turno_id ? turnosList.find((t: any) => t.id === schedule.turno_id) : null;
-          if (turno) {
+          let horasExtraDia = 0;
+
+          if (turno && turno.hora_entrada_1 && turno.hora_salida_1) {
             const [hIn, mIn] = turno.hora_entrada_1.split(':').map(Number);
+            const [hOut, mOut] = turno.hora_salida_1.split(':').map(Number);
+
+            const scheduledEntrada = new Date(`${d}T${String(hIn).padStart(2, '0')}:${String(mIn).padStart(2, '0')}:00`);
+            let scheduledSalida = new Date(`${d}T${String(hOut).padStart(2, '0')}:${String(mOut).padStart(2, '0')}:00`);
+            if (scheduledSalida < scheduledEntrada) {
+              scheduledSalida.setDate(scheduledSalida.getDate() + 1);
+            }
+
+            if (salida > scheduledSalida) {
+              horasExtraDia = (salida.getTime() - scheduledSalida.getTime()) / (1000 * 60 * 60);
+            }
+
             const entradaHora = entrada.getHours() * 60 + entrada.getMinutes();
             const turnoHora = hIn * 60 + mIn + (turno.tolerancia_minutos || 0);
             if (entradaHora > turnoHora) {
               minutosRetardo += entradaHora - turnoHora;
               countRetardos++;
             }
+          } else {
+            const horasTrabajadas = (salida.getTime() - entrada.getTime()) / (1000 * 60 * 60);
+            horasExtraDia = Math.max(0, horasTrabajadas - 8);
+          }
+
+          if (horasExtraDia > 0) {
+            const maxDoblesDia = Math.min(horasExtraDia, 3);
+            const cupoSemanalRestante = Math.max(0, 9 - horasDoblesSemanaActual);
+            const doblesHoy = Math.min(maxDoblesDia, cupoSemanalRestante);
+            const triplesHoy = Math.max(0, horasExtraDia - doblesHoy);
+
+            horasDobles += doblesHoy;
+            horasTriples += triplesHoy;
+            horasDoblesSemanaActual += doblesHoy;
           }
 
           if (dow === 0) domingosTrabajados++;
@@ -725,6 +796,7 @@ export async function calcularNominaCompleta(
       exentoReloj: isExentoReloj,
       diasTrabajados: diasPagados,
       diasTotalesPeriodo: baseDiasQuincena,
+      totalHorasTrabajadas: isExentoReloj ? (diasPagados * 8) : (Math.round(totalHorasTrabajadasAcc * 10) / 10),
       faltasNoJustificadas: faltasNoJustificadasCount,
       retardosMinutos: minutosRetardo,
       retardosConteo: countRetardos,

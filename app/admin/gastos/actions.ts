@@ -128,6 +128,30 @@ export async function guardarFacturaEnBaseDatos(payload: {
     const { empresaId } = await getUserEmpresaId(token);
     const { isGasto, asociarExistente, existenteId, xmlData, xmlUrl, pdfUrl, ticketUrl } = payload;
 
+    // Validación estricta de RFC por empresa activa
+    if (empresaId) {
+      const { data: empData } = await supabaseAdmin
+        .from('empresas')
+        .select('rfc, nombre')
+        .eq('id', empresaId)
+        .maybeSingle();
+
+      if (empData?.rfc) {
+        const activeEmpRfc = empData.rfc.trim().toUpperCase();
+        if (isGasto) {
+          const recRfc = (xmlData.receptorRfc || '').trim().toUpperCase();
+          if (recRfc && recRfc !== activeEmpRfc) {
+            throw new Error(`El XML no pertenece a esta empresa (${empData.nombre || ''}). El RFC receptor (${xmlData.receptorRfc}) no coincide con el RFC oficial de la empresa (${activeEmpRfc}).`);
+          }
+        } else {
+          const emiRfc = (xmlData.emisorRfc || '').trim().toUpperCase();
+          if (emiRfc && emiRfc !== activeEmpRfc) {
+            throw new Error(`El XML no pertenece a esta empresa (${empData.nombre || ''}). El RFC emisor (${xmlData.emisorRfc}) no coincide con el RFC oficial de la empresa (${activeEmpRfc}).`);
+          }
+        }
+      }
+    }
+
     const formaPagoId = await getFormaPagoIdByCode(xmlData.formaPagoCode);
     const estatusFacturaId = await getEstatusFacturaIdByName('Facturado');
 
