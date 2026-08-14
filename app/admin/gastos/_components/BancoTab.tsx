@@ -12,7 +12,7 @@ import {
   FileCode, FileText, CreditCard, List, Scale, Settings,
   ArrowRightLeft, Play, RefreshCw, FileSpreadsheet, Plus, Trash2, Edit3,
   Layers, Check, X, UploadCloud, Paperclip, AlertTriangle, Filter, Eye, Link, Ticket, Landmark,
-  Tag, Lock, Unlock
+  Tag, Lock, Unlock, ChevronDown, ChevronRight
 } from 'lucide-react';
 import { formatCurrency } from '../../../../lib/formatters';
 import type { MovimientoBancario, EstatusConciliacion, GastoReconciliable, FormaPago, ComprobanteDeposito } from '../../types';
@@ -21,6 +21,7 @@ import { getMetodoPagoLabel } from '../../../../lib/constants/sat';
 import { useCfdiViewer } from '../../_components/CfdiViewerContext';
 import CargasTab from './CargasTab';
 import { generarSaldoFavorDesdeConciliacion } from '../../proveedores/proveedoresActions';
+import { esComisionTpv, esComisionBancaria } from '../commissionUtils';
 
 // ── Tipos de estado que se pasan como props ──────────────────────────────────
 
@@ -168,6 +169,7 @@ export interface BancoTabProps {
   onVincularComprobante?: (comprobanteId: string, movimientoBancarioId: string, montoAsociado?: number) => Promise<any>;
   onDesvincularComprobante?: (comprobanteId: string, movimientoBancarioId?: string | null) => Promise<any>;
   onFusionarReembolso?: (movId1: string, movId2: string, payload: { soporteReembolsoUrl?: string | null; comentarios?: string | null }) => Promise<any>;
+  onConsolidarComisiones?: () => void;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -442,6 +444,7 @@ export default function BancoTab({
   onStartSustituirCarga,
   onReloadMovimientos,
   onOpenUploadModal,
+  onConsolidarComisiones,
 }: BancoTabProps) {
   const { openCfdi } = useCfdiViewer();
   const handleViewCfdi = onViewCfdi || openCfdi;
@@ -458,6 +461,13 @@ export default function BancoTab({
   const [modoConciliacionIngreso, setModoConciliacionIngreso] = React.useState<'pedidos' | 'fichas'>('fichas');
   const [selectedGlobalDepositIds, setSelectedGlobalDepositIds] = React.useState<string[]>([]);
   const [selectedGlobalComprobanteIds, setSelectedGlobalComprobanteIds] = React.useState<string[]>([]);
+
+  // Estados de Agrupación Visual Desplegable para Comisiones TPV y Bancarias
+  const [agruparVisual, setAgruparVisual] = React.useState<boolean>(true);
+  const [expandedTpv, setExpandedTpv] = React.useState<boolean>(false);
+  const [expandedBanco, setExpandedBanco] = React.useState<boolean>(false);
+  const [expandedTpvAtemporal, setExpandedTpvAtemporal] = React.useState<boolean>(false);
+  const [expandedBancoAtemporal, setExpandedBancoAtemporal] = React.useState<boolean>(false);
 
   const [facturadosTerceros, setFacturadosTerceros] = React.useState<Record<string, boolean>>(() => {
     if (typeof window !== 'undefined') {
@@ -523,6 +533,15 @@ export default function BancoTab({
     }
     return { clave: 'abierto', label: 'Periodo Abierto', bgClass: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30' };
   }, [cierresMensualesMap]);
+
+  const getCatName = React.useCallback((m: any) => {
+    return m.categorias_movimiento_bancario?.nombre || (categoriasMovimiento?.find(c => c.id === (m.categoria_movimiento_id || m.categoria_id))?.nombre || '');
+  }, [categoriasMovimiento]);
+
+  const isMovRetiro = React.useCallback((m: any) => {
+    const rawType = (m.tipo_movimiento || '').toLowerCase();
+    return rawType === 'retiro' || rawType === 'cargo' || rawType === 'egreso' || Number(m.retiro || 0) > 0 || Number(m.monto || 0) < 0;
+  }, []);
 
   const opcionesMesesAtemporal = React.useMemo(() => {
     const setMeses = new Set<string>();
@@ -681,7 +700,32 @@ export default function BancoTab({
     }
   };
 
+  const allTpvAtemporal = React.useMemo(() => {
+    return atemporalNoDeducibles.filter((m: any) => isMovRetiro(m) && (esComisionTpv(m.concepto, getCatName(m)) || (m.concepto || '').includes('Total de comisiones TPV')));
+  }, [atemporalNoDeducibles, isMovRetiro, getCatName]);
+
+  const allBancoAtemporal = React.useMemo(() => {
+    return atemporalNoDeducibles.filter((m: any) => isMovRetiro(m) && (esComisionBancaria(m.concepto, getCatName(m)) || (m.concepto || '').includes('Total de comisiones bancarias')));
+  }, [atemporalNoDeducibles, isMovRetiro, getCatName]);
+
+  const totalTpvAtemporalMonto = React.useMemo(() => {
+    return allTpvAtemporal.reduce((sum: number, m: any) => sum + Math.abs(Number(m.monto || m.retiro || 0)), 0);
+  }, [allTpvAtemporal]);
+
+  const totalBancoAtemporalMonto = React.useMemo(() => {
+    return allBancoAtemporal.reduce((sum: number, m: any) => sum + Math.abs(Number(m.monto || m.retiro || 0)), 0);
+  }, [allBancoAtemporal]);
+
+  const regularAtemporal = React.useMemo(() => {
+    if (!agruparVisual) return atemporalNoDeducibles;
+    const tpvIds = new Set(allTpvAtemporal.map(m => m.id));
+    const bancoIds = new Set(allBancoAtemporal.map(m => m.id));
+    return atemporalNoDeducibles.filter((m: any) => !tpvIds.has(m.id) && !bancoIds.has(m.id));
+  }, [atemporalNoDeducibles, agruparVisual, allTpvAtemporal, allBancoAtemporal]);
+
+  const activeAtemporalList = agruparVisual ? regularAtemporal : atemporalNoDeducibles;
   const totalRegistrosAtemporal = atemporalNoDeducibles.length;
+
   const montoTotalAtemporal = React.useMemo(() => {
     return atemporalNoDeducibles.reduce((acc, m) => acc + Math.abs(Number(m.monto || m.retiro || m.deposito || 0)), 0);
   }, [atemporalNoDeducibles]);
@@ -699,10 +743,10 @@ export default function BancoTab({
 
   const paginadosAtemporal = React.useMemo(() => {
     const start = pageAtemporal * pageSizeAtemporal;
-    return atemporalNoDeducibles.slice(start, start + pageSizeAtemporal);
-  }, [atemporalNoDeducibles, pageAtemporal]);
+    return activeAtemporalList.slice(start, start + pageSizeAtemporal);
+  }, [activeAtemporalList, pageAtemporal, pageSizeAtemporal]);
 
-  const totalPaginasAtemporal = Math.max(1, Math.ceil(atemporalNoDeducibles.length / pageSizeAtemporal));
+  const totalPaginasAtemporal = Math.max(1, Math.ceil(activeAtemporalList.length / pageSizeAtemporal));
 
   const toggleFacturadoTercero = (id: string) => {
     setFacturadosTerceros(prev => {
@@ -1402,8 +1446,33 @@ export default function BancoTab({
     categoriasSelected, 
     selectedCuentaId
   );
-  const paginated = filtered.slice(bancoPage * bancoPageSize, (bancoPage + 1) * bancoPageSize);
-  const totalPages = Math.max(1, Math.ceil(filtered.length / bancoPageSize));
+
+  const allTpvMovs = React.useMemo(() => {
+    return filtered.filter(m => isMovRetiro(m) && (esComisionTpv(m.concepto, getCatName(m)) || (m.concepto || '').includes('Total de comisiones TPV')));
+  }, [filtered, isMovRetiro, getCatName]);
+
+  const allBancoMovs = React.useMemo(() => {
+    return filtered.filter(m => isMovRetiro(m) && (esComisionBancaria(m.concepto, getCatName(m)) || (m.concepto || '').includes('Total de comisiones bancarias')));
+  }, [filtered, isMovRetiro, getCatName]);
+
+  const totalTpvMonto = React.useMemo(() => {
+    return allTpvMovs.reduce((sum, m) => sum + Math.abs(Number(m.monto || m.retiro || 0)), 0);
+  }, [allTpvMovs]);
+
+  const totalBancoMonto = React.useMemo(() => {
+    return allBancoMovs.reduce((sum, m) => sum + Math.abs(Number(m.monto || m.retiro || 0)), 0);
+  }, [allBancoMovs]);
+
+  const regularFiltered = React.useMemo(() => {
+    if (!agruparVisual) return filtered;
+    const tpvIds = new Set(allTpvMovs.map(m => m.id));
+    const bancoIds = new Set(allBancoMovs.map(m => m.id));
+    return filtered.filter(m => !tpvIds.has(m.id) && !bancoIds.has(m.id));
+  }, [filtered, agruparVisual, allTpvMovs, allBancoMovs]);
+
+  const activeFilteredList = agruparVisual ? regularFiltered : filtered;
+  const paginated = activeFilteredList.slice(bancoPage * bancoPageSize, (bancoPage + 1) * bancoPageSize);
+  const totalPages = Math.max(1, Math.ceil(activeFilteredList.length / bancoPageSize));
 
   return (
     <div className="flex flex-col flex-1 font-sans overflow-hidden">
@@ -1411,8 +1480,7 @@ export default function BancoTab({
       <div className="flex border-b border-gray-200 dark:border-gray-800 bg-gray-50/20 dark:bg-gray-900/10 p-2 gap-2 shrink-0">
         {([
           { key: 'movimientos', label: 'Movimientos de Cuenta', icon: <List size={14} /> },
-          { key: 'ingresos_comprobantes', label: 'Ingresos y Comprobantes', icon: <CreditCard size={14} /> },
-          { key: 'no_deducibles', label: 'No Deducibles (Atemporal)', icon: <AlertTriangle size={14} /> },
+          { key: 'ingresos_comprobantes', label: 'Comprobantes e Ingresos', icon: <CreditCard size={14} /> },
           { key: 'cargas', label: 'Cargas de Estado de Cuenta', icon: <FileSpreadsheet size={14} /> },
         ] as const).map(({ key, label, icon }) => {
           const isActive = bancoSubTab === key || (key === 'ingresos_comprobantes' && (bancoSubTab === 'global' || bancoSubTab === 'comprobantes'));
@@ -1420,7 +1488,7 @@ export default function BancoTab({
             <button
               key={key}
               onClick={() => {
-                setBancoSubTab(key);
+                setBancoSubTab(key as any);
                 if (key === 'ingresos_comprobantes') {
                   setSelectedGlobalDepositId(null);
                   setSelectedGlobalPedidosIds([]);
@@ -1507,6 +1575,19 @@ export default function BancoTab({
                   </button>
 
                   <button
+                    onClick={() => setAgruparVisual(!agruparVisual)}
+                    className={`px-3 py-2 rounded-lg text-xs font-bold transition-all shrink-0 flex items-center gap-1.5 cursor-pointer ${
+                      agruparVisual
+                        ? 'bg-purple-600 hover:bg-purple-700 text-white shadow-xs'
+                        : 'bg-gray-200 dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-700'
+                    }`}
+                    title="Alternar entre filas desplegables o listado completo plano para comisiones TPV y bancarias"
+                  >
+                    <Layers size={14} />
+                    {agruparVisual ? 'Vista Agrupada Desplegable ▾' : 'Vista Plana (Todos los registros)'}
+                  </button>
+
+                  <button
                     onClick={() => {
                       setTiposSelected([]);
                       setEstatusSelected([]);
@@ -1521,7 +1602,7 @@ export default function BancoTab({
                   </button>
                 </div>
 
-                {/* Resumen Horizontal de Saldos */}
+                {/* Resumen Horizontal de Saldos y Comisiones Acumuladas */}
                 {selectedCuentaId && (() => {
                   const cuenta = cuentasBancarias?.find(c => c.id === selectedCuentaId);
                   const depositos = filtered.filter(m => m.tipo_movimiento === 'Deposito').reduce((acc, m) => acc + Math.abs(Number(m.monto)), 0);
@@ -1529,29 +1610,76 @@ export default function BancoTab({
                   const saldoInicial = Number(cuenta?.saldo_inicial || 0);
                   const saldoCalculado = saldoInicial + depositos - retiros;
 
+                  const getCatName = (m: MovimientoBancario) => {
+                    return m.categorias_movimiento_bancario?.nombre || cuentasBancarias?.length ? (categoriasMovimiento.find(c => c.id === (m.categoria_movimiento_id || m.categoria_id))?.nombre || '') : '';
+                  };
+
+                  const isMovRetiro = (m: MovimientoBancario) => {
+                    const rawType = (m.tipo_movimiento || '').toLowerCase();
+                    return rawType === 'retiro' || rawType === 'cargo' || rawType === 'egreso' || Number(m.retiro || 0) > 0 || Number(m.monto || 0) < 0;
+                  };
+
+                  const tpvComisionesTotal = filtered
+                    .filter(m => isMovRetiro(m) && (esComisionTpv(m.concepto, getCatName(m)) || (m.concepto || '').includes('Total de comisiones TPV')))
+                    .reduce((acc, m) => acc + Math.abs(Number(m.monto || m.retiro || 0)), 0);
+
+                  const bancoComisionesTotal = filtered
+                    .filter(m => isMovRetiro(m) && (esComisionBancaria(m.concepto, getCatName(m)) || (m.concepto || '').includes('Total de comisiones bancarias')))
+                    .reduce((acc, m) => acc + Math.abs(Number(m.monto || m.retiro || 0)), 0);
+
                   return (
-                    <div className="flex gap-6 items-center bg-gray-50/50 dark:bg-gray-900/30 p-2.5 rounded-xl border border-gray-200 dark:border-gray-800 text-[11px] font-sans flex-wrap shrink-0">
-                      <span className="text-[10px] font-extrabold text-gray-400 dark:text-gray-500 uppercase tracking-wider">
-                        Cuadre de Saldos:
-                      </span>
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-gray-550 dark:text-gray-400 font-medium">Saldo Inicial:</span>
-                        <span className="font-mono font-bold text-gray-800 dark:text-gray-200">{formatCurrency(saldoInicial)}</span>
-                      </div>
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-emerald-600 dark:text-emerald-500 font-medium">+ Depósitos:</span>
-                        <span className="font-mono font-bold text-emerald-600 dark:text-emerald-500">{formatCurrency(depositos)}</span>
-                      </div>
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-red-600 dark:text-red-500 font-medium">- Retiros:</span>
-                        <span className="font-mono font-bold text-red-600 dark:text-red-400">{formatCurrency(retiros)}</span>
-                      </div>
-                      <div className="h-4 w-px bg-gray-300 dark:bg-gray-700 hidden sm:block" />
-                      <div className="flex items-center gap-1.5">
-                        <span className="font-bold text-gray-700 dark:text-gray-300">Saldo ERP:</span>
-                        <span className="font-mono font-extrabold text-xs text-gray-900 dark:text-white bg-amber-500/10 dark:bg-amber-500/20 px-2 py-0.5 rounded-md border border-amber-500/20">
-                          {formatCurrency(saldoCalculado)}
+                    <div className="flex flex-col gap-2 shrink-0 font-sans">
+                      <div className="flex gap-6 items-center bg-gray-50/50 dark:bg-gray-900/30 p-2.5 rounded-xl border border-gray-200 dark:border-gray-800 text-[11px] flex-wrap">
+                        <span className="text-[10px] font-extrabold text-gray-400 dark:text-gray-500 uppercase tracking-wider">
+                          Cuadre de Saldos:
                         </span>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-gray-550 dark:text-gray-400 font-medium">Saldo Inicial:</span>
+                          <span className="font-mono font-bold text-gray-800 dark:text-gray-200">{formatCurrency(saldoInicial)}</span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-emerald-600 dark:text-emerald-500 font-medium">+ Depósitos:</span>
+                          <span className="font-mono font-bold text-emerald-600 dark:text-emerald-500">{formatCurrency(depositos)}</span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-red-600 dark:text-red-500 font-medium">- Retiros:</span>
+                          <span className="font-mono font-bold text-red-600 dark:text-red-400">{formatCurrency(retiros)}</span>
+                        </div>
+                        <div className="h-4 w-px bg-gray-300 dark:bg-gray-700 hidden sm:block" />
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-bold text-gray-700 dark:text-gray-300">Saldo ERP:</span>
+                          <span className="font-mono font-extrabold text-xs text-gray-900 dark:text-white bg-amber-500/10 dark:bg-amber-500/20 px-2 py-0.5 rounded-md border border-amber-500/20">
+                            {formatCurrency(saldoCalculado)}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Barra de Comisiones Acumuladas */}
+                      <div className="flex gap-4 items-center bg-purple-50/40 dark:bg-purple-955/20 p-2.5 rounded-xl border border-purple-200/80 dark:border-purple-900/40 text-[11px] flex-wrap">
+                        <span className="text-[10px] font-extrabold text-purple-600 dark:text-purple-400 uppercase tracking-wider flex items-center gap-1">
+                          <Layers size={13} /> Comisiones Acumuladas:
+                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-gray-600 dark:text-gray-400 font-medium">Total Comisiones TPV:</span>
+                          <span className="font-mono font-bold text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-955/40 px-2 py-0.5 rounded border border-rose-200 dark:border-rose-900/40">
+                            {formatCurrency(tpvComisionesTotal)}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-gray-600 dark:text-gray-400 font-medium">Total Comisiones Bancarias:</span>
+                          <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-955/40 px-2 py-0.5 rounded border border-indigo-200 dark:border-indigo-900/40">
+                            {formatCurrency(bancoComisionesTotal)}
+                          </span>
+                        </div>
+                        {onConsolidarComisiones && (
+                          <button
+                            onClick={onConsolidarComisiones}
+                            className="ml-auto px-3 py-1 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-[10px] font-extrabold transition-all shadow-sm flex items-center gap-1 cursor-pointer"
+                            title="Consolidar comisiones individuales en registros acumulados TPV y Bancarias"
+                          >
+                            <Layers size={12} /> Consolidar Comisiones
+                          </button>
+                        )}
                       </div>
                     </div>
                   );
@@ -1851,468 +1979,652 @@ export default function BancoTab({
                           No se encontraron movimientos bancarios (Total cargados: {movimientos?.length || 0}, Filtrados: {filtered?.length || 0})
                         </td>
                       </tr>
-                    ) : paginated.map((m) => {
-                      const color = m.estatus_conciliacion_bancaria?.color || '#9CA3AF';
-                      const dateStr = new Date(m.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' });
-                      const isRetiro = m.tipo_movimiento === 'Retiro';
-                      return (
-                        <tr key={m.id} className="hover:bg-gray-50 dark:hover:bg-gray-900/10 transition-colors">
-                          <td className="p-3 text-center w-10">
-                            <input
-                              type="checkbox"
-                              checked={selectedMovimientos.includes(m.id)}
-                              onChange={(e) => {
-                                if (e.target.checked) {
-                                  setSelectedMovimientos(prev => [...prev, m.id]);
-                                } else {
-                                  setSelectedMovimientos(prev => prev.filter(id => id !== m.id));
-                                }
-                              }}
-                              className="w-3.5 h-3.5 text-amber-500 focus:ring-amber-500 border-gray-300 dark:border-gray-700 rounded bg-white dark:bg-gray-950"
-                            />
-                          </td>
-                          <td className="p-3 font-mono text-gray-500">{dateStr}</td>
-                          <td className="p-3">
-                            <div className="font-bold text-gray-800 dark:text-gray-200">{m.concepto}</div>
-                            <div className="text-[10px] text-gray-400 flex items-center gap-1.5 mt-1">
-                              {m.referencia && <span>Ref: {m.referencia}</span>}
-                              {m.rfc_proveedor && (
-                                <span className="font-mono text-[9px] bg-gray-100 dark:bg-gray-800 px-1 py-0.5 rounded text-gray-500">
-                                  RFC: {m.rfc_proveedor}
-                                </span>
-                              )}
-                            </div>
+                    ) : (() => {
+                      const getCatName = (m: MovimientoBancario) => {
+                        return m.categorias_movimiento_bancario?.nombre || (categoriasMovimiento.find(c => c.id === (m.categoria_movimiento_id || m.categoria_id))?.nombre || '');
+                      };
 
-                             {/* Mostrar Fichas / Comprobantes de Depósito vinculados */}
-                             {(() => {
-                               const associatedComps = (comprobantes || []).filter(c => 
-                                 c.comprobantes_deposito_movimientos?.some(rel => rel.movimiento_id === m.id)
-                               );
-                               if (associatedComps.length === 0) return null;
-                               return (
-                                 <div className="mt-2 space-y-1">
-                                   {associatedComps.map(c => {
-                                     const isVentanilla = c.tipo === 'deposito_ventanilla';
-                                     const rel = c.comprobantes_deposito_movimientos?.find(r => r.movimiento_id === m.id);
-                                     return (
-                                       <div key={c.id} className="p-2 rounded-xl bg-amber-50/70 dark:bg-amber-955/20 border border-amber-200/80 dark:border-amber-900/40 text-[10px] text-gray-700 dark:text-gray-300 font-sans flex justify-between items-center gap-2 shadow-xs">
-                                         <div className="flex items-center gap-1.5 min-w-0">
-                                           <span className={`px-1.5 py-0.2 rounded text-[8px] font-black uppercase ${
-                                             isVentanilla ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'
-                                           }`}>
-                                             {isVentanilla ? 'Ventanilla' : 'Tarjeta'}
-                                           </span>
-                                           <span className="font-bold truncate">{c.descripcion || 'Ficha de Depósito'}</span>
-                                           <span className="font-mono font-black text-emerald-600 dark:text-emerald-400">
-                                              {formatCurrency(rel?.monto_asociado || c.monto)}
-                                            </span>
-                                           <span className="font-mono text-[9px] text-gray-400">({new Date(c.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })})</span>
-                                         </div>
-                                         <div className="flex items-center gap-1.5 shrink-0">
-                                           {c.archivo_url && (
-                                             <button
-                                               type="button"
-                                               onClick={() => onDownloadFile(c.archivo_url!)}
-                                               className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-500 hover:bg-amber-600 text-white flex items-center gap-0.5"
-                                               title="Ver Ticket / Comprobante"
-                                             >
-                                               <Eye size={10} /> Ticket
-                                             </button>
-                                           )}
-                                         </div>
-                                       </div>
-                                     );
-                                   })}
-                                 </div>
-                               );
-                             })()}
+                      const isMovRetiro = (m: MovimientoBancario) => {
+                        const rawType = (m.tipo_movimiento || '').toLowerCase();
+                        return rawType === 'retiro' || rawType === 'cargo' || rawType === 'egreso' || Number(m.retiro || 0) > 0 || Number(m.monto || 0) < 0;
+                      };
 
-                            {/* Mostrar detalles de la conciliación si existen */}
-                            {m.conciliaciones_bancarias && m.conciliaciones_bancarias.length > 0 && (() => {
-                              const totalAcumuladoGasto = m.conciliaciones_bancarias.reduce((sum: number, link: any) => {
-                                return sum + Number(link.monto_asociado || (link.gasto ? link.gasto.monto : link.pedido ? link.pedido.precio_total : 0));
-                              }, 0);
-                              const montoMov = Math.abs(Number(m.monto));
-                              const difMonto = montoMov - totalAcumuladoGasto;
-                              const esCoincidente = Math.abs(difMonto) < 0.05;
+                      const renderSingleMovRow = (m: MovimientoBancario, isChild = false, childTheme?: 'rose' | 'indigo') => {
+                        const color = m.estatus_conciliacion_bancaria?.color || '#9CA3AF';
+                        const dateStr = new Date(m.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' });
+                        const isRetiro = isMovRetiro(m);
 
-                              return (
-                                <div className="mt-2 space-y-1.5 font-sans">
-                                  {/* BANNER VISUAL DE PAGOS VINCULADOS / DIVIDIDOS ENTRE MULTIPLES MOVIMIENTOS */}
-                                  {(() => {
-                                    const linkedMovementsMap: any[] = [];
-                                    m.conciliaciones_bancarias.forEach((link: any) => {
-                                      const isG = !!link.gasto;
-                                      const targetId = isG ? link.gasto?.id : link.pedido?.id;
-                                      if (!targetId) return;
+                        let rowBgClass = 'hover:bg-gray-50 dark:hover:bg-gray-900/10 transition-colors';
+                        if (isChild) {
+                          rowBgClass = childTheme === 'rose'
+                            ? 'bg-rose-50/40 dark:bg-rose-955/20 border-l-4 border-rose-400 dark:border-rose-600 hover:bg-rose-100/50'
+                            : 'bg-indigo-50/40 dark:bg-indigo-955/20 border-l-4 border-indigo-400 dark:border-indigo-600 hover:bg-indigo-100/50';
+                        }
 
-                                      movimientos.forEach((otherM: any) => {
-                                        if (otherM.id === m.id) return;
-                                        const oLink = otherM.conciliaciones_bancarias?.find((l: any) =>
-                                          (isG && l.gasto?.id === targetId) || (!isG && l.pedido?.id === targetId)
-                                        );
-                                        if (oLink && !linkedMovementsMap.some(x => x.id === otherM.id)) {
-                                          linkedMovementsMap.push({
-                                            ...otherM,
-                                            monto_asociado: oLink.monto_asociado || Math.abs(otherM.monto)
-                                          });
-                                        }
-                                      });
-                                    });
-
-                                    if (linkedMovementsMap.length === 0) return null;
-
-                                    const allMovs = [m, ...linkedMovementsMap];
-                                    const totalPagadoAcumulado = allMovs.reduce((sum, x) => sum + Math.abs(Number(x.monto)), 0);
-
-                                    return (
-                                      <div className="p-2.5 rounded-xl bg-indigo-50 dark:bg-indigo-955/40 border border-indigo-200 dark:border-indigo-800 text-[10px] text-indigo-900 dark:text-indigo-200 font-sans space-y-1 shadow-sm">
-                                        <div className="flex items-center justify-between font-extrabold flex-wrap gap-1">
-                                          <span className="flex items-center gap-1.5">
-                                            <Link size={13} className="text-indigo-600 dark:text-indigo-400" />
-                                            <span>🔗 FACTURA COMPARTIDA / DIVIDIDA EN {allMovs.length} PAGOS BANCARIOS VINCULADOS</span>
-                                          </span>
-                                          <span className="font-mono text-[10px] text-indigo-800 dark:text-indigo-200 bg-indigo-100 dark:bg-indigo-900/60 px-2 py-0.5 rounded-lg font-black">
-                                            Suma Pagos: {formatCurrency(totalPagadoAcumulado)}
-                                          </span>
-                                        </div>
-                                        <div className="flex flex-wrap gap-1.5 pt-1">
-                                          {allMovs.map((movItem: any, oidx: number) => {
-                                            const isCurrent = movItem.id === m.id;
-                                            const fDate = movItem.fecha ? new Date(movItem.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : '';
-                                            return (
-                                              <span
-                                                key={oidx}
-                                                className={`px-2 py-1 rounded-lg border text-[9px] font-mono flex items-center gap-1.5 ${
-                                                  isCurrent
-                                                    ? 'bg-indigo-600 text-white border-indigo-700 font-bold shadow-xs'
-                                                    : 'bg-white dark:bg-gray-900 text-indigo-900 dark:text-indigo-200 border-indigo-200 dark:border-indigo-800'
-                                                }`}
-                                              >
-                                                <span>{isCurrent ? '👉 Este pago:' : '🔗 Pago par:'}</span>
-                                                <span>📅 {fDate}</span>
-                                                <strong className="truncate max-w-[140px]" title={movItem.concepto}>{movItem.concepto}</strong>
-                                                <span className="font-bold">({formatCurrency(Math.abs(Number(movItem.monto)))})</span>
-                                              </span>
-                                            );
-                                          })}
-                                        </div>
-                                      </div>
-                                    );
-                                  })()}
-
-                                  {/* Encabezado con el ACUMULADO DEL GASTO (Suma de Facturas) */}
-                                  <div className="flex items-center justify-between bg-emerald-100/80 dark:bg-emerald-950/40 p-2 rounded-xl border border-emerald-200 dark:border-emerald-800 text-[11px]">
-                                    <div className="flex items-center gap-2 flex-wrap">
-                                      <span className="font-extrabold text-emerald-900 dark:text-emerald-300">
-                                        📊 Acumulado Gasto: <span className="font-mono text-xs">{formatCurrency(totalAcumuladoGasto)}</span>
-                                      </span>
-                                      <span className="text-[10px] text-emerald-700 dark:text-emerald-400 font-semibold">
-                                        ({m.conciliaciones_bancarias.length} factura{m.conciliaciones_bancarias.length > 1 ? 's' : ''})
-                                      </span>
-                                    </div>
-                                    <div className="flex items-center gap-1.5 flex-wrap">
-                                      {!esCoincidente ? (
-                                        <span className="text-[9px] font-black bg-amber-200 dark:bg-amber-900/60 text-amber-800 dark:text-amber-300 px-2 py-0.5 rounded-full">
-                                          ⚠️ Dif: {formatCurrency(Math.abs(difMonto))}
-                                        </span>
-                                      ) : (
-                                        <span className="text-[9px] font-black bg-emerald-200 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-300 px-2 py-0.5 rounded-full">
-                                          ✓ Cubierto 100%
-                                        </span>
-                                      )}
-                                      {handleOpenReconcileModal && (
-                                        <button
-                                          type="button"
-                                          onClick={() => handleOpenReconcileModal(m)}
-                                          className="px-2 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-bold transition-all shadow-sm flex items-center gap-1 shrink-0"
-                                          title="Asignar más facturas a este movimiento"
-                                        >
-                                          <Plus size={12} /> Asignar más Facturas
-                                        </button>
-                                      )}
-                                    </div>
-                                  </div>
-
-                                  {/* Lista de facturas vinculadas */}
-                                  {m.conciliaciones_bancarias.map((link: any, idx: number) => {
-                                    const isGasto = !!link.gasto;
-                                    const item = isGasto ? link.gasto : link.pedido;
-                                    if (!item) return null;
-                                    
-                                    const dateDocStr = item.fecha_gasto || item.fecha_pedido
-                                      ? new Date(item.fecha_gasto || item.fecha_pedido).toLocaleDateString('es-MX', { timeZone: 'UTC' })
-                                      : 'Sin fecha';
-                                      
-                                    const rfc = isGasto 
-                                      ? item.proveedores?.rfc 
-                                      : item.clientes?.rfc;
-                                      
-                                    const nombre = isGasto 
-                                      ? item.proveedores?.nombre_comercial 
-                                      : (item.cliente_nombre || item.clientes?.nombre_local);
-                                      
-                                    const metodo = isGasto && item.metodo_pago 
-                                      ? getMetodoPagoLabel(item.metodo_pago) 
-                                      : null;
-
-                                    return (
-                                      <div key={idx} className="p-2.5 rounded-xl bg-emerald-50/60 dark:bg-emerald-950/20 border border-emerald-100 dark:border-emerald-900/40 text-[10px] text-gray-600 dark:text-gray-300 font-sans space-y-1 shadow-sm">
-                                        <div className="flex justify-between items-center font-semibold text-emerald-800 dark:text-emerald-400 gap-2 flex-wrap">
-                                          <span>🔗 {isGasto ? 'Egreso (Gasto)' : 'Venta (Pedido)'}: {isGasto ? item.concepto : `Pedido #${item.numero_pedido}`}</span>
-                                          <div className="flex items-center gap-2">
-                                            <span className="font-mono bg-emerald-100/60 dark:bg-emerald-900/50 px-1.5 py-0.5 rounded text-[9px] font-bold">
-                                              Asoc: {formatCurrency(link.monto_asociado)}
-                                            </span>
-                                            {handleUnlinkReconciliation && (
-                                              <button
-                                                type="button"
-                                                onClick={() => handleUnlinkReconciliation(m.id)}
-                                                className="text-red-550 hover:text-white hover:bg-red-500 dark:hover:bg-red-650 px-1.5 py-0.5 rounded text-[9px] font-bold border border-red-200 dark:border-red-900/50 transition-all flex items-center gap-0.5"
-                                                title="Desvincular o quitar conciliación"
-                                              >
-                                                <X size={10} /> Desvincular
-                                              </button>
-                                            )}
-                                          </div>
-                                        </div>
-                                        <div className="flex flex-wrap gap-x-2 gap-y-0.5 text-gray-550 dark:text-gray-400 text-[9px] font-medium">
-                                          {dateDocStr && <span><strong>Fecha XML:</strong> {dateDocStr}</span>}
-                                          {nombre && (
-                                            <>
-                                              <span>•</span>
-                                              <span><strong>Asignado a:</strong> {nombre} {rfc && <span className="font-mono text-[8px] bg-gray-200/55 dark:bg-gray-800 px-1 py-0.2 rounded text-gray-500">({rfc})</span>}</span>
-                                            </>
-                                          )}
-                                          {metodo && (
-                                            <>
-                                              <span>•</span>
-                                              <span><strong>Método Pago:</strong> {metodo}</span>
-                                            </>
-                                          )}
-                                          {item.monto !== undefined && (
-                                            <>
-                                              <span>•</span>
-                                              <span><strong>Importe Total:</strong> {formatCurrency(isGasto ? item.monto : item.precio_total)}</span>
-                                            </>
-                                          )}
-                                        </div>
-                                      </div>
-                                    );
-                                  })}
-                                </div>
-                              );
-                            })()}
-
-                            {m.movimiento_reembolso_id && (() => {
-                              const otherMov = movimientos.find(x => x.id === m.movimiento_reembolso_id);
-                              return (
-                                <div className="mt-2 p-2.5 rounded-xl bg-amber-50/60 dark:bg-amber-955/20 border border-amber-100 dark:border-amber-900/40 text-[10px] text-gray-600 dark:text-gray-300 font-sans space-y-1 shadow-sm animate-in slide-in-from-top-1 duration-150">
-                                  <div className="flex justify-between items-center font-semibold text-amber-850 dark:text-amber-400 gap-2 flex-wrap">
-                                    <span>🔄 Reembolso Fusionado: {otherMov ? otherMov.concepto : 'Movimiento Vinculado'}</span>
-                                    <div className="flex items-center gap-2">
-                                      {otherMov && (
-                                        <span className="font-mono bg-amber-100/60 dark:bg-amber-900/50 px-1.5 py-0.5 rounded text-[9px] font-bold">
-                                          Monto: {formatCurrency(Math.abs(otherMov.monto))}
-                                        </span>
-                                      )}
-                                      {handleUnlinkReconciliation && (
-                                        <button
-                                          type="button"
-                                          onClick={() => handleUnlinkReconciliation(m.id)}
-                                          className="text-red-550 hover:text-white hover:bg-red-500 dark:hover:bg-red-655 px-1.5 py-0.5 rounded text-[9px] font-bold border border-red-200 dark:border-red-900/50 transition-all flex items-center gap-0.5"
-                                          title="Desvincular o deshacer fusión"
-                                        >
-                                          <X size={10} /> Desvincular
-                                        </button>
-                                      )}
-                                    </div>
-                                  </div>
-                                  {m.comentarios && (
-                                    <p className="text-gray-550 dark:text-gray-400 text-[9px] italic mt-0.5">
-                                      <strong>Nota:</strong> {m.comentarios}
-                                    </p>
-                                  )}
-                                </div>
-                              );
-                            })()}
-                          </td>
-                          <td className="p-3">
-                            <select
-                              className="w-full bg-transparent border-gray-200 dark:border-gray-700 rounded text-[10px] p-1.5 focus:ring-blue-500 dark:text-gray-300"
-                              value={m.categoria_movimiento_id || ''}
-                              onChange={(e) => handleUpdateCategoria?.(m.id, e.target.value)}
-                            >
-                              <option value="">- Sin Categoría -</option>
-                              {categoriasMovimiento?.map(c => (
-                                <option key={c.id} value={c.id}>{c.nombre}</option>
-                              ))}
-                            </select>
-                          </td>
-                          <td className="p-3 text-right font-mono font-bold">
-                            {isRetiro ? (
-                              <span className="text-red-500">-{formatCurrency(m.retiro)}</span>
-                            ) : (
-                              <div className="flex flex-col items-end gap-1 font-sans">
-                                <span className="text-emerald-500">+{formatCurrency(m.deposito)}</span>
-                                {(() => {
-                                  const associatedComps = (comprobantes || []).filter(c => 
-                                    c.comprobantes_deposito_movimientos?.some(rel => rel.movimiento_id === m.id)
-                                  );
-                                  const compsSum = associatedComps.reduce((acc, c) => {
-                                    const rel = c.comprobantes_deposito_movimientos?.find(r => r.movimiento_id === m.id);
-                                    return acc + (rel ? Number(rel.monto_asociado) : 0);
-                                  }, 0);
-                                  if (associatedComps.length > 0) {
-                                    const match = Math.abs(compsSum - Number(m.deposito)) < 0.05;
-                                    return (
-                                      <button
-                                        type="button"
-                                        onClick={() => setActiveDepositMov(m)}
-                                        className={`px-1.5 py-0.5 rounded text-[9px] font-bold border flex items-center gap-1 transition-all hover:scale-105 ${
-                                          match
-                                            ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-600 dark:text-emerald-400'
-                                            : 'bg-amber-500/10 border-amber-500/20 text-amber-600 dark:text-amber-400'
-                                        }`}
-                                        title={`Suma: ${formatCurrency(compsSum)} / Depósito: ${formatCurrency(m.deposito)}`}
-                                      >
-                                        <span>📋 {associatedComps.length} comp</span>
-                                        <span>({formatCurrency(compsSum)})</span>
-                                        {match ? <span>✓</span> : <span>⚠️</span>}
-                                      </button>
-                                    );
+                        return (
+                          <tr key={m.id} className={rowBgClass}>
+                            <td className="p-3 text-center w-10">
+                              <input
+                                type="checkbox"
+                                checked={selectedMovimientos.includes(m.id)}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    setSelectedMovimientos(prev => [...prev, m.id]);
+                                  } else {
+                                    setSelectedMovimientos(prev => prev.filter(id => id !== m.id));
                                   }
-                                  return (
-                                    <button
-                                      type="button"
-                                      onClick={() => setActiveDepositMov(m)}
-                                      className="px-1.5 py-0.5 rounded text-[8px] font-bold border border-dashed border-gray-300 dark:border-gray-700 text-gray-400 hover:text-gray-655 dark:hover:text-gray-250 transition-all hover:bg-gray-50 dark:hover:bg-gray-900/40"
-                                    >
-                                      + Comprobantes
-                                    </button>
-                                  );
-                                })()}
-                              </div>
-                            )}
-                          </td>
-                          <td className="p-3 text-center">
-                            {(() => {
-                              const associatedComps = (comprobantes || []).filter(c => 
-                                c.comprobantes_deposito_movimientos?.some(rel => rel.movimiento_id === m.id)
-                              );
-                              const compsSum = associatedComps.reduce((acc, c) => {
-                                const rel = c.comprobantes_deposito_movimientos?.find(r => r.movimiento_id === m.id);
-                                return acc + (rel ? Number(rel.monto_asociado) : 0);
-                              }, 0);
-                              const isFullyLinked = !isRetiro && associatedComps.length > 0 && Math.abs(compsSum - Number(m.deposito)) < 0.05;
-
-                              if (isFullyLinked) {
-                                return (
-                                  <span className="px-2 py-0.5 rounded-full text-[9px] font-extrabold border bg-emerald-500/10 border-emerald-500/30 text-emerald-600 dark:text-emerald-400">
-                                    Conciliado
+                                }}
+                                className="w-3.5 h-3.5 text-amber-500 focus:ring-amber-500 border-gray-300 dark:border-gray-700 rounded bg-white dark:bg-gray-950"
+                              />
+                            </td>
+                            <td className="p-3 font-mono text-gray-500 font-medium">
+                              {isChild && <span className="text-gray-400 mr-1">└</span>}
+                              {dateStr}
+                            </td>
+                            <td className="p-3">
+                              <div className="font-bold text-gray-800 dark:text-gray-200">{m.concepto}</div>
+                              <div className="text-[10px] text-gray-400 flex items-center gap-1.5 mt-1">
+                                {m.referencia && <span>Ref: {m.referencia}</span>}
+                                {m.rfc_proveedor && (
+                                  <span className="font-mono text-[9px] bg-gray-100 dark:bg-gray-800 px-1 py-0.5 rounded text-gray-500">
+                                    RFC: {m.rfc_proveedor}
                                   </span>
-                                );
-                              }
-                              return (
-                                <span className="px-2 py-0.5 rounded-full text-[9px] font-bold border"
-                                  style={{ backgroundColor: `${color}15`, borderColor: `${color}40`, color }}>
-                                  {m.estatus_conciliacion_bancaria?.nombre || 'Pendiente'}
-                                </span>
-                              );
-                            })()}
-                          </td>
-                          <td className="p-3 text-center">
-                            {isRetiro ? (
-                              <label className="inline-flex items-center gap-1 cursor-pointer">
-                                <input type="checkbox" checked={m.visible_egresos}
-                                  onChange={() => handleToggleVisibility(m.id, 'egresos', !m.visible_egresos)}
-                                  className="w-3.5 h-3.5 rounded text-amber-500 border-gray-300 focus:ring-amber-500" />
-                                <span className="text-[10px] text-gray-500">En Egresos</span>
-                              </label>
-                            ) : (
-                              <label className="inline-flex items-center gap-1 cursor-pointer">
-                                <input type="checkbox" checked={m.visible_ingresos}
-                                  onChange={() => handleToggleVisibility(m.id, 'ingresos', !m.visible_ingresos)}
-                                  className="w-3.5 h-3.5 rounded text-amber-500 border-gray-300 focus:ring-amber-500" />
-                                <span className="text-[10px] text-gray-500">En Ingresos</span>
-                              </label>
-                            )}
-                          </td>
-                          <td className="p-3 text-center">
-                            <div className="flex gap-1 justify-center flex-wrap max-w-[150px] mx-auto">
-                              {/* XML */}
-                              {m.xml_url ? m.xml_url.split(',').filter(Boolean).map((url, i, a) => (
-                                <button key={i} onClick={() => onDownloadFile(url)}
-                                  className="p-1 rounded text-[10px] text-blue-500 hover:bg-blue-500/10 flex items-center gap-0.5" title={`XML ${i + 1}`}>
-                                  <FileCode size={13} />{a.length > 1 && <span className="text-[8px] font-bold font-mono">{i + 1}</span>}
-                                </button>
-                              )) : <button disabled className="p-1 rounded text-[10px] text-gray-300 cursor-not-allowed"><FileCode size={13} /></button>}
-                              {/* PDF Factura */}
-                              {m.pdf_factura_url ? (
-                                m.pdf_factura_url.split(',').filter(Boolean).map((url, i, a) => (
-                                  <button key={i} onClick={() => onDownloadFile(url)}
-                                    className="p-1 rounded text-[10px] text-red-500 hover:bg-red-500/10 flex items-center gap-0.5" title={`PDF ${i + 1}`}>
-                                    <FileText size={13} />{a.length > 1 && <span className="text-[8px] font-bold font-mono">{i + 1}</span>}
-                                  </button>
-                                ))
-                              ) : m.xml_url && handleViewCfdi ? (
-                                <button onClick={() => handleViewCfdi(m.xml_url!.split(',')[0])}
-                                  className="p-1 rounded text-[10px] text-indigo-600 hover:bg-indigo-500/10 flex items-center gap-0.5" title="Ver Representación CFDI">
-                                  <Eye size={13} />
-                                </button>
-                              ) : (
-                                <button disabled className="p-1 rounded text-[10px] text-gray-300 cursor-not-allowed"><FileText size={13} /></button>
-                              )}
-                              {/* Ticket */}
+                                )}
+                              </div>
+
+                              {/* Mostrar Fichas / Comprobantes de Depósito vinculados */}
                               {(() => {
                                 const associatedComps = (comprobantes || []).filter(c => 
                                   c.comprobantes_deposito_movimientos?.some(rel => rel.movimiento_id === m.id)
                                 );
-                                const compTicketUrls = associatedComps.map(c => c.archivo_url).filter(Boolean) as string[];
-                                const directTicketUrls = m.pdf_ticket_url ? m.pdf_ticket_url.split(',').filter(Boolean) : [];
-                                const allTicketUrls = Array.from(new Set([...directTicketUrls, ...compTicketUrls]));
-
-                                if (allTicketUrls.length > 0) {
-                                  return allTicketUrls.map((url, i) => (
-                                    <button key={i} onClick={() => onDownloadFile(url)}
-                                      className="p-1 rounded text-[10px] text-amber-500 hover:bg-amber-500/10 flex items-center gap-0.5" title={`Ticket / Comprobante ${i + 1}`}>
-                                      <CreditCard size={13} />{allTicketUrls.length > 1 && <span className="text-[8px] font-bold font-mono">{i + 1}</span>}
-                                    </button>
-                                  ));
-                                }
-                                return <button disabled className="p-1 rounded text-[10px] text-gray-300 cursor-not-allowed"><CreditCard size={13} /></button>;
+                                if (associatedComps.length === 0) return null;
+                                return (
+                                  <div className="mt-2 space-y-1">
+                                    {associatedComps.map(c => {
+                                      const isVentanilla = c.tipo === 'deposito_ventanilla';
+                                      const rel = c.comprobantes_deposito_movimientos?.find(r => r.movimiento_id === m.id);
+                                      return (
+                                        <div key={c.id} className="p-2 rounded-xl bg-amber-50/70 dark:bg-amber-955/20 border border-amber-200/80 dark:border-amber-900/40 text-[10px] text-gray-700 dark:text-gray-300 font-sans flex justify-between items-center gap-2 shadow-xs">
+                                          <div className="flex items-center gap-1.5 min-w-0">
+                                            <span className={`px-1.5 py-0.2 rounded text-[8px] font-black uppercase ${
+                                              isVentanilla ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'
+                                            }`}>
+                                              {isVentanilla ? 'Ventanilla' : 'Tarjeta'}
+                                            </span>
+                                            <span className="font-bold truncate">{c.descripcion || 'Ficha de Depósito'}</span>
+                                            <span className="font-mono font-black text-emerald-600 dark:text-emerald-400">
+                                              {formatCurrency(rel?.monto_asociado || c.monto)}
+                                            </span>
+                                            <span className="font-mono text-[9px] text-gray-400">({new Date(c.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })})</span>
+                                          </div>
+                                          <div className="flex items-center gap-1.5 shrink-0">
+                                            {c.archivo_url && (
+                                              <button
+                                                type="button"
+                                                onClick={() => onDownloadFile(c.archivo_url!)}
+                                                className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-500 hover:bg-amber-600 text-white flex items-center gap-0.5"
+                                                title="Ver Ticket / Comprobante"
+                                              >
+                                                <Eye size={10} /> Ticket
+                                              </button>
+                                            )}
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                );
                               })()}
-                              
-                              {/* Soporte Reembolso */}
-                              {m.soporte_reembolso_url && m.soporte_reembolso_url.split(',').filter(Boolean).map((url, i, a) => (
-                                <button key={i} onClick={() => onDownloadFile(url)}
-                                  className="p-1 rounded text-[10px] text-amber-605 dark:text-amber-400 hover:bg-amber-500/10 flex items-center gap-0.5" title={`Soporte Reembolso ${i + 1}`}>
-                                  <Paperclip size={13} />{a.length > 1 && <span className="text-[8px] font-bold font-mono">{i + 1}</span>}
+
+                              {/* Mostrar detalles de la conciliación si existen */}
+                              {m.conciliaciones_bancarias && m.conciliaciones_bancarias.length > 0 && (() => {
+                                const totalAcumuladoGasto = m.conciliaciones_bancarias.reduce((sum: number, link: any) => {
+                                  return sum + Number(link.monto_asociado || (link.gasto ? link.gasto.monto : link.pedido ? link.pedido.precio_total : 0));
+                                }, 0);
+                                const montoMov = Math.abs(Number(m.monto));
+                                const difMonto = montoMov - totalAcumuladoGasto;
+                                const esCoincidente = Math.abs(difMonto) < 0.05;
+
+                                return (
+                                  <div className="mt-2 space-y-1.5 font-sans">
+                                    {/* BANNER VISUAL DE PAGOS VINCULADOS / DIVIDIDOS ENTRE MULTIPLES MOVIMIENTOS */}
+                                    {(() => {
+                                      const linkedMovementsMap: any[] = [];
+                                      m.conciliaciones_bancarias.forEach((link: any) => {
+                                        const isG = !!link.gasto;
+                                        const targetId = isG ? link.gasto?.id : link.pedido?.id;
+                                        if (!targetId) return;
+
+                                        movimientos.forEach((otherM: any) => {
+                                          if (otherM.id === m.id) return;
+                                          const oLink = otherM.conciliaciones_bancarias?.find((l: any) =>
+                                            (isG && l.gasto?.id === targetId) || (!isG && l.pedido?.id === targetId)
+                                          );
+                                          if (oLink && !linkedMovementsMap.some(x => x.id === otherM.id)) {
+                                            linkedMovementsMap.push({
+                                              ...otherM,
+                                              monto_asociado: oLink.monto_asociado || Math.abs(otherM.monto)
+                                            });
+                                          }
+                                        });
+                                      });
+
+                                      if (linkedMovementsMap.length === 0) return null;
+
+                                      const allMovs = [m, ...linkedMovementsMap];
+                                      const totalPagadoAcumulado = allMovs.reduce((sum, x) => sum + Math.abs(Number(x.monto)), 0);
+
+                                      return (
+                                        <div className="p-2.5 rounded-xl bg-indigo-50 dark:bg-indigo-955/40 border border-indigo-200 dark:border-indigo-800 text-[10px] text-indigo-900 dark:text-indigo-200 font-sans space-y-1 shadow-sm">
+                                          <div className="flex items-center justify-between font-extrabold flex-wrap gap-1">
+                                            <span className="flex items-center gap-1.5">
+                                              <Link size={13} className="text-indigo-600 dark:text-indigo-400" />
+                                              <span>🔗 FACTURA COMPARTIDA / DIVIDIDA EN {allMovs.length} PAGOS BANCARIOS VINCULADOS</span>
+                                            </span>
+                                            <span className="font-mono text-[10px] text-indigo-800 dark:text-indigo-200 bg-indigo-100 dark:bg-indigo-900/60 px-2 py-0.5 rounded-lg font-black">
+                                              Suma Pagos: {formatCurrency(totalPagadoAcumulado)}
+                                            </span>
+                                          </div>
+                                          <div className="flex flex-wrap gap-1.5 pt-1">
+                                            {allMovs.map((movItem: any, oidx: number) => {
+                                              const isCurrent = movItem.id === m.id;
+                                              const fDate = movItem.fecha ? new Date(movItem.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : '';
+                                              return (
+                                                <span
+                                                  key={oidx}
+                                                  className={`px-2 py-1 rounded-lg border text-[9px] font-mono flex items-center gap-1.5 ${
+                                                    isCurrent
+                                                      ? 'bg-indigo-600 text-white border-indigo-700 font-bold shadow-xs'
+                                                      : 'bg-white dark:bg-gray-900 text-indigo-900 dark:text-indigo-200 border-indigo-200 dark:border-indigo-800'
+                                                  }`}
+                                                >
+                                                  <span>{isCurrent ? '👉 Este pago:' : '🔗 Pago par:'}</span>
+                                                  <span>📅 {fDate}</span>
+                                                  <strong className="truncate max-w-[140px]" title={movItem.concepto}>{movItem.concepto}</strong>
+                                                  <span className="font-bold">({formatCurrency(Math.abs(Number(movItem.monto)))})</span>
+                                                </span>
+                                              );
+                                            })}
+                                          </div>
+                                        </div>
+                                      );
+                                    })()}
+
+                                    {/* Encabezado con el ACUMULADO DEL GASTO (Suma de Facturas) */}
+                                    <div className="flex items-center justify-between bg-emerald-100/80 dark:bg-emerald-950/40 p-2 rounded-xl border border-emerald-200 dark:border-emerald-800 text-[11px]">
+                                      <div className="flex items-center gap-2 flex-wrap">
+                                        <span className="font-extrabold text-emerald-900 dark:text-emerald-300">
+                                          📊 Acumulado Gasto: <span className="font-mono text-xs">{formatCurrency(totalAcumuladoGasto)}</span>
+                                        </span>
+                                        <span className="text-[10px] text-emerald-700 dark:text-emerald-400 font-semibold">
+                                          ({m.conciliaciones_bancarias.length} factura{m.conciliaciones_bancarias.length > 1 ? 's' : ''})
+                                        </span>
+                                      </div>
+                                      <div className="flex items-center gap-1.5 flex-wrap">
+                                        {!esCoincidente ? (
+                                          <span className="text-[9px] font-black bg-amber-200 dark:bg-amber-900/60 text-amber-800 dark:text-amber-300 px-2 py-0.5 rounded-full">
+                                            ⚠️ Dif: {formatCurrency(Math.abs(difMonto))}
+                                          </span>
+                                        ) : (
+                                          <span className="text-[9px] font-black bg-emerald-200 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-300 px-2 py-0.5 rounded-full">
+                                            ✓ Cubierto 100%
+                                          </span>
+                                        )}
+                                        {handleOpenReconcileModal && (
+                                          <button
+                                            type="button"
+                                            onClick={() => handleOpenReconcileModal(m)}
+                                            className="px-2 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-bold transition-all shadow-sm flex items-center gap-1 shrink-0"
+                                            title="Asignar más facturas a este movimiento"
+                                          >
+                                            <Plus size={12} /> Asignar más Facturas
+                                          </button>
+                                        )}
+                                      </div>
+                                    </div>
+
+                                    {/* Lista de facturas vinculadas */}
+                                    {m.conciliaciones_bancarias.map((link: any, idx: number) => {
+                                      const isGasto = !!link.gasto;
+                                      const item = isGasto ? link.gasto : link.pedido;
+                                      if (!item) return null;
+                                      
+                                      const dateDocStr = item.fecha_gasto || item.fecha_pedido
+                                        ? new Date(item.fecha_gasto || item.fecha_pedido).toLocaleDateString('es-MX', { timeZone: 'UTC' })
+                                        : 'Sin fecha';
+                                        
+                                      const rfc = isGasto 
+                                        ? item.proveedores?.rfc 
+                                        : item.clientes?.rfc;
+                                        
+                                      const nombre = isGasto 
+                                        ? item.proveedores?.nombre_comercial 
+                                        : (item.cliente_nombre || item.clientes?.nombre_local);
+                                        
+                                      const metodo = isGasto && item.metodo_pago 
+                                        ? getMetodoPagoLabel(item.metodo_pago) 
+                                        : null;
+
+                                      return (
+                                        <div key={idx} className="p-2.5 rounded-xl bg-emerald-50/60 dark:bg-emerald-950/20 border border-emerald-100 dark:border-emerald-900/40 text-[10px] text-gray-600 dark:text-gray-300 font-sans space-y-1 shadow-sm">
+                                          <div className="flex justify-between items-center font-semibold text-emerald-800 dark:text-emerald-400 gap-2 flex-wrap">
+                                            <span>🔗 {isGasto ? 'Egreso (Gasto)' : 'Venta (Pedido)'}: {isGasto ? item.concepto : `Pedido #${item.numero_pedido}`}</span>
+                                            <div className="flex items-center gap-2">
+                                              <span className="font-mono bg-emerald-100/60 dark:bg-emerald-900/50 px-1.5 py-0.5 rounded text-[9px] font-bold">
+                                                Asoc: {formatCurrency(link.monto_asociado)}
+                                              </span>
+                                              {handleUnlinkReconciliation && (
+                                                <button
+                                                  type="button"
+                                                  onClick={() => handleUnlinkReconciliation(m.id)}
+                                                  className="text-red-550 hover:text-white hover:bg-red-500 dark:hover:bg-red-650 px-1.5 py-0.5 rounded text-[9px] font-bold border border-red-200 dark:border-red-900/50 transition-all flex items-center gap-0.5"
+                                                  title="Desvincular o quitar conciliación"
+                                                >
+                                                  <X size={10} /> Desvincular
+                                                </button>
+                                              )}
+                                            </div>
+                                          </div>
+                                          <div className="flex flex-wrap gap-x-2 gap-y-0.5 text-gray-550 dark:text-gray-400 text-[9px] font-medium">
+                                            {dateDocStr && <span><strong>Fecha XML:</strong> {dateDocStr}</span>}
+                                            {nombre && (
+                                              <>
+                                                <span>•</span>
+                                                <span><strong>Asignado a:</strong> {nombre} {rfc && <span className="font-mono text-[8px] bg-gray-200/55 dark:bg-gray-800 px-1 py-0.2 rounded text-gray-500">({rfc})</span>}</span>
+                                              </>
+                                            )}
+                                            {metodo && (
+                                              <>
+                                                <span>•</span>
+                                                <span><strong>Método Pago:</strong> {metodo}</span>
+                                              </>
+                                            )}
+                                            {item.monto !== undefined && (
+                                              <>
+                                                <span>•</span>
+                                                <span><strong>Importe Total:</strong> {formatCurrency(isGasto ? item.monto : item.precio_total)}</span>
+                                              </>
+                                            )}
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                );
+                              })()}
+
+                              {m.movimiento_reembolso_id && (() => {
+                                const otherMov = movimientos.find(x => x.id === m.movimiento_reembolso_id);
+                                return (
+                                  <div className="mt-2 p-2.5 rounded-xl bg-amber-50/60 dark:bg-amber-955/20 border border-amber-100 dark:border-amber-900/40 text-[10px] text-gray-600 dark:text-gray-300 font-sans space-y-1 shadow-sm animate-in slide-in-from-top-1 duration-150">
+                                    <div className="flex justify-between items-center font-semibold text-amber-850 dark:text-amber-400 gap-2 flex-wrap">
+                                      <span>🔄 Reembolso Fusionado: {otherMov ? otherMov.concepto : 'Movimiento Vinculado'}</span>
+                                      <div className="flex items-center gap-2">
+                                        {otherMov && (
+                                          <span className="font-mono bg-amber-100/60 dark:bg-amber-900/50 px-1.5 py-0.5 rounded text-[9px] font-bold">
+                                            Monto: {formatCurrency(Math.abs(otherMov.monto))}
+                                          </span>
+                                        )}
+                                        {handleUnlinkReconciliation && (
+                                          <button
+                                            type="button"
+                                            onClick={() => handleUnlinkReconciliation(m.id)}
+                                            className="text-red-550 hover:text-white hover:bg-red-500 dark:hover:bg-red-655 px-1.5 py-0.5 rounded text-[9px] font-bold border border-red-200 dark:border-red-900/50 transition-all flex items-center gap-0.5"
+                                            title="Desvincular o deshacer fusión"
+                                          >
+                                            <X size={10} /> Desvincular
+                                          </button>
+                                        )}
+                                      </div>
+                                    </div>
+                                    {m.comentarios && (
+                                      <p className="text-gray-550 dark:text-gray-400 text-[9px] italic mt-0.5">
+                                        <strong>Nota:</strong> {m.comentarios}
+                                      </p>
+                                    )}
+                                  </div>
+                                );
+                              })()}
+                            </td>
+                            <td className="p-3">
+                              <select
+                                className="w-full bg-transparent border-gray-200 dark:border-gray-700 rounded text-[10px] p-1.5 focus:ring-blue-500 dark:text-gray-300"
+                                value={m.categoria_movimiento_id || ''}
+                                onChange={(e) => handleUpdateCategoria?.(m.id, e.target.value)}
+                              >
+                                <option value="">- Sin Categoría -</option>
+                                {categoriasMovimiento?.map(c => (
+                                  <option key={c.id} value={c.id}>{c.nombre}</option>
+                                ))}
+                              </select>
+                            </td>
+                            <td className="p-3 text-right font-mono font-bold">
+                              {isRetiro ? (
+                                <span className="text-red-500">-{formatCurrency(m.retiro)}</span>
+                              ) : (
+                                <div className="flex flex-col items-end gap-1 font-sans">
+                                  <span className="text-emerald-500">+{formatCurrency(m.deposito)}</span>
+                                  {(() => {
+                                    const associatedComps = (comprobantes || []).filter(c => 
+                                      c.comprobantes_deposito_movimientos?.some(rel => rel.movimiento_id === m.id)
+                                    );
+                                    const compsSum = associatedComps.reduce((acc, c) => {
+                                      const rel = c.comprobantes_deposito_movimientos?.find(r => r.movimiento_id === m.id);
+                                      return acc + (rel ? Number(rel.monto_asociado) : 0);
+                                    }, 0);
+                                    if (associatedComps.length > 0) {
+                                      const match = Math.abs(compsSum - Number(m.deposito)) < 0.05;
+                                      return (
+                                        <button
+                                          type="button"
+                                          onClick={() => setActiveDepositMov(m)}
+                                          className={`px-1.5 py-0.5 rounded text-[9px] font-bold border flex items-center gap-1 transition-all hover:scale-105 ${
+                                            match
+                                              ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-600 dark:text-emerald-400'
+                                              : 'bg-amber-500/10 border-amber-500/20 text-amber-600 dark:text-amber-400'
+                                          }`}
+                                          title={`Suma: ${formatCurrency(compsSum)} / Depósito: ${formatCurrency(m.deposito)}`}
+                                        >
+                                          <span>📋 {associatedComps.length} comp</span>
+                                          <span>({formatCurrency(compsSum)})</span>
+                                          {match ? <span>✓</span> : <span>⚠️</span>}
+                                        </button>
+                                      );
+                                    }
+                                    return (
+                                      <button
+                                        type="button"
+                                        onClick={() => setActiveDepositMov(m)}
+                                        className="px-1.5 py-0.5 rounded text-[8px] font-bold border border-dashed border-gray-300 dark:border-gray-700 text-gray-400 hover:text-gray-655 dark:hover:text-gray-250 transition-all hover:bg-gray-50 dark:hover:bg-gray-900/40"
+                                      >
+                                        + Comprobantes
+                                      </button>
+                                    );
+                                  })()}
+                                </div>
+                              )}
+                            </td>
+                            <td className="p-3 text-center">
+                              {(() => {
+                                const associatedComps = (comprobantes || []).filter(c => 
+                                  c.comprobantes_deposito_movimientos?.some(rel => rel.movimiento_id === m.id)
+                                );
+                                const compsSum = associatedComps.reduce((acc, c) => {
+                                  const rel = c.comprobantes_deposito_movimientos?.find(r => r.movimiento_id === m.id);
+                                  return acc + (rel ? Number(rel.monto_asociado) : 0);
+                                }, 0);
+                                const isFullyLinked = !isRetiro && associatedComps.length > 0 && Math.abs(compsSum - Number(m.deposito)) < 0.05;
+
+                                if (isFullyLinked) {
+                                  return (
+                                    <span className="px-2 py-0.5 rounded-full text-[9px] font-extrabold border bg-emerald-500/10 border-emerald-500/30 text-emerald-600 dark:text-emerald-400">
+                                      Conciliado
+                                    </span>
+                                  );
+                                }
+                                return (
+                                  <span className="px-2 py-0.5 rounded-full text-[9px] font-bold border"
+                                    style={{ backgroundColor: `${color}15`, borderColor: `${color}40`, color }}>
+                                    {m.estatus_conciliacion_bancaria?.nombre || 'Pendiente'}
+                                  </span>
+                                );
+                              })()}
+                            </td>
+                            <td className="p-3 text-center">
+                              {isRetiro ? (
+                                <label className="inline-flex items-center gap-1 cursor-pointer">
+                                  <input type="checkbox" checked={m.visible_egresos}
+                                    onChange={() => handleToggleVisibility(m.id, 'egresos', !m.visible_egresos)}
+                                    className="w-3.5 h-3.5 rounded text-amber-500 border-gray-300 focus:ring-amber-500" />
+                                  <span className="text-[10px] text-gray-500">En Egresos</span>
+                                </label>
+                              ) : (
+                                <label className="inline-flex items-center gap-1 cursor-pointer">
+                                  <input type="checkbox" checked={m.visible_ingresos}
+                                    onChange={() => handleToggleVisibility(m.id, 'ingresos', !m.visible_ingresos)}
+                                    className="w-3.5 h-3.5 rounded text-amber-500 border-gray-300 focus:ring-amber-500" />
+                                  <span className="text-[10px] text-gray-500">En Ingresos</span>
+                                </label>
+                              )}
+                            </td>
+                            <td className="p-3 text-center">
+                              <div className="flex gap-1 justify-center flex-wrap max-w-[150px] mx-auto">
+                                {/* XML */}
+                                {m.xml_url ? m.xml_url.split(',').filter(Boolean).map((url, i, a) => (
+                                  <button key={i} onClick={() => onDownloadFile(url)}
+                                    className="p-1 rounded text-[10px] text-blue-500 hover:bg-blue-500/10 flex items-center gap-0.5" title={`XML ${i + 1}`}>
+                                    <FileCode size={13} />{a.length > 1 && <span className="text-[8px] font-bold font-mono">{i + 1}</span>}
+                                  </button>
+                                )) : <button disabled className="p-1 rounded text-[10px] text-gray-300 cursor-not-allowed"><FileCode size={13} /></button>}
+                                {/* PDF Factura */}
+                                {m.pdf_factura_url ? (
+                                  m.pdf_factura_url.split(',').filter(Boolean).map((url, i, a) => (
+                                    <button key={i} onClick={() => onDownloadFile(url)}
+                                      className="p-1 rounded text-[10px] text-red-500 hover:bg-red-500/10 flex items-center gap-0.5" title={`PDF ${i + 1}`}>
+                                      <FileText size={13} />{a.length > 1 && <span className="text-[8px] font-bold font-mono">{i + 1}</span>}
+                                    </button>
+                                  ))
+                                ) : m.xml_url && handleViewCfdi ? (
+                                  <button onClick={() => handleViewCfdi(m.xml_url!.split(',')[0])}
+                                    className="p-1 rounded text-[10px] text-indigo-600 hover:bg-indigo-500/10 flex items-center gap-0.5" title="Ver Representación CFDI">
+                                    <Eye size={13} />
+                                  </button>
+                                ) : (
+                                  <button disabled className="p-1 rounded text-[10px] text-gray-300 cursor-not-allowed"><FileText size={13} /></button>
+                                )}
+                                {/* Ticket */}
+                                {(() => {
+                                  const associatedComps = (comprobantes || []).filter(c => 
+                                    c.comprobantes_deposito_movimientos?.some(rel => rel.movimiento_id === m.id)
+                                  );
+                                  const compTicketUrls = associatedComps.map(c => c.archivo_url).filter(Boolean) as string[];
+                                  const directTicketUrls = m.pdf_ticket_url ? m.pdf_ticket_url.split(',').filter(Boolean) : [];
+                                  const allTicketUrls = Array.from(new Set([...directTicketUrls, ...compTicketUrls]));
+
+                                  if (allTicketUrls.length > 0) {
+                                    return allTicketUrls.map((url, i) => (
+                                      <button key={i} onClick={() => onDownloadFile(url)}
+                                        className="p-1 rounded text-[10px] text-amber-500 hover:bg-amber-500/10 flex items-center gap-0.5" title={`Ticket / Comprobante ${i + 1}`}>
+                                        <CreditCard size={13} />{allTicketUrls.length > 1 && <span className="text-[8px] font-bold font-mono">{i + 1}</span>}
+                                      </button>
+                                    ));
+                                  }
+                                  return <button disabled className="p-1 rounded text-[10px] text-gray-300 cursor-not-allowed"><CreditCard size={13} /></button>;
+                                })()}
+                                
+                                {/* Soporte Reembolso */}
+                                {m.soporte_reembolso_url && m.soporte_reembolso_url.split(',').filter(Boolean).map((url, i, a) => (
+                                  <button key={i} onClick={() => onDownloadFile(url)}
+                                    className="p-1 rounded text-[10px] text-amber-605 dark:text-amber-400 hover:bg-amber-500/10 flex items-center gap-0.5" title={`Soporte Reembolso ${i + 1}`}>
+                                    <Paperclip size={13} />{a.length > 1 && <span className="text-[8px] font-bold font-mono">{i + 1}</span>}
+                                  </button>
+                                ))}
+                              </div>
+                            </td>
+                            <td className="p-3 text-center">
+                              <div className="flex gap-1 justify-center">
+                                <button onClick={() => handleOpenReconcileModal?.(m)}
+                                  className="p-1.5 rounded text-amber-500 hover:bg-amber-500/15 transition-colors" title="Conciliación Manual">
+                                  <ArrowRightLeft size={13} />
                                 </button>
-                              ))}
-                            </div>
-                          </td>
-                          <td className="p-3 text-center">
-                            <div className="flex gap-1 justify-center">
-                              <button onClick={() => handleOpenReconcileModal?.(m)}
-                                className="p-1.5 rounded text-amber-500 hover:bg-amber-500/15 transition-colors" title="Conciliación Manual">
-                                <ArrowRightLeft size={13} />
-                              </button>
-                              <button onClick={() => onEditMovimiento(m)}
-                                disabled={m.estatus_conciliacion_bancaria?.clave !== 'pendiente'}
-                                className={`p-1.5 rounded transition-colors ${m.estatus_conciliacion_bancaria?.clave !== 'pendiente' ? 'text-gray-300 dark:text-gray-600 cursor-not-allowed' : 'text-blue-500 hover:bg-blue-500/15'}`} title={m.estatus_conciliacion_bancaria?.clave !== 'pendiente' ? "No editable (Conciliado)" : "Editar"}>
-                                <Edit3 size={13} />
-                              </button>
-                              <button onClick={() => handleDeleteMovimiento?.(m.id)}
-                                disabled={m.estatus_conciliacion_bancaria?.clave !== 'pendiente'}
-                                className={`p-1.5 rounded transition-colors ${m.estatus_conciliacion_bancaria?.clave !== 'pendiente' ? 'text-gray-300 dark:text-gray-600 cursor-not-allowed' : 'text-red-500 hover:bg-red-500/15'}`} title={m.estatus_conciliacion_bancaria?.clave !== 'pendiente' ? "No eliminable (Conciliado)" : "Eliminar"}>
-                                <Trash2 size={13} />
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
+                                <button onClick={() => onEditMovimiento(m)}
+                                  disabled={m.estatus_conciliacion_bancaria?.clave !== 'pendiente'}
+                                  className={`p-1.5 rounded transition-colors ${m.estatus_conciliacion_bancaria?.clave !== 'pendiente' ? 'text-gray-300 dark:text-gray-600 cursor-not-allowed' : 'text-blue-500 hover:bg-blue-500/15'}`} title={m.estatus_conciliacion_bancaria?.clave !== 'pendiente' ? "No editable (Conciliado)" : "Editar"}>
+                                  <Edit3 size={13} />
+                                </button>
+                                <button onClick={() => handleDeleteMovimiento?.(m.id)}
+                                  disabled={m.estatus_conciliacion_bancaria?.clave !== 'pendiente'}
+                                  className={`p-1.5 rounded transition-colors ${m.estatus_conciliacion_bancaria?.clave !== 'pendiente' ? 'text-gray-300 dark:text-gray-600 cursor-not-allowed' : 'text-red-500 hover:bg-red-500/15'}`} title={m.estatus_conciliacion_bancaria?.clave !== 'pendiente' ? "No eliminable (Conciliado)" : "Eliminar"}>
+                                  <Trash2 size={13} />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      };
+
+                      const renderedRows: React.ReactNode[] = [];
+
+                      // Solo en la página 1 (bancoPage === 0) renderizar los 2 grupos unificados si agruparVisual es true
+                      if (agruparVisual && bancoPage === 0) {
+                        // 1. Grupo Unificado TPV
+                        if (allTpvMovs.length > 0) {
+                          renderedRows.push(
+                            <tr key="group-header-tpv-global" className="bg-gradient-to-r from-rose-500/15 via-rose-500/5 to-transparent border-l-4 border-rose-500 dark:border-rose-400 border-y border-rose-200/60 dark:border-rose-900/50 font-sans font-bold shadow-xs transition-all hover:bg-rose-100/40 dark:hover:bg-rose-955/50">
+                              <td className="p-3 text-center">
+                                <input
+                                  type="checkbox"
+                                  checked={allTpvMovs.length > 0 && allTpvMovs.every(m => selectedMovimientos.includes(m.id))}
+                                  onChange={(e) => {
+                                    const ids = allTpvMovs.map(m => m.id);
+                                    if (e.target.checked) {
+                                      setSelectedMovimientos(prev => Array.from(new Set([...prev, ...ids])));
+                                    } else {
+                                      setSelectedMovimientos(prev => prev.filter(id => !ids.includes(id)));
+                                    }
+                                  }}
+                                  className="w-3.5 h-3.5 text-rose-600 focus:ring-rose-500 border-rose-300 rounded cursor-pointer"
+                                />
+                              </td>
+                              <td className="p-3 font-mono text-[11px] text-rose-700 dark:text-rose-300 font-black">
+                                {new Date(allTpvMovs[0].fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })}
+                              </td>
+                              <td className="p-3">
+                                <button
+                                  type="button"
+                                  onClick={() => setExpandedTpv(!expandedTpv)}
+                                  className="flex items-center gap-2.5 text-rose-950 dark:text-rose-100 hover:text-rose-600 font-extrabold text-xs cursor-pointer group/btn"
+                                >
+                                  <div className={`p-1 rounded-md bg-rose-500/20 text-rose-600 dark:text-rose-400 transition-transform duration-200 ${expandedTpv ? 'rotate-0' : '-rotate-90'}`}>
+                                    <ChevronDown size={14} className="shrink-0" />
+                                  </div>
+                                  <Layers size={16} className="text-rose-600 shrink-0" />
+                                  <span className="text-xs font-black tracking-tight">Total de Comisiones TPV ({allTpvMovs.length} movimientos en total)</span>
+                                  <span className="text-[10px] bg-rose-500/15 dark:bg-rose-900/70 text-rose-800 dark:text-rose-200 px-2.5 py-0.5 rounded-full font-mono font-bold ml-1 border border-rose-300/40">
+                                    {expandedTpv ? '▲ Ocultar listado' : `▼ Desplegar todos (${allTpvMovs.length})`}
+                                  </span>
+                                </button>
+                              </td>
+                              <td className="p-3">
+                                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-rose-500/20 dark:bg-rose-900/60 text-rose-800 dark:text-rose-200 border border-rose-400/30 shadow-2xs">
+                                  Comisión TPV
+                                </span>
+                              </td>
+                              <td className="p-3 text-right font-mono font-black text-rose-600 dark:text-rose-400 text-sm">
+                                -{formatCurrency(totalTpvMonto)}
+                              </td>
+                              <td className="p-3 text-center">
+                                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-rose-100/80 dark:bg-rose-955/60 text-rose-700 dark:text-rose-300 border border-rose-300/60 dark:border-rose-800/80">
+                                  Agrupado ({allTpvMovs.length})
+                                </span>
+                              </td>
+                              <td className="p-3 text-center text-xs text-rose-400 font-bold">-</td>
+                              <td className="p-3 text-center text-xs text-rose-400 font-bold">-</td>
+                              <td className="p-3 text-center">
+                                {onConsolidarComisiones && (
+                                  <button
+                                    type="button"
+                                    onClick={onConsolidarComisiones}
+                                    className="px-3 py-1.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-[10px] font-black rounded-xl transition-all shadow-md shadow-purple-500/20 hover:shadow-purple-500/30 flex items-center gap-1.5 mx-auto cursor-pointer"
+                                    title="Consolidar en 1 solo registro físico en la base de datos"
+                                  >
+                                    <Layers size={12} /> Consolidar DB
+                                  </button>
+                                )}
+                              </td>
+                            </tr>
+                          );
+
+                          if (expandedTpv) {
+                            allTpvMovs.forEach(m => {
+                              renderedRows.push(renderSingleMovRow(m, true, 'rose'));
+                            });
+                          }
+                        }
+
+                        // 2. Grupo Unificado Bancario
+                        if (allBancoMovs.length > 0) {
+                          renderedRows.push(
+                            <tr key="group-header-banco-global" className="bg-gradient-to-r from-indigo-500/15 via-indigo-500/5 to-transparent border-l-4 border-indigo-500 dark:border-indigo-400 border-y border-indigo-200/60 dark:border-indigo-900/50 font-sans font-bold shadow-xs transition-all hover:bg-indigo-100/40 dark:hover:bg-indigo-955/50">
+                              <td className="p-3 text-center">
+                                <input
+                                  type="checkbox"
+                                  checked={allBancoMovs.length > 0 && allBancoMovs.every(m => selectedMovimientos.includes(m.id))}
+                                  onChange={(e) => {
+                                    const ids = allBancoMovs.map(m => m.id);
+                                    if (e.target.checked) {
+                                      setSelectedMovimientos(prev => Array.from(new Set([...prev, ...ids])));
+                                    } else {
+                                      setSelectedMovimientos(prev => prev.filter(id => !ids.includes(id)));
+                                    }
+                                  }}
+                                  className="w-3.5 h-3.5 text-indigo-600 focus:ring-indigo-500 border-indigo-300 rounded cursor-pointer"
+                                />
+                              </td>
+                              <td className="p-3 font-mono text-[11px] text-indigo-700 dark:text-indigo-300 font-black">
+                                {new Date(allBancoMovs[0].fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })}
+                              </td>
+                              <td className="p-3">
+                                <button
+                                  type="button"
+                                  onClick={() => setExpandedBanco(!expandedBanco)}
+                                  className="flex items-center gap-2.5 text-indigo-950 dark:text-indigo-100 hover:text-indigo-600 font-extrabold text-xs cursor-pointer group/btn"
+                                >
+                                  <div className={`p-1 rounded-md bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 transition-transform duration-200 ${expandedBanco ? 'rotate-0' : '-rotate-90'}`}>
+                                    <ChevronDown size={14} className="shrink-0" />
+                                  </div>
+                                  <Landmark size={16} className="text-indigo-600 shrink-0" />
+                                  <span className="text-xs font-black tracking-tight">Total de Comisiones Bancarias ({allBancoMovs.length} movimientos en total)</span>
+                                  <span className="text-[10px] bg-indigo-500/15 dark:bg-indigo-900/70 text-indigo-800 dark:text-indigo-200 px-2.5 py-0.5 rounded-full font-mono font-bold ml-1 border border-indigo-300/40">
+                                    {expandedBanco ? '▲ Ocultar listado' : `▼ Desplegar todos (${allBancoMovs.length})`}
+                                  </span>
+                                </button>
+                              </td>
+                              <td className="p-3">
+                                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-indigo-500/20 dark:bg-indigo-900/60 text-indigo-800 dark:text-indigo-200 border border-indigo-400/30 shadow-2xs">
+                                  Comisión Bancaria
+                                </span>
+                              </td>
+                              <td className="p-3 text-right font-mono font-black text-indigo-600 dark:text-indigo-400 text-sm">
+                                -{formatCurrency(totalBancoMonto)}
+                              </td>
+                              <td className="p-3 text-center">
+                                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-indigo-100/80 dark:bg-indigo-955/60 text-indigo-700 dark:text-indigo-300 border border-indigo-300/60 dark:border-indigo-800/80">
+                                  Agrupado ({allBancoMovs.length})
+                                </span>
+                              </td>
+                              <td className="p-3 text-center text-xs text-indigo-400 font-bold">-</td>
+                              <td className="p-3 text-center text-xs text-indigo-400 font-bold">-</td>
+                              <td className="p-3 text-center">
+                                {onConsolidarComisiones && (
+                                  <button
+                                    type="button"
+                                    onClick={onConsolidarComisiones}
+                                    className="px-3 py-1.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-[10px] font-black rounded-xl transition-all shadow-md shadow-purple-500/20 hover:shadow-purple-500/30 flex items-center gap-1.5 mx-auto cursor-pointer"
+                                    title="Consolidar en 1 solo registro físico en la base de datos"
+                                  >
+                                    <Layers size={12} /> Consolidar DB
+                                  </button>
+                                )}
+                              </td>
+                            </tr>
+                          );
+
+                          if (expandedBanco) {
+                            allBancoMovs.forEach(m => {
+                              renderedRows.push(renderSingleMovRow(m, true, 'indigo'));
+                            });
+                          }
+                        }
+                      }
+
+                      // Renderizar movimientos individuales paginados
+                      paginated.forEach(m => {
+                        renderedRows.push(renderSingleMovRow(m, false));
+                      });
+
+                      return renderedRows;
+                    })()}
                   </tbody>
                 </table>
               </div>
@@ -4327,17 +4639,25 @@ export default function BancoTab({
                           No se encontraron movimientos no deducibles con los filtros seleccionados.
                         </td>
                       </tr>
-                    ) : (
-                      paginadosAtemporal.map((m: any) => {
+                    ) : (() => {
+                      const renderSingleAtemporalRow = (m: any, isChild = false, childTheme?: 'rose' | 'indigo') => {
                         const pInfo = getPeriodStatusForMov(m.fecha);
                         const hasPostCloseNote = m.comentarios?.includes('Conciliado después del periodo de cierre');
                         const isOutflow = m.tipo_movimiento === 'Retiro' || Number(m.retiro || 0) > 0;
                         const amt = Math.abs(Number(m.monto || m.retiro || m.deposito || 0));
 
+                        let rowBgClass = 'hover:bg-gray-50 dark:hover:bg-gray-900/30 transition-colors';
+                        if (isChild) {
+                          rowBgClass = childTheme === 'rose'
+                            ? 'bg-rose-50/40 dark:bg-rose-955/20 border-l-4 border-rose-400 dark:border-rose-600 hover:bg-rose-100/50'
+                            : 'bg-indigo-50/40 dark:bg-indigo-955/20 border-l-4 border-indigo-400 dark:border-indigo-600 hover:bg-indigo-100/50';
+                        }
+
                         return (
-                          <tr key={m.id} className="hover:bg-gray-50 dark:hover:bg-gray-900/30 transition-colors">
+                          <tr key={m.id} className={rowBgClass}>
                             <td className="p-3 font-mono">
                               <div className="font-bold text-gray-900 dark:text-gray-100">
+                                {isChild && <span className="text-gray-400 mr-1">└</span>}
                                 {m.fecha ? new Date(m.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : '—'}
                               </div>
                               <div className="text-[10px] text-gray-400 font-sans font-semibold">
@@ -4431,8 +4751,140 @@ export default function BancoTab({
                             </td>
                           </tr>
                         );
-                      })
-                    )}
+                      };
+
+                      const renderedAtemporalRows: React.ReactNode[] = [];
+
+                      // Solo en la página 1 (pageAtemporal === 0) renderizar los 2 grupos unificados si agruparVisual es true
+                      if (agruparVisual && pageAtemporal === 0) {
+                        // 1. Grupo TPV Atemporal
+                        if (allTpvAtemporal.length > 0) {
+                          renderedAtemporalRows.push(
+                            <tr key="atemporal-group-tpv-global" className="bg-gradient-to-r from-rose-500/15 via-rose-500/5 to-transparent border-l-4 border-rose-500 dark:border-rose-400 border-y border-rose-200/60 dark:border-rose-900/50 font-sans font-bold shadow-xs transition-all hover:bg-rose-100/40 dark:hover:bg-rose-955/50">
+                              <td className="p-3 font-mono text-xs text-rose-700 dark:text-rose-300 font-black">
+                                {allTpvAtemporal[0].fecha ? new Date(allTpvAtemporal[0].fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : '—'}
+                              </td>
+                              <td className="p-3">
+                                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-rose-100/80 dark:bg-rose-955/60 text-rose-700 dark:text-rose-300 border border-rose-300/60 dark:border-rose-800/80">
+                                  Agrupado ({allTpvAtemporal.length})
+                                </span>
+                              </td>
+                              <td className="p-3">
+                                <button
+                                  type="button"
+                                  onClick={() => setExpandedTpvAtemporal(!expandedTpvAtemporal)}
+                                  className="flex items-center gap-2.5 text-rose-950 dark:text-rose-100 hover:text-rose-600 font-extrabold text-xs cursor-pointer group/btn"
+                                >
+                                  <div className={`p-1 rounded-md bg-rose-500/20 text-rose-600 dark:text-rose-400 transition-transform duration-200 ${expandedTpvAtemporal ? 'rotate-0' : '-rotate-90'}`}>
+                                    <ChevronDown size={14} className="shrink-0" />
+                                  </div>
+                                  <Layers size={16} className="text-rose-600 shrink-0" />
+                                  <span className="text-xs font-black tracking-tight">Total de Comisiones TPV ({allTpvAtemporal.length} movimientos en total)</span>
+                                  <span className="text-[10px] bg-rose-500/15 dark:bg-rose-900/70 text-rose-800 dark:text-rose-200 px-2.5 py-0.5 rounded-full font-mono font-bold ml-1 border border-rose-300/40">
+                                    {expandedTpvAtemporal ? '▲ Ocultar listado' : `▼ Desplegar todos (${allTpvAtemporal.length})`}
+                                  </span>
+                                </button>
+                              </td>
+                              <td className="p-3 text-right font-mono font-black text-rose-600 dark:text-rose-400 text-sm">
+                                -{formatCurrency(totalTpvAtemporalMonto || totalTpvMonto)}
+                              </td>
+                              <td className="p-3">
+                                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-rose-500/20 dark:bg-rose-900/60 text-rose-800 dark:text-rose-200 border border-rose-400/30 shadow-2xs">
+                                  Comisión TPV
+                                </span>
+                              </td>
+                              <td className="p-3 text-gray-400 italic text-[10px]">-</td>
+                              <td className="p-3 text-gray-400 italic text-[10px]">-</td>
+                              <td className="p-3 text-center">
+                                {onConsolidarComisiones && (
+                                  <button
+                                    type="button"
+                                    onClick={onConsolidarComisiones}
+                                    className="px-3 py-1.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-[10px] font-black rounded-xl transition-all shadow-md shadow-purple-500/20 hover:shadow-purple-500/30 flex items-center gap-1.5 mx-auto cursor-pointer"
+                                    title="Consolidar en 1 solo registro de BD"
+                                  >
+                                    <Layers size={12} /> Consolidar DB
+                                  </button>
+                                )}
+                              </td>
+                            </tr>
+                          );
+
+                          if (expandedTpvAtemporal) {
+                            allTpvAtemporal.forEach(m => {
+                              renderedAtemporalRows.push(renderSingleAtemporalRow(m, true, 'rose'));
+                            });
+                          }
+                        }
+
+                        // 2. Grupo Bancario Atemporal
+                        if (allBancoAtemporal.length > 0) {
+                          renderedAtemporalRows.push(
+                            <tr key="atemporal-group-banco-global" className="bg-gradient-to-r from-indigo-500/15 via-indigo-500/5 to-transparent border-l-4 border-indigo-500 dark:border-indigo-400 border-y border-indigo-200/60 dark:border-indigo-900/50 font-sans font-bold shadow-xs transition-all hover:bg-indigo-100/40 dark:hover:bg-indigo-955/50">
+                              <td className="p-3 font-mono text-xs text-indigo-700 dark:text-indigo-300 font-black">
+                                {allBancoAtemporal[0].fecha ? new Date(allBancoAtemporal[0].fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : '—'}
+                              </td>
+                              <td className="p-3">
+                                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-indigo-100/80 dark:bg-indigo-955/60 text-indigo-700 dark:text-indigo-300 border border-indigo-300/60 dark:border-indigo-800/80">
+                                  Agrupado ({allBancoAtemporal.length})
+                                </span>
+                              </td>
+                              <td className="p-3">
+                                <button
+                                  type="button"
+                                  onClick={() => setExpandedBancoAtemporal(!expandedBancoAtemporal)}
+                                  className="flex items-center gap-2.5 text-indigo-950 dark:text-indigo-100 hover:text-indigo-600 font-extrabold text-xs cursor-pointer group/btn"
+                                >
+                                  <div className={`p-1 rounded-md bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 transition-transform duration-200 ${expandedBancoAtemporal ? 'rotate-0' : '-rotate-90'}`}>
+                                    <ChevronDown size={14} className="shrink-0" />
+                                  </div>
+                                  <Landmark size={16} className="text-indigo-600 shrink-0" />
+                                  <span className="text-xs font-black tracking-tight">Total de Comisiones Bancarias ({allBancoAtemporal.length} movimientos en total)</span>
+                                  <span className="text-[10px] bg-indigo-500/15 dark:bg-indigo-900/70 text-indigo-800 dark:text-indigo-200 px-2.5 py-0.5 rounded-full font-mono font-bold ml-1 border border-indigo-300/40">
+                                    {expandedBancoAtemporal ? '▲ Ocultar listado' : `▼ Desplegar todos (${allBancoAtemporal.length})`}
+                                  </span>
+                                </button>
+                              </td>
+                              <td className="p-3 text-right font-mono font-black text-indigo-600 dark:text-indigo-400 text-sm">
+                                -{formatCurrency(totalBancoAtemporalMonto || totalBancoMonto)}
+                              </td>
+                              <td className="p-3">
+                                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-indigo-500/20 dark:bg-indigo-900/60 text-indigo-800 dark:text-indigo-200 border border-indigo-400/30 shadow-2xs">
+                                  Comisión Bancaria
+                                </span>
+                              </td>
+                              <td className="p-3 text-gray-400 italic text-[10px]">-</td>
+                              <td className="p-3 text-gray-400 italic text-[10px]">-</td>
+                              <td className="p-3 text-center">
+                                {onConsolidarComisiones && (
+                                  <button
+                                    type="button"
+                                    onClick={onConsolidarComisiones}
+                                    className="px-3 py-1.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-[10px] font-black rounded-xl transition-all shadow-md shadow-purple-500/20 hover:shadow-purple-500/30 flex items-center gap-1.5 mx-auto cursor-pointer"
+                                    title="Consolidar en 1 solo registro de BD"
+                                  >
+                                    <Layers size={12} /> Consolidar DB
+                                  </button>
+                                )}
+                              </td>
+                            </tr>
+                          );
+
+                          if (expandedBancoAtemporal) {
+                            allBancoAtemporal.forEach(m => {
+                              renderedAtemporalRows.push(renderSingleAtemporalRow(m, true, 'indigo'));
+                            });
+                          }
+                        }
+                      }
+
+                      // Resto de movimientos atemporales paginados
+                      paginadosAtemporal.forEach((m: any) => {
+                        renderedAtemporalRows.push(renderSingleAtemporalRow(m, false));
+                      });
+
+                      return renderedAtemporalRows;
+                    })()}
                   </tbody>
                 </table>
               </div>

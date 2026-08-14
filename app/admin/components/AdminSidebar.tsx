@@ -18,9 +18,15 @@ import {
   FileText,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   Wrench,
+  FolderKanban,
+  FileBarChart,
+  Sun,
+  Moon,
 } from 'lucide-react';
 import CompanySwitcher from './CompanySwitcher';
+import { useThemeMode } from '../../../lib/useThemeMode';
 
 interface AdminSidebarProps {
   logoUrl: string | null;
@@ -54,24 +60,46 @@ export default function AdminSidebar({
   const router = useRouter();
   const pathname = usePathname();
   const [logoError, setLogoError] = React.useState(false);
+  const { isDarkMode, toggleDarkMode } = useThemeMode();
+
+  // Módulos que integran "Operación Administrativa"
+  const adminOpSubItems = [
+    { module: 'contabilidad', path: '/admin/contabilidad', label: 'Contabilidad', icon: Receipt },
+    { module: 'conciliacion', path: '/admin/conciliacion', label: 'Conciliación Bancaria', icon: Landmark },
+    { module: 'expediente', path: '/admin/expediente', label: 'Expediente', icon: FileDown },
+    { module: 'herramientas', path: '/admin/herramientas', label: 'Herramientas', icon: Wrench },
+    { module: 'reportes', path: '/admin/reportes', label: 'Reportes', icon: FileBarChart },
+  ];
+
+  const isSubItemActive = adminOpSubItems.some(item => pathname === item.path || pathname.startsWith(item.path));
+  const [isOpAdminOpen, setIsOpAdminOpen] = React.useState(isSubItemActive);
+
+  // Mantener abierto si se navega a uno de los submódulos
+  React.useEffect(() => {
+    if (isSubItemActive) {
+      setIsOpAdminOpen(true);
+    }
+  }, [pathname, isSubItemActive]);
 
   const isSelected = (path: string) => pathname === path || pathname.startsWith(path);
 
-  const navItems = [
+  // Módulos estándar principales
+  const topNavItems = [
     { module: 'ventas', path: '/admin/monitor', label: 'Pedidos', icon: LayoutDashboard },
     { module: 'clientes', path: '/admin/Clientes', label: 'Clientes', icon: Users },
     { module: 'productos', path: '/admin/productos', label: 'Productos', icon: Package },
     { module: 'inventario', path: '/admin/inventario', label: 'Inventario', icon: Boxes },
     { module: 'gastos', path: '/admin/egresos', label: 'Egresos', icon: FileText },
-    { module: 'contabilidad', path: '/admin/contabilidad', label: 'Contabilidad', icon: Receipt },
-    { module: 'conciliacion', path: '/admin/conciliacion', label: 'Conciliación Bancaria', icon: Landmark },
-    { module: 'expediente', path: '/admin/expediente', label: 'Expediente', icon: FileDown },
+  ];
+
+  const bottomNavItems = [
     { module: 'proveedores', path: '/admin/proveedores', label: 'Proveedores', icon: Truck },
     { module: 'personal', path: '/admin/staff', label: 'Personal', icon: Users },
     { module: 'asistencia', path: '/admin/asistencia', label: 'Asistencia y Nóminas', icon: Clock },
-    { module: 'herramientas', path: '/admin/herramientas', label: 'Herramientas', icon: Wrench },
     { module: 'configuracion', path: '/admin/configuracion', label: 'Configuración', icon: Settings },
   ];
+
+  const hasAnyOpAdminModule = adminOpSubItems.some(item => hasModule(item.module));
 
   return (
     <aside
@@ -126,17 +154,115 @@ export default function AdminSidebar({
             )}
           </div>
         )}
-        <button
-          onClick={toggleSidebar}
-          className="p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400 hover:text-gray-600 dark:hover:text-gray-250 shrink-0 transition-colors"
-          title={isSidebarCollapsed ? 'Expandir menú' : 'Colapsar menú'}
-        >
-          {isSidebarCollapsed ? <ChevronRight size={15} /> : <ChevronLeft size={15} />}
-        </button>
+
+        <div className="flex items-center gap-1 shrink-0">
+          <button
+            type="button"
+            onClick={toggleDarkMode}
+            className="p-1.5 rounded-lg text-gray-500 dark:text-gray-400 hover:text-amber-500 dark:hover:text-amber-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+            title={isDarkMode ? 'Cambiar a Modo Claro' : 'Cambiar a Modo Oscuro'}
+          >
+            {isDarkMode ? <Sun size={16} className="text-amber-400" /> : <Moon size={16} className="text-slate-600" />}
+          </button>
+          <button
+            type="button"
+            onClick={toggleSidebar}
+            className="p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400 hover:text-gray-600 dark:hover:text-gray-250 transition-colors"
+            title={isSidebarCollapsed ? 'Expandir menú' : 'Colapsar menú'}
+          >
+            {isSidebarCollapsed ? <ChevronRight size={15} /> : <ChevronLeft size={15} />}
+          </button>
+        </div>
       </div>
 
       <nav className={`flex-1 overflow-y-auto space-y-1 font-sans ${isSidebarCollapsed ? 'p-2' : 'p-3'}`}>
-        {navItems.map(
+        {/* Módulos Principales Superiores */}
+        {topNavItems.map(
+          (item) =>
+            hasModule(item.module) && (
+              <button
+                key={item.path}
+                onClick={() => router.push(item.path)}
+                title={isSidebarCollapsed ? item.label : undefined}
+                className={`w-full flex items-center rounded-lg font-medium transition-all ${
+                  isSidebarCollapsed
+                    ? 'justify-center p-2.5 hover:bg-gray-100 dark:hover:bg-gray-850'
+                    : 'gap-3 px-3 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-800'
+                } ${
+                  isSelected(item.path)
+                    ? 'bg-amber-600 text-white font-semibold hover:bg-amber-600 dark:hover:bg-amber-600'
+                    : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
+                }`}
+              >
+                <item.icon size={isSidebarCollapsed ? 20 : 16} />
+                {!isSidebarCollapsed && <span>{item.label}</span>}
+              </button>
+            )
+        )}
+
+        {/* Agrupador: Operación Administrativa */}
+        {hasAnyOpAdminModule && (
+          <div className="pt-1">
+            <button
+              type="button"
+              onClick={() => setIsOpAdminOpen(!isOpAdminOpen)}
+              title={isSidebarCollapsed ? 'Operación Administrativa' : undefined}
+              className={`w-full flex items-center justify-between rounded-lg font-medium transition-all ${
+                isSidebarCollapsed
+                  ? 'justify-center p-2.5 hover:bg-gray-100 dark:hover:bg-gray-850'
+                  : 'gap-3 px-3 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-800'
+              } ${
+                isSubItemActive
+                  ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 font-bold border border-amber-500/20'
+                  : 'text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white'
+              }`}
+            >
+              <div className="flex items-center gap-3">
+                <FolderKanban size={isSidebarCollapsed ? 20 : 16} className="text-amber-500 shrink-0" />
+                {!isSidebarCollapsed && <span className="font-extrabold text-xs tracking-tight">Operación Administrativa</span>}
+              </div>
+              {!isSidebarCollapsed && (
+                <ChevronDown
+                  size={14}
+                  className={`transition-transform duration-200 text-gray-400 ${
+                    isOpAdminOpen ? 'rotate-180' : 'rotate-0'
+                  }`}
+                />
+              )}
+            </button>
+
+            {/* Submódulos de Operación Administrativa */}
+            {(isOpAdminOpen || isSidebarCollapsed) && (
+              <div className={isSidebarCollapsed ? 'space-y-1 mt-1' : 'ml-4 pl-2 border-l border-gray-200 dark:border-gray-800 space-y-1 mt-1'}>
+                {adminOpSubItems.map(
+                  (subItem) =>
+                    hasModule(subItem.module) && (
+                      <button
+                        key={subItem.path}
+                        onClick={() => router.push(subItem.path)}
+                        title={isSidebarCollapsed ? subItem.label : undefined}
+                        className={`w-full flex items-center rounded-lg font-medium transition-all ${
+                          isSidebarCollapsed
+                            ? 'justify-center p-2 hover:bg-gray-100 dark:hover:bg-gray-850'
+                            : 'gap-2.5 px-2.5 py-1.5 text-xs hover:bg-gray-100 dark:hover:bg-gray-800'
+                        } ${
+                          isSelected(subItem.path)
+                            ? 'bg-amber-600 text-white font-bold hover:bg-amber-600 dark:hover:bg-amber-600 shadow-xs'
+                            : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
+                        }`}
+                      >
+                        <subItem.icon size={isSidebarCollapsed ? 18 : 14} />
+                        {!isSidebarCollapsed && <span>{subItem.label}</span>}
+                      </button>
+                    )
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Módulos Principales Inferiores */}
+        {bottomNavItems.map(
           (item) =>
             hasModule(item.module) && (
               <button
