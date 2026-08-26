@@ -13,7 +13,6 @@ import { useSessionToken } from '../../../lib/hooks/useSessionToken';
 import { EditMovimientoModal } from '../gastos/_components/EditModals';
 import {
   obtenerSignedUrl,
-  comprobarEgresoConFacturas,
 } from '../gastos/actions';
 import {
   importarMovimientosBancarios,
@@ -33,13 +32,12 @@ import {
   desvincularComprobanteDeMovimiento,
   obtenerComprobantesDeposito,
   fusionarMovimientosReembolso,
-  resyncAllCajaChicaComprobantesAction,
-  consolidarComisionesExistentes
+  resyncAllCajaChicaComprobantesAction
 } from '../gastos/reconciliationActions';
 import { ComprobanteDeposito } from '../types';
 import {
   RefreshCw, AlertTriangle, CheckCircle, Sun, Moon,
-  Calendar, ArrowRightLeft, Landmark, FileSpreadsheet, FileText, Layers, DollarSign
+  Calendar, ArrowRightLeft, Landmark, FileSpreadsheet
 } from 'lucide-react';
 import BancoTab from '../gastos/_components/BancoTab';
 import PeriodSelector from '../_components/PeriodSelector';
@@ -73,31 +71,8 @@ export default function BankReconciliationModule() {
   const [selectedCuentaId, setSelectedCuentaId] = useState<string>('');
   const [pedidosPendientes, setPedidosPendientes] = useState<any[]>([]);
   const [gastosReconciliables, setGastosReconciliables] = useState<any[]>([]);
-  const [gastosPendientes, setGastosPendientes] = useState<any[]>([]);
-  const [facturasSueltas, setFacturasSueltas] = useState<any[]>([]);
-  const [clientes, setClientes] = useState<any[]>([]);
   const [selectedGlobalDepositId, setSelectedGlobalDepositId] = useState<string | null>(null);
   const [selectedGlobalPedidosIds, setSelectedGlobalPedidosIds] = useState<string[]>([]);
-
-  // Modales Acumulados Migrados
-  const [facturacionAcumuladaModal, setFacturacionAcumuladaModal] = useState({
-    open: false,
-    clienteId: '',
-    pedidos: [] as any[],
-    seleccionados: [] as string[],
-    folio: '',
-    loading: false,
-    error: ''
-  });
-
-  const [comprobacionAcumuladaModal, setComprobacionAcumuladaModal] = useState({
-    open: false,
-    egresoPadreId: '',
-    seleccionados: [] as string[],
-    comentario: '',
-    loading: false,
-    error: ''
-  });
   const [editingMovimiento, setEditingMovimiento] = useState<any>(null);
   const [editMovimientoToken, setEditMovimientoToken] = useState<string>('');
   const [showMigrationBanner, setShowMigrationBanner] = useState<boolean>(false);
@@ -137,14 +112,12 @@ export default function BankReconciliationModule() {
   });
 
   const [isUploading, setIsUploading] = useState(false);
-  const [acumularComisiones, setAcumularComisiones] = useState<boolean>(true);
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
 
   // Modales
   const [reconcileModal, setReconcileModal] = useState<{
     open: boolean;
     movimiento: any | null;
-    movimientosBatch?: any[];
     xmlUrl: string;
     pdfFacturaUrl: string;
     pdfTicketUrl: string;
@@ -366,36 +339,6 @@ export default function BankReconciliationModule() {
         .is('gasto_padre_id', null)
         .order('fecha_gasto', { ascending: false });
       setGastosReconciliables(gReconcile || []);
-
-      // 7b. Gastos pendientes de comprobación acumulada
-      const { data: gPend } = await supabase
-        .from('gastos')
-        .select('id, concepto, monto, fecha_gasto')
-        .eq('empresa_id', empresaId)
-        .is('uuid_fiscal', null)
-        .eq('estatus_facturado', false)
-        .eq('es_deducible', true)
-        .is('gasto_padre_id', null)
-        .order('fecha_gasto', { ascending: false });
-      setGastosPendientes(gPend || []);
-
-      // 7c. Facturas XML de gastos sueltas (para comprobación acumulada)
-      const { data: fSueltas } = await supabase
-        .from('gastos')
-        .select('*, proveedores(nombre_comercial, rfc)')
-        .eq('empresa_id', empresaId)
-        .not('uuid_fiscal', 'is', null)
-        .is('gasto_padre_id', null)
-        .order('fecha_gasto', { ascending: false });
-      setFacturasSueltas(fSueltas || []);
-
-      // 7d. Clientes para facturación acumulada
-      const { data: cliData } = await supabase
-        .from('clientes')
-        .select('id, nombre_local, rfc')
-        .eq('empresa_id', empresaId)
-        .order('nombre_local', { ascending: true });
-      setClientes(cliData || []);
 
       // 8. Comprobantes de depósito
       let compData = null;
@@ -626,9 +569,7 @@ export default function BankReconciliationModule() {
         parsedMovements,
         token,
         selectedCuentaId,
-        excelFile?.name || 'Estado_de_cuenta.xlsx',
-        sustituirCarga?.id,
-        acumularComisiones
+        sustituirCarga?.id
       );
 
       if (importRes.success) {
@@ -642,29 +583,6 @@ export default function BankReconciliationModule() {
       }
     } catch (e: any) {
       alert('Error al importar los movimientos: ' + e.message);
-    } finally {
-      setIsUploading(false);
-    }
-  };
-
-  const handleConsolidarComisiones = async () => {
-    try {
-      setIsUploading(true);
-      setMessage({ text: 'Consolidando comisiones TPV y bancarias...', type: 'info' });
-      const token = await getSessionToken();
-      const res = await consolidarComisionesExistentes(token, selectedCuentaId || null, selectedMonth || null);
-      if (res.success) {
-        if ((res.countConsolidated || 0) > 0) {
-          setMessage({ text: `Se consolidaron ${res.countConsolidated} movimientos de comisión en registros acumulados TPV y Bancarios.`, type: 'success' });
-          await fetchData();
-        } else {
-          setMessage({ text: 'No se encontraron comisiones individuales pendientes de consolidar en este periodo.', type: 'info' });
-        }
-      } else {
-        throw new Error(res.error);
-      }
-    } catch (err: any) {
-      alert('Error al consolidar comisiones: ' + err.message);
     } finally {
       setIsUploading(false);
     }
@@ -1680,24 +1598,6 @@ export default function BankReconciliationModule() {
             <PeriodSelector onPeriodChange={() => { setBancoPage(0); refreshPeriodStatus(); }} />
 
             <button
-              onClick={() => setFacturacionAcumuladaModal(prev => ({ ...prev, open: true }))}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-xs transition-all shadow-sm cursor-pointer"
-              title="Agrupar pedidos de venta liquidados y asignar factura SAT"
-            >
-              <FileText size={15} />
-              <span>Facturación Acumulada</span>
-            </button>
-
-            <button
-              onClick={() => setComprobacionAcumuladaModal(prev => ({ ...prev, open: true }))}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-extrabold text-xs transition-all shadow-sm cursor-pointer"
-              title="Asociar facturas XML de proveedores a un egreso por transferencia"
-            >
-              <Layers size={15} />
-              <span>Comprobación Acumulada</span>
-            </button>
-
-            <button
               onClick={exportReporteSoloIngresosExcel}
               className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs transition-all shadow-sm cursor-pointer"
               title="Descargar únicamente el reporte de Ingresos en Excel (.xlsx)"
@@ -1730,6 +1630,12 @@ export default function BankReconciliationModule() {
               title="Refrescar datos"
             >
               <RefreshCw size={18} />
+            </button>
+            <button
+              onClick={toggleDarkMode}
+              className="p-2.5 rounded-xl bg-gray-200 dark:bg-gray-800 text-gray-600 dark:text-blue-400 hover:bg-gray-300 dark:hover:bg-gray-700 transition-colors shadow-sm"
+            >
+              {isDarkMode ? <Sun size={20} /> : <Moon size={20} />}
             </button>
           </div>
         </div>
@@ -2023,7 +1929,6 @@ NOTIFY pgrst, 'reload schema';`}
               onStartSustituirCarga={handleStartSustituirCarga}
               onReloadMovimientos={fetchData}
               onOpenUploadModal={() => fileInputRef.current?.click()}
-              onConsolidarComisiones={handleConsolidarComisiones}
             />
           </div>
         </div>
@@ -2038,20 +1943,6 @@ NOTIFY pgrst, 'reload schema';`}
         onChange={handleExcelUpload}
         className="hidden"
       />
-
-      {/* EDITAR MOVIMIENTO MODAL */}
-      {editingMovimiento && (
-        <EditMovimientoModal
-          isOpen={!!editingMovimiento}
-          movimiento={editingMovimiento}
-          token={editMovimientoToken}
-          onClose={() => setEditingMovimiento(null)}
-          onSaveSuccess={() => {
-            setEditingMovimiento(null);
-            fetchData();
-          }}
-        />
-      )}
 
       {/* MODAL DE ASIGNACIÓN MANUAL DE ENCABEZADOS Y MAPEO DE COLUMNAS */}
       {showMappingModal && (
@@ -2116,7 +2007,7 @@ NOTIFY pgrst, 'reload schema';`}
             </div>
 
             {/* Mapeo de Campos */}
-            <div className="space-y-3 mb-4">
+            <div className="space-y-3 mb-6">
               <h4 className="text-[10px] font-bold uppercase text-gray-400 tracking-wider">Correspondencia de Columnas</h4>
               {[
                 { field: 'fecha', label: 'Columna de Fecha *', required: true },
@@ -2139,24 +2030,6 @@ NOTIFY pgrst, 'reload schema';`}
                   </select>
                 </div>
               ))}
-            </div>
-
-            {/* Opción de Acumulación de Comisiones */}
-            <div className="mb-6 p-3 bg-purple-50/50 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-900/40 rounded-xl">
-              <label className="flex items-center gap-2.5 text-xs font-semibold text-gray-800 dark:text-gray-200 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={acumularComisiones}
-                  onChange={(e) => setAcumularComisiones(e.target.checked)}
-                  className="rounded border-purple-300 text-purple-600 focus:ring-purple-500 h-4 w-4 shrink-0"
-                />
-                <div>
-                  <span className="font-bold text-purple-700 dark:text-purple-300">Acumular comisiones en registros consolidados</span>
-                  <p className="text-[10px] font-normal text-gray-500 dark:text-gray-400 mt-0.5">
-                    Agrupa automáticamente las comisiones de TPV y las comisiones bancarias en un registro único separado por cada tipo ("Total de comisiones TPV" y "Total de comisiones bancarias").
-                  </p>
-                </div>
-              </label>
             </div>
 
             <div className="flex gap-3 pt-2 border-t border-gray-100 dark:border-gray-800">
@@ -2193,285 +2066,6 @@ NOTIFY pgrst, 'reload schema';`}
           onClose={() => setEditingMovimiento(null)}
           onSuccess={() => { setEditingMovimiento(null); fetchData(); }}
         />
-      )}
-      {/* MODAL: FACTURACIÓN ACUMULADA */}
-      {facturacionAcumuladaModal.open && (
-        <div className="fixed inset-0 bg-black/60 dark:bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4 transition-all">
-          <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-6 rounded-2xl w-full max-w-xl shadow-2xl animate-in zoom-in-95 duration-200 text-gray-900 dark:text-gray-100 flex flex-col font-sans">
-            <h3 className="text-xl font-extrabold mb-2 flex items-center gap-2 text-emerald-600 dark:text-emerald-500">
-              <Layers /> Facturación Acumulada de Ingresos
-            </h3>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mb-6">
-              Agrupa múltiples pedidos de venta liquidados y asígnales una sola factura del SAT.
-            </p>
-
-            <div className="space-y-4 flex-1 overflow-y-auto max-h-[60vh] pr-2">
-              <div>
-                <label className="text-xs font-bold text-gray-500 uppercase block mb-1">1. Selecciona el Cliente *</label>
-                <select
-                  value={facturacionAcumuladaModal.clienteId}
-                  onChange={async (e) => {
-                    const cId = e.target.value;
-                    if (!cId) {
-                      setFacturacionAcumuladaModal(prev => ({ ...prev, clienteId: '', pedidos: [], seleccionados: [] }));
-                      return;
-                    }
-                    setFacturacionAcumuladaModal(prev => ({ ...prev, clienteId: cId, loading: true, error: '' }));
-                    try {
-                      const empresaId = await getEmpresaId();
-                      const { data: pData, error } = await supabase
-                        .from('pedidos')
-                        .select('id, numero_pedido, precio_total, cliente_nombre, fecha_pedido')
-                        .eq('empresa_id', empresaId)
-                        .eq('cliente_id', cId)
-                        .is('folio_factura', null)
-                        .eq('estatus_pago', 'Liquidado')
-                        .order('creado_en', { ascending: false });
-
-                      if (error) throw error;
-                      setFacturacionAcumuladaModal(prev => ({ ...prev, pedidos: pData || [], seleccionados: [], loading: false }));
-                    } catch (err: any) {
-                      setFacturacionAcumuladaModal(prev => ({ ...prev, error: err.message, loading: false }));
-                    }
-                  }}
-                  className="w-full bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-lg text-xs outline-none focus:ring-1 focus:ring-emerald-500 font-bold"
-                >
-                  <option value="">-- Seleccione Cliente --</option>
-                  {clientes.map(c => (
-                    <option key={c.id} value={c.id}>{c.nombre_local} ({c.rfc})</option>
-                  ))}
-                </select>
-              </div>
-
-              {facturacionAcumuladaModal.clienteId && (
-                <div className="space-y-4">
-                  <div>
-                    <label className="text-xs font-bold text-gray-500 uppercase block mb-2">
-                      2. Selecciona Pedidos a Facturar ({facturacionAcumuladaModal.pedidos.length} liquidados pendientes)
-                    </label>
-                    {facturacionAcumuladaModal.pedidos.length === 0 ? (
-                      <div className="text-xs text-gray-400 italic p-3 bg-gray-50 dark:bg-gray-900 rounded-lg">
-                        No hay pedidos liquidados pendientes de facturar para este cliente.
-                      </div>
-                    ) : (
-                      <div className="border border-gray-250 dark:border-gray-800 rounded-xl overflow-hidden max-h-[250px] overflow-y-auto divide-y divide-gray-150 dark:divide-gray-850">
-                        {facturacionAcumuladaModal.pedidos.map((p: any) => {
-                          const isSel = facturacionAcumuladaModal.seleccionados.includes(p.id);
-                          return (
-                            <div
-                              key={p.id}
-                              onClick={() => {
-                                setFacturacionAcumuladaModal(prev => {
-                                  const n = prev.seleccionados.includes(p.id)
-                                    ? prev.seleccionados.filter((id: string) => id !== p.id)
-                                    : [...prev.seleccionados, p.id];
-                                  return { ...prev, seleccionados: n };
-                                });
-                              }}
-                              className={`p-3 text-xs flex items-center justify-between cursor-pointer transition-colors ${
-                                isSel ? 'bg-emerald-500/10 dark:bg-emerald-500/5' : 'hover:bg-gray-50 dark:hover:bg-gray-900/30'
-                              }`}
-                            >
-                              <div className="flex items-center gap-2">
-                                <input
-                                  type="checkbox"
-                                  checked={isSel}
-                                  onChange={() => {}}
-                                  className="rounded border-gray-300 dark:border-gray-700 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
-                                />
-                                <div>
-                                  <span className="font-bold text-gray-800 dark:text-gray-200">Pedido #{p.numero_pedido}</span>
-                                  <span className="text-[10px] text-gray-400 dark:text-gray-500 block">
-                                    {p.fecha_pedido ? new Date(p.fecha_pedido).toLocaleDateString() : 'Sin fecha'}
-                                  </span>
-                                </div>
-                              </div>
-                              <span className="font-mono font-bold text-emerald-600 dark:text-emerald-400">{formatCurrency(p.precio_total)}</span>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-
-                  {facturacionAcumuladaModal.seleccionados.length > 0 && (
-                    <div className="mt-4 p-4 bg-gray-50 dark:bg-gray-900/30 rounded-xl border border-gray-200 dark:border-gray-850">
-                      <label className="text-xs font-bold text-gray-500 uppercase block mb-2">3. Ingresa el Folio de Factura SAT *</label>
-                      <input
-                        type="text"
-                        placeholder="Ej. ACUM-2026-001"
-                        value={facturacionAcumuladaModal.folio}
-                        onChange={e => setFacturacionAcumuladaModal(prev => ({ ...prev, folio: e.target.value }))}
-                        className="w-full bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 p-2.5 rounded-lg text-xs uppercase text-gray-900 dark:text-white focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all font-mono"
-                      />
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-
-            <div className="flex gap-3 pt-6 mt-6 border-t border-gray-200 dark:border-gray-800">
-              <button
-                onClick={() => setFacturacionAcumuladaModal({
-                  open: false, clienteId: '', pedidos: [], seleccionados: [], folio: '', loading: false, error: ''
-                })}
-                disabled={facturacionAcumuladaModal.loading}
-                className="flex-1 py-2.5 border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-300 rounded-xl font-semibold hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors disabled:opacity-50 text-xs"
-              >
-                Cancelar
-              </button>
-              <button
-                onClick={async () => {
-                  const { seleccionados, folio } = facturacionAcumuladaModal;
-                  if (seleccionados.length === 0 || !folio.trim()) return;
-                  setFacturacionAcumuladaModal(prev => ({ ...prev, loading: true, error: '' }));
-                  try {
-                    const { error } = await supabase
-                      .from('pedidos')
-                      .update({ folio_factura: folio })
-                      .in('id', seleccionados);
-
-                    if (error) throw error;
-                    alert('Factura acumulada asignada con éxito.');
-                    setFacturacionAcumuladaModal({
-                      open: false, clienteId: '', pedidos: [], seleccionados: [], folio: '', loading: false, error: ''
-                    });
-                    await fetchData();
-                  } catch (err: any) {
-                    setFacturacionAcumuladaModal(prev => ({ ...prev, error: err.message, loading: false }));
-                  }
-                }}
-                disabled={facturacionAcumuladaModal.loading || facturacionAcumuladaModal.seleccionados.length === 0 || !facturacionAcumuladaModal.folio.trim()}
-                className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl shadow-lg transition-colors flex items-center justify-center gap-2 disabled:opacity-50 text-xs"
-              >
-                {facturacionAcumuladaModal.loading ? 'Asignando...' : 'Asignar Factura Acumulada'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL: COMPROBACIÓN ACUMULADA DE EGRESOS */}
-      {comprobacionAcumuladaModal.open && (
-        <div className="fixed inset-0 bg-black/60 dark:bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4 transition-all">
-          <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-6 rounded-2xl w-full max-w-4xl shadow-2xl max-h-[90vh] overflow-y-auto text-gray-900 dark:text-gray-100 flex flex-col font-sans">
-            <div className="flex justify-between items-start border-b border-gray-100 dark:border-gray-800 pb-4 mb-4">
-              <div>
-                <h3 className="text-xl font-extrabold flex items-center gap-2 text-blue-600 dark:text-blue-500">
-                  <DollarSign /> Comprobación Acumulada de Egresos
-                </h3>
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                  Asocia múltiples facturas XML de gastos (proveedores) a un único egreso por transferencia registrado manualmente.
-                </p>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start overflow-hidden flex-1 min-h-0 pr-2">
-              <div>
-                <label className="text-xs font-bold text-gray-500 uppercase block mb-1">1. Selecciona el Egreso Padre (Transferencia registrado manualmente) *</label>
-                <select
-                  value={comprobacionAcumuladaModal.egresoPadreId}
-                  onChange={e => setComprobacionAcumuladaModal(prev => ({ ...prev, egresoPadreId: e.target.value }))}
-                  className="w-full bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-lg text-xs outline-none focus:ring-1 focus:ring-blue-500 font-bold"
-                >
-                  <option value="">-- Selecciona el Gasto Principal --</option>
-                  {gastosPendientes.map(g => (
-                    <option key={g.id} value={g.id}>
-                      {g.fecha_gasto ? new Date(g.fecha_gasto).toLocaleDateString() : 'Sin fecha'} - {g.concepto} - {formatCurrency(g.monto)}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {comprobacionAcumuladaModal.egresoPadreId && (
-                <div>
-                  <label className="text-xs font-bold text-gray-500 uppercase block mb-2">2. Selecciona Facturas XML de Proveedores a Asociar</label>
-                  <div className="border border-gray-250 dark:border-gray-850 rounded-xl overflow-hidden max-h-[300px] overflow-y-auto divide-y divide-gray-150 dark:divide-gray-800">
-                    {facturasSueltas.length === 0 ? (
-                      <div className="text-xs text-gray-400 italic p-3 bg-gray-50 dark:bg-gray-900 rounded-lg">
-                        No hay facturas XML pendientes disponibles.
-                      </div>
-                    ) : (
-                      facturasSueltas.map(f => {
-                        const isSel = comprobacionAcumuladaModal.seleccionados.includes(f.id);
-                        return (
-                          <div
-                            key={f.id}
-                            onClick={() => {
-                              setComprobacionAcumuladaModal(prev => {
-                                const n = prev.seleccionados.includes(f.id)
-                                  ? prev.seleccionados.filter((id: string) => id !== f.id)
-                                  : [...prev.seleccionados, f.id];
-                                return { ...prev, seleccionados: n };
-                              });
-                            }}
-                            className={`p-3 text-xs flex items-center justify-between cursor-pointer transition-colors ${
-                              isSel ? 'bg-blue-500/10 dark:bg-blue-500/5' : 'hover:bg-gray-50 dark:hover:bg-gray-900/30'
-                            }`}
-                          >
-                            <div className="flex items-center gap-2">
-                              <input
-                                type="checkbox"
-                                checked={isSel}
-                                onChange={() => {}}
-                                className="rounded border-gray-300 dark:border-gray-700 text-blue-600 focus:ring-blue-500 cursor-pointer"
-                              />
-                              <div>
-                                <span className="font-bold text-gray-800 dark:text-gray-200">{f.concepto || 'Sin concepto'}</span>
-                                <span className="text-[10px] text-gray-400 dark:text-gray-500 block">
-                                  {f.fecha_gasto ? new Date(f.fecha_gasto).toLocaleDateString() : 'Sin fecha'} - RFC: {f.proveedores?.rfc || 'Sin RFC'}
-                                </span>
-                              </div>
-                            </div>
-                            <span className="font-mono font-bold text-gray-700 dark:text-gray-300">{formatCurrency(f.monto)}</span>
-                          </div>
-                        );
-                      })
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div className="flex gap-3 pt-6 mt-6 border-t border-gray-200 dark:border-gray-800 shrink-0">
-              <button
-                onClick={() => setComprobacionAcumuladaModal({
-                  open: false, egresoPadreId: '', seleccionados: [], comentario: '', loading: false, error: ''
-                })}
-                disabled={comprobacionAcumuladaModal.loading}
-                className="flex-1 py-2.5 border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-300 rounded-xl font-semibold hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors disabled:opacity-50 text-xs"
-              >
-                Cancelar
-              </button>
-              <button
-                onClick={async () => {
-                  const { egresoPadreId, seleccionados } = comprobacionAcumuladaModal;
-                  if (!egresoPadreId || seleccionados.length === 0) return;
-                  setComprobacionAcumuladaModal(prev => ({ ...prev, loading: true, error: '' }));
-                  try {
-                    const token = await getSessionToken();
-                    const res = await comprobarEgresoConFacturas(egresoPadreId, seleccionados, comprobacionAcumuladaModal.comentario, token);
-                    if (res.success) {
-                      alert('Comprobación acumulada guardada con éxito.');
-                      setComprobacionAcumuladaModal({
-                        open: false, egresoPadreId: '', seleccionados: [], comentario: '', loading: false, error: ''
-                      });
-                      await fetchData();
-                    } else {
-                      throw new Error(res.error);
-                    }
-                  } catch (err: any) {
-                    setComprobacionAcumuladaModal(prev => ({ ...prev, error: err.message, loading: false }));
-                  }
-                }}
-                disabled={comprobacionAcumuladaModal.loading || !comprobacionAcumuladaModal.egresoPadreId || comprobacionAcumuladaModal.seleccionados.length === 0}
-                className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl shadow-lg transition-colors flex items-center justify-center gap-2 disabled:opacity-50 text-xs"
-              >
-                {comprobacionAcumuladaModal.loading ? 'Comprobando...' : 'Asociar Facturas'}
-              </button>
-            </div>
-          </div>
-        </div>
       )}
     </div>
   );
