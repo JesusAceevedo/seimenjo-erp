@@ -37,7 +37,7 @@ import {
 import { ComprobanteDeposito } from '../types';
 import {
   RefreshCw, AlertTriangle, CheckCircle, Sun, Moon,
-  Calendar, ArrowRightLeft, Landmark, FileSpreadsheet
+  Calendar, ArrowRightLeft, Landmark, FileSpreadsheet, Link2
 } from 'lucide-react';
 import BancoTab from '../gastos/_components/BancoTab';
 import PeriodSelector from '../_components/PeriodSelector';
@@ -1598,6 +1598,15 @@ export default function BankReconciliationModule() {
           </div>
           <div className="flex items-center gap-3 flex-wrap">
             <PeriodSelector onPeriodChange={() => { setBancoPage(0); refreshPeriodStatus(); }} />
+
+            <button
+              onClick={() => router.push('/admin/asignacion-xml')}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-xs transition-all shadow-sm cursor-pointer"
+              title="Ir a Asignación de Facturas XML a Pedidos por Coincidencia de Importe"
+            >
+              <Link2 size={15} />
+              <span>Asignación XML</span>
+            </button>
 
             <button
               onClick={exportReporteSoloIngresosExcel}
