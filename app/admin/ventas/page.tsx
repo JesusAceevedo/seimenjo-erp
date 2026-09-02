@@ -25,7 +25,7 @@ import {
 import { EditVentaModal, EditMovimientoModal } from '../gastos/_components/EditModals';
 import {
   RefreshCw, CheckCircle, AlertTriangle, Layers, Sun, Moon, X,
-  Landmark, Ticket, FileText, Plus, Scale, Link2
+  Landmark, Ticket, FileText, Plus, Scale
 } from 'lucide-react';
 import IngresosTab from '../gastos/_components/IngresosTab';
 import BancoTab from '../gastos/_components/BancoTab';
@@ -477,15 +477,6 @@ export default function VentasFacturadasModule() {
             }`}
           >
             <Ticket size={15} /> 🎟️ Cargar Tickets y Cortes POS / Parrot ({comprobantesForSelectedMonth.length})
-          </button>
-
-          <button
-            type="button"
-            onClick={() => router.push('/admin/asignacion-xml')}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/40 border border-blue-200 dark:border-blue-900/40 ml-auto"
-            title="Ir a Asignación de Facturas XML a Pedidos por Coincidencia de Importe"
-          >
-            <Link2 size={15} /> 🔗 Asignación XML a Pedidos
           </button>
         </div>
 

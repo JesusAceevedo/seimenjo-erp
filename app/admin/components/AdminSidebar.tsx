@@ -24,7 +24,6 @@ import {
   FileBarChart,
   FileSpreadsheet,
   Layers,
-  Link2,
   Sun,
   Moon,
 } from 'lucide-react';
@@ -69,7 +68,6 @@ export default function AdminSidebar({
   const adminOpSubItems = [
     { module: 'gastos', path: '/admin/gastos', label: 'Gastos y Egresos', icon: FileText },
     { module: 'ventas', path: '/admin/ventas', label: 'Ventas e Ingresos', icon: Layers },
-    { module: 'ventas', path: '/admin/asignacion-xml', label: 'Asignación XML a Pedidos', icon: Link2 },
     { module: 'conciliacion', path: '/admin/conciliacion', label: 'Conciliación Bancaria', icon: Landmark },
     { module: 'contabilidad', path: '/admin/contabilidad', label: 'Contabilidad y Pólizas', icon: Receipt },
     { module: 'contabilidad', path: '/admin/factura-publico-general', label: 'Factura Público en General', icon: Receipt },

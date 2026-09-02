@@ -11,6 +11,7 @@ import CargaXmlMasivaModal from './CargaXmlMasivaModal';
 import CargaManualModal from './CargaManualModal';
 import TrayectoriaPedidoModal from './TrayectoriaPedidoModal';
 import VincularXmlPedidoModal from './VincularXmlPedidoModal';
+import AsignacionXmlModal from './AsignacionXmlModal';
 import { vincularFacturaAPedido } from '../actions';
 import { useSessionToken } from '../../../../lib/hooks/useSessionToken';
 import { supabase } from '../../../../lib/supabase';
@@ -100,6 +101,7 @@ export default function IngresosTab({
   const [selectedTrayectoriaId, setSelectedTrayectoriaId] = useState<string | null>(null);
   const [vincularModalPedidoId, setVincularModalPedidoId] = useState<string | null>(null);
   const [vincularSueltaFactura, setVincularSueltaFactura] = useState<any | null>(null);
+  const [showAsignacionModal, setShowAsignacionModal] = useState(false);
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(PAGE_SIZE_OPTIONS[0]);
   const [search, setSearch] = useState('');
@@ -250,6 +252,14 @@ export default function IngresosTab({
               className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold shadow-sm transition-colors"
             >
               <Plus size={13} /> Facturación Acumulada
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowAsignacionModal(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold shadow-sm transition-colors cursor-pointer"
+              title="Asignar facturas XML a pedidos por coincidencia de importe"
+            >
+              <LinkIcon size={13} /> Asignar XML a Pedidos
             </button>
           </div>
         </div>
@@ -817,6 +827,16 @@ export default function IngresosTab({
           pedidoId={selectedTrayectoriaId}
           onClose={() => setSelectedTrayectoriaId(null)}
           onRefresh={() => {
+            if (onRefresh) onRefresh();
+          }}
+        />
+      )}
+      {showAsignacionModal && (
+        <AsignacionXmlModal
+          isOpen={showAsignacionModal}
+          onClose={() => setShowAsignacionModal(false)}
+          onSuccess={() => {
+            setShowAsignacionModal(false);
             if (onRefresh) onRefresh();
           }}
         />

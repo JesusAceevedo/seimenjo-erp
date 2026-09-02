@@ -41,12 +41,14 @@ import {
 } from 'lucide-react';
 import BancoTab from '../gastos/_components/BancoTab';
 import PeriodSelector from '../_components/PeriodSelector';
+import AsignacionXmlModal from '../gastos/_components/AsignacionXmlModal';
 
 export const dynamic = 'force-dynamic';
 
 export default function BankReconciliationModule() {
   const router = useRouter();
   const { isDarkMode, toggleDarkMode } = useThemeMode();
+  const [showAsignacionXmlModal, setShowAsignacionXmlModal] = useState(false);
 
   // Helper de Formato Contable
   const formatCurrency = (val: number) => {
@@ -1600,9 +1602,9 @@ export default function BankReconciliationModule() {
             <PeriodSelector onPeriodChange={() => { setBancoPage(0); refreshPeriodStatus(); }} />
 
             <button
-              onClick={() => router.push('/admin/asignacion-xml')}
+              onClick={() => setShowAsignacionXmlModal(true)}
               className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-xs transition-all shadow-sm cursor-pointer"
-              title="Ir a Asignación de Facturas XML a Pedidos por Coincidencia de Importe"
+              title="Abrir Asignación de Facturas XML a Pedidos por Coincidencia de Importe"
             >
               <Link2 size={15} />
               <span>Asignación XML</span>
@@ -2076,6 +2078,18 @@ NOTIFY pgrst, 'reload schema';`}
           token={editMovimientoToken}
           onClose={() => setEditingMovimiento(null)}
           onSuccess={() => { setEditingMovimiento(null); fetchData(); }}
+        />
+      )}
+
+      {/* MODAL DE ASIGNACIÓN DE XML A PEDIDOS */}
+      {showAsignacionXmlModal && (
+        <AsignacionXmlModal
+          isOpen={showAsignacionXmlModal}
+          onClose={() => setShowAsignacionXmlModal(false)}
+          onSuccess={() => {
+            setShowAsignacionXmlModal(false);
+            fetchData();
+          }}
         />
       )}
     </div>
