@@ -107,7 +107,7 @@ export default function AsignacionXmlModal({
       // 2. Pedidos de Venta
       const { data: pedidosData, error: pErr } = await supabase
         .from('pedidos')
-        .select('*, clientes(id, nombre_local, razon_social, rfc), facturas_clientes(*), movimientos_bancarios(id, fecha, concepto, monto, cuentas_bancarias(nombre_banco, numero_cuenta))')
+        .select('*, clientes(id, nombre_local, razon_social, rfc), facturas_clientes(*), movimientos_bancarios(id, fecha, concepto, monto)')
         .eq('empresa_id', empresaId)
         .neq('estatus_pago', 'Cancelado')
         .order('fecha_pedido', { ascending: false });
@@ -715,8 +715,8 @@ export default function AsignacionXmlModal({
                               </span>
                             )}
 
-                            {p.movimientos_bancarios && (
-                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-purple-100 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800" title={`Banco: ${p.movimientos_bancarios.cuentas_bancarias?.nombre_banco || 'Registrado'}`}>
+                            {(p.movimiento_bancario_id || p.movimientos_bancarios) && (
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-purple-100 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800" title={p.movimientos_bancarios?.concepto ? `Banco: ${p.movimientos_bancarios.concepto}` : 'Banco Conciliado'}>
                                 <Landmark size={9} /> Banco Conciliado
                               </span>
                             )}
