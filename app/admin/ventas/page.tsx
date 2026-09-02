@@ -530,6 +530,7 @@ export default function VentasFacturadasModule() {
                     onDeleteVenta={handleDeleteVenta}
                     onEditVenta={setEditingVenta}
                     onRefresh={fetchData}
+                    selectedMonth={selectedMonth}
                   />
                 )}
 

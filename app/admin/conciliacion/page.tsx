@@ -2085,6 +2085,7 @@ NOTIFY pgrst, 'reload schema';`}
       {showAsignacionXmlModal && (
         <AsignacionXmlModal
           isOpen={showAsignacionXmlModal}
+          initialMonth={selectedMonth}
           onClose={() => setShowAsignacionXmlModal(false)}
           onSuccess={() => {
             setShowAsignacionXmlModal(false);

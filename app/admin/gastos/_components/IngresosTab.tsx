@@ -31,6 +31,7 @@ interface IngresosTabProps {
   onDeleteVenta: (pedidoId: string) => void;
   onDeleteFacturaSuelta?: (facturaId: string) => void;
   onRefresh?: () => void;
+  selectedMonth?: string;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -92,6 +93,7 @@ export default function IngresosTab({
   onDeleteVenta,
   onDeleteFacturaSuelta,
   onRefresh,
+  selectedMonth,
 }: IngresosTabProps) {
   const { openCfdi } = useCfdiViewer();
   const handleViewCfdi = onViewCfdi || openCfdi;
@@ -834,6 +836,7 @@ export default function IngresosTab({
       {showAsignacionModal && (
         <AsignacionXmlModal
           isOpen={showAsignacionModal}
+          initialMonth={selectedMonth}
           onClose={() => setShowAsignacionModal(false)}
           onSuccess={() => {
             setShowAsignacionModal(false);
