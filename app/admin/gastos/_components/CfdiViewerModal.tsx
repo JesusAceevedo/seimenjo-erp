@@ -16,10 +16,12 @@ export default function CfdiViewerModal({ xmlUrl, onClose }: CfdiViewerModalProp
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [cfdiData, setCfdiData] = useState<any>(null);
+  const [directFileUrl, setDirectFileUrl] = useState<string | null>(null);
+  const [directFileType, setDirectFileType] = useState<'pdf' | 'image' | null>(null);
 
   useEffect(() => {
     if (!xmlUrl) {
-      setError('No hay URL de XML proporcionada.');
+      setError('No hay URL proporcionada.');
       setLoading(false);
       return;
     }
@@ -28,6 +30,8 @@ export default function CfdiViewerModal({ xmlUrl, onClose }: CfdiViewerModalProp
       try {
         setLoading(true);
         setError(null);
+        setDirectFileUrl(null);
+        setDirectFileType(null);
 
         // 1. Get Signed URL
         const cleanUrl = xmlUrl.trim().split(',')[0].trim();
@@ -36,13 +40,36 @@ export default function CfdiViewerModal({ xmlUrl, onClose }: CfdiViewerModalProp
         const res = await obtenerSignedUrl(cleanUrl, token);
 
         if (!res.success || !res.url) {
-          throw new Error(res.error || 'No se pudo obtener el archivo XML.');
+          throw new Error(res.error || 'No se pudo obtener el archivo.');
+        }
+
+        const lowerUrl = cleanUrl.toLowerCase();
+        if (lowerUrl.endsWith('.pdf') || lowerUrl.includes('.pdf?')) {
+          setDirectFileUrl(res.url);
+          setDirectFileType('pdf');
+          setLoading(false);
+          return;
+        }
+
+        if (lowerUrl.match(/\.(png|jpg|jpeg|webp|gif|bmp)(\?|$)/)) {
+          setDirectFileUrl(res.url);
+          setDirectFileType('image');
+          setLoading(false);
+          return;
         }
 
         // 2. Fetch XML content
         const fetchRes = await fetch(res.url);
-        if (!fetchRes.ok) throw new Error('Error al descargar el XML.');
+        if (!fetchRes.ok) throw new Error('Error al descargar el archivo.');
         const xmlText = await fetchRes.text();
+
+        // Check if response starts with %PDF
+        if (xmlText.startsWith('%PDF')) {
+          setDirectFileUrl(res.url);
+          setDirectFileType('pdf');
+          setLoading(false);
+          return;
+        }
 
         // 3. Parse XML
         const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: "" });
@@ -58,13 +85,16 @@ export default function CfdiViewerModal({ xmlUrl, onClose }: CfdiViewerModalProp
         }
 
         if (!comprobante) {
-          throw new Error('Estructura XML inválida (no es un comprobante CFDI válido o falta el nodo Comprobante).');
+          // If not XML CFDI, fallback to iframe view
+          setDirectFileUrl(res.url);
+          setDirectFileType('pdf');
+          return;
         }
 
         setCfdiData(comprobante);
       } catch (err: any) {
         console.error(err);
-        setError(err.message || 'Error desconocido al cargar CFDI.');
+        setError(err.message || 'Error al cargar comprobante.');
       } finally {
         setLoading(false);
       }
@@ -75,15 +105,49 @@ export default function CfdiViewerModal({ xmlUrl, onClose }: CfdiViewerModalProp
 
   if (!xmlUrl) return null;
 
-  // Format Helpers
-  const formatCurrency = (val: any) => new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' }).format(Number(val) || 0);
-
   const renderContent = () => {
     if (loading) {
       return (
         <div className="flex flex-col items-center justify-center py-20 text-gray-500">
           <Loader2 className="w-10 h-10 animate-spin text-blue-500 mb-4" />
           <p>Generando representación visual...</p>
+        </div>
+      );
+    }
+
+    if (directFileUrl) {
+      if (directFileType === 'image') {
+        return (
+          <div className="flex flex-col items-center justify-center p-4 bg-white dark:bg-gray-950 rounded-xl">
+            <img src={directFileUrl} alt="Comprobante" className="max-w-full max-h-[75vh] object-contain rounded-lg shadow-md" />
+            <a
+              href={directFileUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-4 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-lg flex items-center gap-2"
+            >
+              <Download size={14} /> Abrir en pantalla completa
+            </a>
+          </div>
+        );
+      }
+      return (
+        <div className="flex flex-col h-full bg-white dark:bg-gray-950 rounded-xl overflow-hidden">
+          <iframe
+            src={directFileUrl}
+            className="w-full h-[75vh] border-0 rounded-lg"
+            title="Visor de Documento"
+          />
+          <div className="p-3 bg-gray-50 dark:bg-gray-900 border-t border-gray-200 dark:border-gray-800 flex justify-end">
+            <a
+              href={directFileUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-lg flex items-center gap-2"
+            >
+              <Download size={14} /> Abrir en pestaña nueva
+            </a>
+          </div>
         </div>
       );
     }

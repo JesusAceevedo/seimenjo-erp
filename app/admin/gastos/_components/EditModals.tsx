@@ -126,11 +126,12 @@ export function EditVentaModal({ venta, onClose, onSuccess }: any) {
 }
 
 // ── EDITAR MOVIMIENTO BANCARIO ──────────────────────────────────────────────
-export function EditMovimientoModal({ movimiento, token, onClose, onSuccess }: any) {
+export function EditMovimientoModal({ movimiento, categorias = [], token, onClose, onSuccess }: any) {
   const [fecha, setFecha] = useState(movimiento.fecha ? movimiento.fecha.split('T')[0] : '');
   const [concepto, setConcepto] = useState(movimiento.concepto || '');
   const [retiro, setRetiro] = useState(movimiento.retiro || 0);
   const [deposito, setDeposito] = useState(movimiento.deposito || 0);
+  const [categoriaId, setCategoriaId] = useState(movimiento.categoria_movimiento_id || movimiento.categoria_id || '');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -142,7 +143,8 @@ export function EditMovimientoModal({ movimiento, token, onClose, onSuccess }: a
         fecha,
         concepto,
         retiro: parseFloat(String(retiro)) || 0,
-        deposito: parseFloat(String(deposito)) || 0
+        deposito: parseFloat(String(deposito)) || 0,
+        categoria_movimiento_id: categoriaId === '' ? null : categoriaId
       }, token);
       if (!res.success) throw new Error(res.error);
       onSuccess();
@@ -169,6 +171,21 @@ export function EditMovimientoModal({ movimiento, token, onClose, onSuccess }: a
             <label className="text-xs font-bold text-gray-500 block mb-1">Concepto / Referencia</label>
             <input type="text" value={concepto} onChange={e => setConcepto(e.target.value)} className="w-full border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950 p-2 rounded text-sm outline-none focus:ring-1 focus:ring-blue-500" />
           </div>
+          {categorias && categorias.length > 0 && (
+            <div>
+              <label className="text-xs font-bold text-gray-500 block mb-1">Categoría</label>
+              <select
+                value={categoriaId}
+                onChange={e => setCategoriaId(e.target.value)}
+                className="w-full border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950 p-2 rounded text-sm outline-none focus:ring-1 focus:ring-blue-500"
+              >
+                <option value="">- Sin Categoría -</option>
+                {categorias.map((c: any) => (
+                  <option key={c.id} value={c.id}>{c.nombre}</option>
+                ))}
+              </select>
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="text-xs font-bold text-gray-500 block mb-1">Retiro (-)</label>

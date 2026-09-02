@@ -68,6 +68,35 @@ export default function AdminMonitor() {
   const [repartidoresList, setRepartidoresList] = useState<Repartidor[]>([]);
   const [formasPagoList, setFormasPagoList] = useState<FormaPago[]>([]);
 
+  // Subpestaña activa (general vs sakura)
+  const [activeSubTab, setActiveSubTab] = useState<'general' | 'sakura'>('general');
+  const [sakuraEmpresaId, setSakuraEmpresaId] = useState<string>('b9fec2e3-75d5-4002-9071-f79c56bda732');
+  const [isSeimenjoEmpresa, setIsSeimenjoEmpresa] = useState<boolean>(false);
+
+  // Verificar si la empresa activa es Seimenjo
+  useEffect(() => {
+    const checkEmpresa = async () => {
+      const empId = await getEmpresaId();
+      if (!empId) {
+        setIsSeimenjoEmpresa(false);
+        return;
+      }
+      const { data } = await supabase
+        .from('empresas')
+        .select('id, nombre')
+        .eq('id', empId)
+        .maybeSingle();
+
+      if (data?.nombre?.toLowerCase().includes('seimenjo') || empId === '57360007-11ae-4da7-a08c-2aa11f691930') {
+        setIsSeimenjoEmpresa(true);
+      } else {
+        setIsSeimenjoEmpresa(false);
+        setActiveSubTab('general');
+      }
+    };
+    checkEmpresa();
+  }, [getEmpresaId]);
+
   // Paginación y Filtros
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(6);
@@ -77,6 +106,33 @@ export default function AdminMonitor() {
   const [fechaFin, setFechaFin] = useState('');
   const [busquedaGlobal, setBusquedaGlobal] = useState('');
   const [popupBlockerWarning, setPopupBlockerWarning] = useState(false);
+
+  // Buscar dinámicamente el ID de la empresa Sakura
+  useEffect(() => {
+    const fetchSakuraId = async () => {
+      try {
+        const { data } = await supabase
+          .from('empresas')
+          .select('id')
+          .ilike('nombre', '%sakura%')
+          .limit(1)
+          .maybeSingle();
+        if (data?.id) {
+          setSakuraEmpresaId(data.id);
+        }
+      } catch (err) {
+        console.error('Error al buscar empresa Sakura:', err);
+      }
+    };
+    fetchSakuraId();
+  }, []);
+
+  const getTargetEmpresaId = useCallback(async (): Promise<string | null> => {
+    if (activeSubTab === 'sakura' && isSeimenjoEmpresa) {
+      return sakuraEmpresaId || 'b9fec2e3-75d5-4002-9071-f79c56bda732';
+    }
+    return await getEmpresaId();
+  }, [activeSubTab, sakuraEmpresaId, getEmpresaId, isSeimenjoEmpresa]);
 
   // Calcular pageSize dinámicamente según la altura del viewport para evitar scroll principal
   useEffect(() => {
@@ -150,8 +206,8 @@ export default function AdminMonitor() {
   // --- CONSULTAS A BASE DE DATOS ---
   const fetchPedidos = useCallback(async () => {
     try {
-      const empresaId = await getEmpresaId();
-      if (!empresaId) return;
+      const targetEmpresaId = await getTargetEmpresaId();
+      if (!targetEmpresaId) return;
 
       const hoy = new Date();
       let startDateStr: string | null = null;
@@ -173,15 +229,10 @@ export default function AdminMonitor() {
       }
       // 'todo': startDateStr = null (fetch all)
 
-      // DEBUG: verificar sesión activa
-      const { data: { session } } = await supabase.auth.getSession();
-      console.log('[DEBUG fetchPedidos] Session:', session ? `UID=${session.user.id}, role=${session.user.role}` : 'NO SESSION');
-      console.log('[DEBUG fetchPedidos] filtroRango:', filtroRango, 'startDate:', startDateStr, 'endDate:', endDateStr);
-
       let query = supabase
         .from('pedidos')
         .select('*, pedido_detalles(*, producto_variantes(*, productos(*))), clientes(nombre_local, telefono, rfc)')
-        .eq('empresa_id', empresaId)
+        .eq('empresa_id', targetEmpresaId)
         .order('numero_pedido', { ascending: false });
 
       if (startDateStr) {
@@ -191,26 +242,23 @@ export default function AdminMonitor() {
         query = query.or(`fecha_pedido.lte.${endDateStr},creado_en.lte.${endDateStr}`);
       }
 
-      const { data, error, status, statusText } = await query;
-      console.log('[DEBUG fetchPedidos] status:', status, statusText);
-      console.log('[DEBUG fetchPedidos] error:', error);
-      console.log('[DEBUG fetchPedidos] data count:', data?.length, 'first:', data?.[0]?.numero_pedido);
+      const { data, error } = await query;
       if (error) throw error;
       setPedidos(data || []);
     } catch (err) {
       console.error('Error fetching orders:', err);
     }
-  }, [filtroRango, fechaInicio, fechaFin, getEmpresaId]);
+  }, [filtroRango, fechaInicio, fechaFin, getTargetEmpresaId]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchPedidos();
   }, [fetchPedidos]);
 
-  // Resetear página a 0 cuando cambian los filtros
+  // Resetear página a 0 cuando cambian los filtros o la subpestaña
   useEffect(() => {
     setPage(0);
-  }, [filtroRango, fechaInicio, fechaFin, busquedaGlobal]);
+  }, [filtroRango, fechaInicio, fechaFin, busquedaGlobal, activeSubTab]);
 
   useEffect(() => {
     const init = async () => {
@@ -221,11 +269,11 @@ export default function AdminMonitor() {
         if (!retryToken) return router.push('/admin/login');
       }
 
-      const empresaId = await getEmpresaId();
+      const targetEmpresaId = await getTargetEmpresaId();
       const [prodsRes, clisRes, repsRes, formasRes] = await Promise.all([
         supabase.from('producto_variantes').select('id, gramaje, precio_base, productos(nombre)'),
-        empresaId ? supabase.from('clientes').select('id, nombre_local').eq('empresa_id', empresaId) : supabase.from('clientes').select('id, nombre_local'),
-        empresaId ? supabase.from('repartidores').select('*').or(`empresa_id.is.null,empresa_id.eq.${empresaId}`).order('nombre', { ascending: true }) : supabase.from('repartidores').select('*').order('nombre', { ascending: true }),
+        targetEmpresaId ? supabase.from('clientes').select('id, nombre_local').eq('empresa_id', targetEmpresaId) : supabase.from('clientes').select('id, nombre_local'),
+        targetEmpresaId ? supabase.from('repartidores').select('*').or(`empresa_id.is.null,empresa_id.eq.${targetEmpresaId}`).order('nombre', { ascending: true }) : supabase.from('repartidores').select('*').order('nombre', { ascending: true }),
         supabase.from('formas_pago').select('*').order('nombre', { ascending: true })
       ]);
 
@@ -235,7 +283,7 @@ export default function AdminMonitor() {
       if (formasRes.data) setFormasPagoList(formasRes.data);
     };
     init();
-  }, [router, getEmpresaId]);
+  }, [router, getTargetEmpresaId, activeSubTab]);
 
   // --- LÓGICA DE FILTRADO OPTIMIZADA ---
   const clientesFiltrados = useMemo(() =>
@@ -339,12 +387,12 @@ export default function AdminMonitor() {
       const precioUnitario = precioPactado !== undefined ? Number(precioPactado) : (pDb ? Number(pDb.precio_base) : 0);
       const subtotalItem = precioUnitario * (item.cantidad || 0);
       totalCalculado += subtotalItem;
-      return { 
-        variante_id: item.variante_id, 
-        cantidad: item.cantidad || 0, 
-        comentarios: item.comentarios || '', 
-        precio_aplicado: precioUnitario, 
-        subtotal: subtotalItem 
+      return {
+        variante_id: item.variante_id,
+        cantidad: item.cantidad || 0,
+        comentarios: item.comentarios || '',
+        precio_aplicado: precioUnitario,
+        subtotal: subtotalItem
       };
     });
 
@@ -388,16 +436,17 @@ export default function AdminMonitor() {
 
         if (deleteError) throw deleteError;
 
+        const targetEmpresaId = await getTargetEmpresaId();
+
         if (itemsProcesados.length > 0) {
-          const empresaId = await getEmpresaId();
-          const detalles = itemsProcesados.map(item => ({ 
-            pedido_id: idPedidoEditar, 
+          const detalles = itemsProcesados.map(item => ({
+            pedido_id: idPedidoEditar,
             variante_id: item.variante_id,
             cantidad: item.cantidad,
             comentarios: item.comentarios,
             precio_aplicado: item.precio_aplicado,
             subtotal: item.subtotal,
-            empresa_id: empresaId
+            empresa_id: targetEmpresaId
           }));
           const { error: insertDetailsError } = await supabase
             .from('pedido_detalles')
@@ -409,10 +458,10 @@ export default function AdminMonitor() {
         alert('Pedido actualizado correctamente.');
       } else {
         // --- MODO CREACIÓN ---
-        const empresaId = await getEmpresaId();
+        const targetEmpresaId = await getTargetEmpresaId();
         const insertPayload = {
           ...payload,
-          empresa_id: empresaId,
+          empresa_id: targetEmpresaId,
           estatus_pedido: 'Pendiente',
           estatus_pago: 'Pendiente',
           fecha_pedido: new Date().toISOString().split('T')[0]
@@ -427,14 +476,14 @@ export default function AdminMonitor() {
         if (insertError) throw insertError;
 
         if (pedido && itemsProcesados.length > 0) {
-          const detalles = itemsProcesados.map(item => ({ 
-            pedido_id: pedido.id, 
+          const detalles = itemsProcesados.map(item => ({
+            pedido_id: pedido.id,
             variante_id: item.variante_id,
             cantidad: item.cantidad,
             comentarios: item.comentarios,
             precio_aplicado: item.precio_aplicado,
             subtotal: item.subtotal,
-            empresa_id: empresaId
+            empresa_id: targetEmpresaId
           }));
           const { error: insertDetailsError } = await supabase
             .from('pedido_detalles')
@@ -729,17 +778,57 @@ export default function AdminMonitor() {
         <main className="flex-1 flex flex-col p-8 w-full min-w-0 overflow-hidden h-full compact-container">
 
           {/* HEADER */}
-          <div className="mb-6 flex justify-between items-start md:items-center flex-col md:flex-row gap-4 compact-margin">
-            <h2 className="text-2xl font-bold flex items-center gap-2 compact-title">Gestión Pedidos</h2>
+          <div className="mb-4 flex justify-between items-start md:items-center flex-col md:flex-row gap-4 compact-margin">
+            <div>
+              <h2 className="text-2xl font-bold flex items-center gap-2 compact-title">
+                Gestión Pedidos
+                {isSeimenjoEmpresa && activeSubTab === 'sakura' && (
+                  <span className="text-xs bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/30 px-2.5 py-1 rounded-full font-extrabold flex items-center gap-1">
+                    <Soup size={14} /> Sakura
+                  </span>
+                )}
+              </h2>
+            </div>
             <div className="flex items-center gap-3">
               <button onClick={toggleDarkMode} className="p-2 rounded-lg bg-gray-200 dark:bg-gray-800 text-gray-600 dark:text-amber-400 hover:bg-gray-300 dark:hover:bg-gray-700 transition-colors">
                 {isDarkMode ? <Sun size={20} /> : <Moon size={20} />}
               </button>
-              <button onClick={() => setIsModalOpen(true)} className="bg-amber-600 hover:bg-amber-500 text-white px-4 py-2 rounded-lg flex items-center gap-2 font-semibold shadow-lg transition-colors">
-                <Plus size={18} /> Nuevo Pedido
+              <button onClick={() => setIsModalOpen(true)} className={`${isSeimenjoEmpresa && activeSubTab === 'sakura' ? 'bg-rose-600 hover:bg-rose-500' : 'bg-amber-600 hover:bg-amber-500'} text-white px-4 py-2 rounded-lg flex items-center gap-2 font-semibold shadow-lg transition-colors`}>
+                <Plus size={18} /> {isSeimenjoEmpresa && activeSubTab === 'sakura' ? 'Nuevo Pedido Sakura' : 'Nuevo Pedido'}
               </button>
             </div>
           </div>
+
+          {/* SUBPESTAÑAS DE SELECCIÓN DE EMPRESA (Solo visibles en Empresa Seimenjo) */}
+          {isSeimenjoEmpresa && (
+            <div className="flex border-b border-gray-200 dark:border-gray-800 mb-6 font-sans">
+              <button
+                onClick={() => setActiveSubTab('general')}
+                className={`px-4 py-2.5 text-sm font-semibold border-b-2 transition-all flex items-center gap-2 ${
+                  activeSubTab === 'general'
+                    ? 'border-amber-500 text-amber-600 dark:text-amber-400 bg-amber-500/5'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
+                }`}
+              >
+                <LayoutDashboard size={16} />
+                <span>Pedidos General</span>
+              </button>
+              <button
+                onClick={() => setActiveSubTab('sakura')}
+                className={`px-4 py-2.5 text-sm font-semibold border-b-2 transition-all flex items-center gap-2 ${
+                  activeSubTab === 'sakura'
+                    ? 'border-rose-500 text-rose-600 dark:text-rose-400 bg-rose-500/5 font-bold'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
+                }`}
+              >
+                <Soup size={16} className={activeSubTab === 'sakura' ? 'text-rose-500' : ''} />
+                <span>Pedidos Sakura</span>
+                <span className="ml-1 text-[10px] bg-rose-100 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 px-1.5 py-0.5 rounded-full font-bold">
+                  Empresa Sakura
+                </span>
+              </button>
+            </div>
+          )}
 
           {/* DASHBOARD KPIS */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6 font-sans compact-kpi-grid">
@@ -954,8 +1043,13 @@ export default function AdminMonitor() {
           <div className="fixed inset-0 bg-black/60 dark:bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
             <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-6 rounded-2xl w-full max-w-3xl shadow-2xl max-h-[90vh] overflow-y-auto">
               <h3 className="text-xl font-extrabold mb-6 flex items-center gap-2 text-gray-900 dark:text-white">
-                {idPedidoEditar ? <Edit3 className="text-amber-500" /> : <Plus className="text-amber-500" />}
-                {idPedidoEditar ? `Editar Pedido` : 'Nueva Orden de Producción'}
+                {idPedidoEditar ? <Edit3 className="text-amber-500" /> : <Plus className={isSeimenjoEmpresa && activeSubTab === 'sakura' ? 'text-rose-500' : 'text-amber-500'} />}
+                {idPedidoEditar ? `Editar Pedido` : (isSeimenjoEmpresa && activeSubTab === 'sakura' ? 'Nueva Orden (Sakura Ramen)' : 'Nueva Orden de Producción')}
+                {isSeimenjoEmpresa && activeSubTab === 'sakura' && (
+                  <span className="text-xs bg-rose-100 dark:bg-rose-950/80 text-rose-700 dark:text-rose-300 px-2.5 py-0.5 rounded-full font-bold">
+                    Empresa Sakura
+                  </span>
+                )}
               </h3>
 
               <div className="mb-6 p-4 bg-gray-50 dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800">
@@ -1123,9 +1217,9 @@ export default function AdminMonitor() {
                       {verTodosMetodos ? "Mostrar solo comunes" : "Ver todos los códigos SAT"}
                     </button>
                   </div>
-                  <select 
-                    value={liquidarModal.metodo_pago} 
-                    className="w-full mt-1 bg-gray-50 dark:bg-gray-950 border border-gray-300 dark:border-gray-700 text-gray-900 dark:text-white p-2 rounded-lg text-sm" 
+                  <select
+                    value={liquidarModal.metodo_pago}
+                    className="w-full mt-1 bg-gray-50 dark:bg-gray-950 border border-gray-300 dark:border-gray-700 text-gray-900 dark:text-white p-2 rounded-lg text-sm"
                     onChange={e => setLiquidarModal({ ...liquidarModal, metodo_pago: e.target.value })}
                   >
                     <option value="">Seleccionar forma de pago...</option>

@@ -48,7 +48,7 @@ interface ReportRecord {
   rfc: string;
   monto: number;
   tipo: 'ingreso' | 'egreso';
-  estatusClave: 'conciliado' | 'pendiente' | 'atemporal' | 'comprobado' | 'cancelado';
+  estatusClave: 'conciliado' | 'pendiente' | 'atemporal' | 'cancelado';
   estatusNombre: string;
   xmlUrl?: string | null;
   pdfUrl?: string | null;
@@ -145,7 +145,7 @@ export default function ReportesOperacionPage() {
       // 5. Atemporales (Empresa actual)
       const atemporalRes = await obtenerMovimientosNoDeduciblesAtemporal(token);
       const atemporales = atemporalRes.success
-        ? (atemporalRes.data || []).filter((a: any) => !a.empresa_id || a.empresa_id === activeEmpresaId)
+        ? (atemporalRes.movimientos || []).filter((a: any) => !a.empresa_id || a.empresa_id === activeEmpresaId)
         : [];
 
       const consolidated: ReportRecord[] = [];
@@ -193,8 +193,8 @@ export default function ReportesOperacionPage() {
           rfc: g.proveedores?.rfc || g.rfc_emisor || '—',
           monto: -montoAbs,
           tipo: 'egreso',
-          estatusClave: g.conciliado ? 'conciliado' : 'comprobado',
-          estatusNombre: g.conciliado ? 'Conciliado' : 'Comprobado',
+          estatusClave: 'conciliado',
+          estatusNombre: g.conciliado ? 'Conciliado' : 'Conciliado',
           xmlUrl: g.xml_url || null,
           pdfUrl: g.pdf_url || null,
           ticketUrl: g.ticket_url || null,
@@ -218,7 +218,7 @@ export default function ReportesOperacionPage() {
           rfc: f.clientes?.rfc || f.receptor_rfc || '—',
           monto: montoAbs,
           tipo: 'ingreso',
-          estatusClave: f.estatus === 'Cancelado' ? 'cancelado' : 'comprobado',
+          estatusClave: f.estatus === 'Cancelado' ? 'cancelado' : 'conciliado',
           estatusNombre: f.estatus || 'Emitida',
           xmlUrl: f.xml_url || null,
           pdfUrl: f.pdf_url || null,
@@ -327,7 +327,7 @@ export default function ReportesOperacionPage() {
         egresos += Math.abs(r.monto);
       }
 
-      if (r.estatusClave === 'conciliado' || r.estatusClave === 'comprobado') {
+      if (r.estatusClave === 'conciliado') {
         conciliadosCount++;
       } else {
         pendientesCount++;
@@ -755,7 +755,7 @@ export default function ReportesOperacionPage() {
                         {/* Estatus */}
                         <td className="p-3.5 text-center">
                           <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${
-                            r.estatusClave === 'conciliado' || r.estatusClave === 'comprobado'
+                            r.estatusClave === 'conciliado'
                               ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30'
                               : r.estatusClave === 'atemporal'
                               ? 'bg-purple-500/15 text-purple-700 dark:text-purple-300 border border-purple-500/30'

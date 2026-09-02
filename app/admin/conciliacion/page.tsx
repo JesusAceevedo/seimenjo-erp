@@ -118,6 +118,7 @@ export default function BankReconciliationModule() {
   const [reconcileModal, setReconcileModal] = useState<{
     open: boolean;
     movimiento: any | null;
+    movimientosBatch?: any[];
     xmlUrl: string;
     pdfFacturaUrl: string;
     pdfTicketUrl: string;
@@ -569,6 +570,7 @@ export default function BankReconciliationModule() {
         parsedMovements,
         token,
         selectedCuentaId,
+        excelFile?.name || 'Estado_de_cuenta.xlsx',
         sustituirCarga?.id
       );
 

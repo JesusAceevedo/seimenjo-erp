@@ -227,9 +227,11 @@ export interface GastoReconciliable {
   proveedores?: {
     nombre_comercial: string;
     rfc: string;
+    saldo_favor?: number;
   } | {
     nombre_comercial: string;
     rfc: string;
+    saldo_favor?: number;
   }[] | null;
 }
 
@@ -266,6 +268,7 @@ export interface MovimientoBancario {
   empresa_id?: string;
   cuenta_bancaria_id?: string | null;
   cuentas_bancarias?: CuentaBancaria | null;
+  categoria_id?: string | null;
   categoria_movimiento_id?: string | null;
   categorias_movimiento_bancario?: CategoriaMovimientoBancario | null;
   conciliaciones_bancarias?: any[] | null;
@@ -276,9 +279,23 @@ export interface MovimientoBancario {
   movimiento_reembolso_id?: string | null;
 }
 
+// Catálogo estandarizado de claves — basado en SAP/Odoo/QuickBooks/CONTPAQi
+export type EstatusConciliacionClave =
+  'pendiente' | 'conciliado' | 'parcial' |
+  'no_facturable' | 'no_deducible' | 'excluido';
+
+export type CategoriaMovimientoClave =
+  'INGRESO_VENTA' | 'INGRESO_VARIOS' |
+  'EGRESO_COMPRA' | 'EGRESO_GASTO' | 'EGRESO_RENTA' |
+  'NOMINA' | 'REEMBOLSO' | 'PROPINA' |
+  'IMPUESTO' |
+  'COMISION_BANCO' | 'COMISION_TPV' |
+  'TRASPASO' | 'PRESTAMO' | 'RETIRO_EFECTIVO' | 'DONACION' |
+  'AJUSTE';
+
 export interface CategoriaMovimientoBancario {
   id: string;
-  clave: string;
+  clave: CategoriaMovimientoClave | string;
   nombre: string;
   descripcion?: string;
   requiere_comprobante: boolean;
@@ -286,7 +303,7 @@ export interface CategoriaMovimientoBancario {
 
 export interface EstatusConciliacion {
   id: string;
-  clave: string;
+  clave: EstatusConciliacionClave | string;
   nombre: string;
   color?: string;
   descripcion?: string;
