@@ -314,11 +314,14 @@ export default function AsignacionXmlModal({
 
     const targetRfc = activeXml ? (activeXml.rfc_receptor || activeXml.clientes?.rfc || '').trim().toUpperCase() : null;
     const targetCliente = activeXml ? (activeXml.clientes?.nombre_local || activeXml.razon_social_receptor || '').trim().toLowerCase() : null;
+    const isPgXml = targetRfc?.includes('XAXX010101') || (targetCliente && (targetCliente.includes('publico') || targetCliente.includes('general')));
 
     const mapped = list.map(p => {
       const { isMatch, isExact, dif, tipo } = activeXml ? checkCoincidencia(p, activeXml) : { isMatch: false, isExact: false, dif: 0, tipo: '' };
 
-      const isClientMatch = (targetRfc && p.clientes?.rfc && p.clientes.rfc.trim().toUpperCase() === targetRfc) ||
+      const isPgPedido = !p.clientes?.rfc || p.clientes.rfc.includes('XAXX010101') || !p.cliente_id;
+      const isClientMatch = (isPgXml && isPgPedido) ||
+        (targetRfc && p.clientes?.rfc && p.clientes.rfc.trim().toUpperCase() === targetRfc) ||
         (targetCliente && (p.cliente_nombre || p.clientes?.nombre_local || '').toLowerCase().includes(targetCliente));
 
       // Verificar si ya está asignado a este mismo XML
@@ -341,16 +344,28 @@ export default function AsignacionXmlModal({
         _difMonto: dif,
         _matchTipo: tipo,
         _isClientMatch: isClientMatch,
+        _isPgPedido: isPgPedido,
         _isLinkedToThisXml: isLinkedToThisXml,
         _hasOtherInvoice: hasOtherInvoice,
         _matchScore: score
       };
     });
 
-    // Si hay un XML seleccionado y 'soloCoincidentes' está activo, MOSTRAR EXCLUSIVAMENTE LOS QUE COINCIDEN
+    // Si hay un XML seleccionado y 'soloCoincidentes' está activo:
     if (activeXml && soloCoincidentes) {
+      const coincidentes = mapped.filter(p => p._isMatch || p._isLinkedToThisXml);
+      // Si la factura es de Público en General: mostrar tanto los que coincidan como todas las ventas sin factura (ej. KEI)
+      if (isPgXml) {
+        return mapped
+          .filter(p => p._isMatch || p._isLinkedToThisXml || !p._hasOtherInvoice)
+          .sort((a, b) => b._matchScore - a._matchScore);
+      }
+      if (coincidentes.length > 0) {
+        return coincidentes.sort((a, b) => b._matchScore - a._matchScore);
+      }
+      // Si no hay coincidencias exactas por monto, mostrar todos los pedidos sin factura del mes para no dejar la vista vacía
       return mapped
-        .filter(p => p._isMatch || p._isLinkedToThisXml)
+        .filter(p => !p._hasOtherInvoice)
         .sort((a, b) => b._matchScore - a._matchScore);
     }
 

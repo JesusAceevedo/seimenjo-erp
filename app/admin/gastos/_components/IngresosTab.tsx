@@ -162,7 +162,7 @@ export default function IngresosTab({
       if (!filtrosEstatus.sin_ticket && !tieneTicket) return false;
 
       // Filtro Bolsa Público en General
-      const isPublicoGeneral = !!v.clientes?.facturar_publico_general || !!v.clientes?.es_anonimo || !v.cliente_id || (v.cliente_nombre || '').toLowerCase().includes('ocasional') || (v.cliente_nombre || '').toLowerCase().includes('público');
+      const isPublicoGeneral = !!v.clientes?.facturar_publico_general || !!v.clientes?.es_anonimo || (v.cliente_nombre || '').toLowerCase().includes('ocasional') || (v.cliente_nombre || '').toLowerCase().includes('público');
       if (filtrosEstatus.solo_pg && !isPublicoGeneral) return false;
 
       return matchSearch;
@@ -195,7 +195,7 @@ export default function IngresosTab({
       totalMonto += totalAmount;
       totalIva += ivaAmount;
 
-      const isPG = !!v.clientes?.facturar_publico_general || !!v.clientes?.es_anonimo || !v.cliente_id || (v.cliente_nombre || '').toLowerCase().includes('ocasional') || (v.cliente_nombre || '').toLowerCase().includes('público');
+      const isPG = !!v.clientes?.facturar_publico_general || !!v.clientes?.es_anonimo || (v.cliente_nombre || '').toLowerCase().includes('ocasional') || (v.cliente_nombre || '').toLowerCase().includes('público');
       if (isPG) {
         publicoGeneral.total += totalAmount;
         publicoGeneral.count++;
@@ -574,7 +574,7 @@ export default function IngresosTab({
                     <div className="font-bold text-gray-800 dark:text-gray-100 truncate max-w-[180px]">{clientName}</div>
                     <div className="flex items-center gap-1 flex-wrap mt-0.5">
                       <span className="font-mono text-[10px] text-gray-400">{clientRfc}</span>
-                      {(!!v.clientes?.facturar_publico_general || !!v.clientes?.es_anonimo || !v.cliente_id || (v.cliente_nombre || '').toLowerCase().includes('ocasional') || (v.cliente_nombre || '').toLowerCase().includes('público')) && (
+                      {(!!v.clientes?.facturar_publico_general || !!v.clientes?.es_anonimo || (v.cliente_nombre || '').toLowerCase().includes('ocasional') || (v.cliente_nombre || '').toLowerCase().includes('público')) && (
                         <span className="px-1.5 py-0.5 rounded text-[8px] font-extrabold bg-purple-100 dark:bg-purple-955/30 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-900/40">
                           🌐 Público General
                         </span>
