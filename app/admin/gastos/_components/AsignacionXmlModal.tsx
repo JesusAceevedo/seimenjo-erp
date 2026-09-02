@@ -97,6 +97,7 @@ export default function AsignacionXmlModal({
   // Filtros
   const [filtroXmlEstatus, setFiltroXmlEstatus] = useState<'sin_asignar' | 'asignadas' | 'todas'>('sin_asignar');
   const [busquedaXml, setBusquedaXml] = useState('');
+  const [filtroPedidoEstatus, setFiltroPedidoEstatus] = useState<'sin_factura' | 'facturados' | 'todos'>('sin_factura');
   const [soloCoincidentes, setSoloCoincidentes] = useState(true);
   const [busquedaPedido, setBusquedaPedido] = useState('');
 
@@ -287,6 +288,15 @@ export default function AsignacionXmlModal({
   // Filtrado de Pedidos en base al XML seleccionado y búsqueda
   const pedidosProcesados = useMemo(() => {
     const list = pedidosDelMes.filter(p => {
+      // Filtro de estatus de factura del pedido
+      const hasInvoice = (p.facturas_clientes && p.facturas_clientes.length > 0) || !!p.folio_factura;
+      if (filtroPedidoEstatus === 'sin_factura' && hasInvoice) {
+        // Excepción: si el pedido está vinculado a la factura activa seleccionada, permitir verlo para poder consultar o desvincular
+        const isLinkedToActive = activeXml && (activeXml.pedido_id === p.id || (p.facturas_clientes && p.facturas_clientes.some((fc: any) => fc.id === activeXml.id)));
+        if (!isLinkedToActive) return false;
+      }
+      if (filtroPedidoEstatus === 'facturados' && !hasInvoice) return false;
+
       if (busquedaPedido.trim()) {
         const q = busquedaPedido.toLowerCase();
         const num = (p.numero_pedido || '').toString();
@@ -354,7 +364,7 @@ export default function AsignacionXmlModal({
       }
       return (b.numero_pedido || 0) - (a.numero_pedido || 0);
     });
-  }, [pedidosDelMes, activeXml, soloCoincidentes, busquedaPedido, checkCoincidencia]);
+  }, [pedidosDelMes, activeXml, soloCoincidentes, filtroPedidoEstatus, busquedaPedido, checkCoincidencia]);
 
   // Contadores globales para el mes
   const kpis = useMemo(() => {
@@ -794,21 +804,56 @@ export default function AsignacionXmlModal({
                   </span>
                 </div>
 
-                {/* TOGGLE SOLO COINCIDENTES */}
-                {activeXml && (
-                  <button
-                    type="button"
-                    onClick={() => setSoloCoincidentes(prev => !prev)}
-                    className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold transition-all flex items-center gap-1 ${
-                      soloCoincidentes
-                        ? 'bg-emerald-600 text-white shadow-xs'
-                        : 'bg-gray-200 dark:bg-gray-800 text-gray-600 dark:text-gray-400 hover:bg-gray-300'
-                    }`}
-                  >
-                    <Filter size={10} />
-                    <span>{soloCoincidentes ? '✓ Sólo Coincidentes' : 'Ver Todos'}</span>
-                  </button>
-                )}
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <div className="flex items-center gap-1 bg-gray-200/60 dark:bg-gray-800/60 p-0.5 rounded-lg text-[10px]">
+                    <button
+                      onClick={() => setFiltroPedidoEstatus('sin_factura')}
+                      className={`px-2 py-0.5 rounded-md font-bold transition-all ${
+                        filtroPedidoEstatus === 'sin_factura'
+                          ? 'bg-white dark:bg-gray-950 text-blue-600 dark:text-blue-400 shadow-xs'
+                          : 'text-gray-500 hover:text-gray-900 dark:hover:text-white'
+                      }`}
+                    >
+                      Sin Factura ({kpis.pedidosSinXmlCount})
+                    </button>
+                    <button
+                      onClick={() => setFiltroPedidoEstatus('facturados')}
+                      className={`px-2 py-0.5 rounded-md font-bold transition-all ${
+                        filtroPedidoEstatus === 'facturados'
+                          ? 'bg-white dark:bg-gray-950 text-emerald-600 dark:text-emerald-400 shadow-xs'
+                          : 'text-gray-500 hover:text-gray-900 dark:hover:text-white'
+                      }`}
+                    >
+                      Facturados
+                    </button>
+                    <button
+                      onClick={() => setFiltroPedidoEstatus('todos')}
+                      className={`px-2 py-0.5 rounded-md font-bold transition-all ${
+                        filtroPedidoEstatus === 'todos'
+                          ? 'bg-white dark:bg-gray-950 text-gray-900 dark:text-white shadow-xs'
+                          : 'text-gray-500 hover:text-gray-900 dark:hover:text-white'
+                      }`}
+                    >
+                      Todos
+                    </button>
+                  </div>
+
+                  {/* TOGGLE SOLO COINCIDENTES */}
+                  {activeXml && (
+                    <button
+                      type="button"
+                      onClick={() => setSoloCoincidentes(prev => !prev)}
+                      className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold transition-all flex items-center gap-1 ${
+                        soloCoincidentes
+                          ? 'bg-emerald-600 text-white shadow-xs'
+                          : 'bg-gray-200 dark:bg-gray-800 text-gray-600 dark:text-gray-400 hover:bg-gray-300'
+                      }`}
+                    >
+                      <Filter size={10} />
+                      <span>{soloCoincidentes ? '✓ Sólo Coincidentes' : 'Ver Todos'}</span>
+                    </button>
+                  )}
+                </div>
               </div>
 
               <div className="relative">
