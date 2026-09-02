@@ -321,11 +321,31 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId,
           }
         }
 
+        const isNomina = tipoDeComprobante === 'N' || 
+          xmlDoc.getElementsByTagName('nomina12:Nomina').length > 0 || 
+          xmlDoc.getElementsByTagName('cfdi:Nomina').length > 0 ||
+          xmlDoc.getElementsByTagName('Nomina').length > 0;
+
+        if (tipo === 'venta' && isNomina) {
+          throw new Error('Este XML es un recibo de Nómina (Tipo N). Los recibos de nómina pertenecen a Egresos / Gastos, no pueden cargarse en Ventas.');
+        }
+
+        if (tipo === 'venta' && tipoDeComprobante !== 'I' && tipoDeComprobante !== 'P') {
+          throw new Error(`Tipo de comprobante '${tipoDeComprobante}' no válido para ventas. Sólo se admiten facturas de Ingreso (I) o Pagos (P).`);
+        }
+
         if (activeEmpresaRfc) {
           if (tipo === 'gasto') {
-            const cleanReceptor = (rfcReceptor || '').trim().toUpperCase();
-            if (cleanReceptor && cleanReceptor !== activeEmpresaRfc) {
-              throw new Error(`El XML no corresponde a esta empresa. El RFC receptor (${rfcReceptor}) no coincide con el RFC oficial de la empresa (${activeEmpresaRfc}).`);
+            if (isNomina) {
+              const cleanEmisor = (emisorRfc || '').trim().toUpperCase();
+              if (cleanEmisor && cleanEmisor !== activeEmpresaRfc) {
+                throw new Error(`El recibo de nómina no fue emitido por esta empresa (${emisorRfc} vs ${activeEmpresaRfc}).`);
+              }
+            } else {
+              const cleanReceptor = (rfcReceptor || '').trim().toUpperCase();
+              if (cleanReceptor && cleanReceptor !== activeEmpresaRfc) {
+                throw new Error(`El XML no corresponde a esta empresa. El RFC receptor (${rfcReceptor}) no coincide con el RFC oficial de la empresa (${activeEmpresaRfc}).`);
+              }
             }
           } else if (tipo === 'venta') {
             const cleanEmisor = (emisorRfc || '').trim().toUpperCase();
@@ -367,18 +387,21 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId,
         setFechaTimbrado(fechaTimbradoVal || null);
         setUsoCfdi(usoCfdiVal);
 
+        const targetRfc = tipo === 'gasto' ? (isNomina ? rfcReceptor : emisorRfc) : rfcReceptor;
+        const targetNombre = tipo === 'gasto' ? (isNomina ? (nombreReceptor || 'Personal Nómina') : emisorNombre) : nombreReceptor;
+
         setManualFields(prev => ({
           ...prev,
           fecha: fecha ? fecha.split('T')[0] : prev.fecha,
-          rfc: tipo === 'gasto' ? emisorRfc : rfcReceptor,
-          nombre: tipo === 'gasto' ? emisorNombre : nombreReceptor,
+          rfc: targetRfc,
+          nombre: targetNombre,
           folio: folio ? `${serie}${folio}`.trim() : (serie ? serie.trim() : prev.folio),
           subtotal: subtotal.toString(),
           iva: globalIva.toString(),
           total: total.toString(),
           metodoPagoId: mappedFpId || prev.metodoPagoId,
           concepto: tipo === 'gasto'
-            ? `Gasto por factura XML (UUID: ${uuid ? uuid.substring(0, 8) : 'S/N'})`
+            ? (isNomina ? `Nómina - ${targetNombre}` : `Gasto por factura XML (UUID: ${uuid ? uuid.substring(0, 8) : 'S/N'})`)
             : prev.concepto
         }));
       } catch (err: any) {

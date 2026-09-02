@@ -153,6 +153,29 @@ export default function CargaXmlMasivaModal({ onClose, onSuccess, tipo, empresaR
 
           const tipoDeComprobante = comprobante.getAttribute('TipoDeComprobante') || comprobante.getAttribute('tipoDeComprobante') || 'I';
 
+          const isNomina = tipoDeComprobante === 'N' || 
+            xmlDoc.getElementsByTagName('nomina12:Nomina').length > 0 || 
+            xmlDoc.getElementsByTagName('cfdi:Nomina').length > 0 ||
+            xmlDoc.getElementsByTagName('Nomina').length > 0;
+
+          if (tipo === 'venta' && isNomina) {
+            nuevosResultados.push({
+              nombre: file.name,
+              estatus: 'error',
+              mensaje: 'Este comprobante es un recibo de Nómina (Tipo N). Los recibos de nómina corresponden a Egresos / Gastos de la empresa, no a facturas de venta.'
+            });
+            continue;
+          }
+
+          if (tipo === 'venta' && tipoDeComprobante !== 'I' && tipoDeComprobante !== 'P') {
+            nuevosResultados.push({
+              nombre: file.name,
+              estatus: 'error',
+              mensaje: `Tipo de comprobante '${tipoDeComprobante}' no válido para ventas. Sólo se permiten facturas de Ingreso (I) o Pagos (P).`
+            });
+            continue;
+          }
+
           let total = parseFloat(comprobante.getAttribute('Total') || comprobante.getAttribute('total') || '0');
           let subtotal = parseFloat(comprobante.getAttribute('SubTotal') || comprobante.getAttribute('subtotal') || '0');
           let fecha = comprobante.getAttribute('Fecha') || comprobante.getAttribute('fecha') || '';
@@ -226,15 +249,28 @@ export default function CargaXmlMasivaModal({ onClose, onSuccess, tipo, empresaR
           // Validación estricta de RFC por tipo de factura (SAT multi-empresa)
           if (activeEmpresaRfc) {
             if (tipo === 'gasto') {
-              // Para egresos, la empresa activa DEBE ser el Receptor del comprobante
-              const cleanReceptorRfc = (rfcReceptor || '').trim().toUpperCase();
-              if (cleanReceptorRfc && cleanReceptorRfc !== activeEmpresaRfc) {
-                nuevosResultados.push({
-                  nombre: file.name,
-                  estatus: 'error',
-                  mensaje: `El XML no pertenece a esta empresa. El RFC receptor (${rfcReceptor}) no coincide con el RFC oficial de la empresa (${activeEmpresaRfc}).`
-                });
-                continue;
+              if (isNomina) {
+                // En recibos de nómina, la empresa activa DEBE ser el Emisor (el patrón)
+                const cleanEmisorRfc = (emisorRfc || '').trim().toUpperCase();
+                if (cleanEmisorRfc && cleanEmisorRfc !== activeEmpresaRfc) {
+                  nuevosResultados.push({
+                    nombre: file.name,
+                    estatus: 'error',
+                    mensaje: `El recibo de nómina no pertenece a esta empresa. El RFC emisor (${emisorRfc}) no coincide con el RFC oficial (${activeEmpresaRfc}).`
+                  });
+                  continue;
+                }
+              } else {
+                // Para egresos regulares, la empresa activa DEBE ser el Receptor del comprobante
+                const cleanReceptorRfc = (rfcReceptor || '').trim().toUpperCase();
+                if (cleanReceptorRfc && cleanReceptorRfc !== activeEmpresaRfc) {
+                  nuevosResultados.push({
+                    nombre: file.name,
+                    estatus: 'error',
+                    mensaje: `El XML no pertenece a esta empresa. El RFC receptor (${rfcReceptor}) no coincide con el RFC oficial de la empresa (${activeEmpresaRfc}).`
+                  });
+                  continue;
+                }
               }
             } else {
               // Para ingresos (ventas), la empresa activa DEBE ser el Emisor del comprobante
@@ -278,8 +314,8 @@ export default function CargaXmlMasivaModal({ onClose, onSuccess, tipo, empresaR
             }
           }
 
-          const rfc = tipo === 'gasto' ? emisorRfc : rfcReceptor;
-          const proveedor_cliente_nombre = tipo === 'gasto' ? emisorNombre : nombreReceptor;
+          const rfc = tipo === 'gasto' ? (isNomina ? rfcReceptor : emisorRfc) : rfcReceptor;
+          const proveedor_cliente_nombre = tipo === 'gasto' ? (isNomina ? (nombreReceptor || 'Personal Nómina') : emisorNombre) : nombreReceptor;
           const folioStr = folio ? `${serie}${folio}`.trim() : (serie ? serie.trim() : `SF-${Math.floor(Math.random() * 1000)}`);
           const fecha_emision = fecha ? fecha.split('T')[0] : new Date().toISOString().split('T')[0];
 
@@ -349,7 +385,7 @@ export default function CargaXmlMasivaModal({ onClose, onSuccess, tipo, empresaR
               xml_url: xmlUrl,
               fecha_gasto: fecha_emision,
               empresa_id: empresaId,
-              concepto: `Gasto por factura XML (UUID: ${uuid.substring(0, 8)})`,
+              concepto: isNomina ? `Nómina - ${proveedor_cliente_nombre}` : `Gasto por factura XML (UUID: ${uuid.substring(0, 8)})`,
               registrado_por: staffId,
               proveedor_id: proveedorId,
               forma_pago_id: formaPagoId,
