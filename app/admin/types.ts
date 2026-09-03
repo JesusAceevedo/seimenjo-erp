@@ -336,4 +336,6 @@ export interface ComprobanteDeposito {
   comision_transacciones?: number;
   iva_transacciones?: number;
   otros_cargos?: number;
+  desglose_tickets?: any[] | null;
+  [key: string]: any;
 }

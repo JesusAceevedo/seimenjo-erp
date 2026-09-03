@@ -34,6 +34,7 @@ import {
 } from '../reconciliationActions';
 import AutoConciliacionModal from './AutoConciliacionModal';
 import HistorialConciliacionModal from './HistorialConciliacionModal';
+import DetalleTicketsModal from './DetalleTicketsModal';
 
 // ── Tipos de estado que se pasan como props ──────────────────────────────────
 
@@ -1216,6 +1217,7 @@ export default function BancoTab({
     comisionTransacciones: string;
     ivaTransacciones: string;
     otrosCargos: string;
+    desgloseTickets?: any[];
   }>({
     tipo: 'deposito_ventanilla',
     fecha: new Date().toISOString().substring(0, 10),
@@ -1238,8 +1240,11 @@ export default function BancoTab({
     propinaParrotpay: '',
     comisionTransacciones: '',
     ivaTransacciones: '',
-    otrosCargos: ''
+    otrosCargos: '',
+    desgloseTickets: []
   });
+
+  const [viewingTicketsComp, setViewingTicketsComp] = React.useState<any | null>(null);
 
   React.useEffect(() => {
     if (selectedMonth && !editingCompId) {
@@ -2088,7 +2093,13 @@ export default function BancoTab({
 
             if (!yyyyMmDd || yyyyMmDd.length < 8) return;
 
-            const tipoPago = String(getVal(['tipo de pago', 'tipo de pa', 'type', 'metodo de pago']) || '').toLowerCase();
+            const rawTipoPago = String(getVal(['tipo de pago', 'tipo de pa', 'type', 'metodo de pago']) || 'Pago').trim();
+            const tipoPago = rawTipoPago.toLowerCase();
+            const numeroPedido = String(getVal(['número de pedido', 'numero de pedido', 'número de', 'numero de', 'pedido', 'ticket', 'folio', 'orden']) || '').trim();
+            const usuario = String(getVal(['usuario', 'mesero', 'cajero', 'staff']) || '').trim();
+            const marca = String(getVal(['marca']) || '').trim();
+            const canal = String(getVal(['canal', 'sucursal']) || '').trim();
+
             const parseNum = (val: any) => {
               if (typeof val === 'number') return isNaN(val) ? 0 : val;
               if (!val) return 0;
@@ -2113,11 +2124,22 @@ export default function BancoTab({
                 propinaEfectivo: 0,
                 montoParrotpay: 0,
                 propinaParrotpay: 0,
-                totalAgrupado: 0
+                totalAgrupado: 0,
+                tickets: []
               });
             }
 
             const g = groups.get(yyyyMmDd);
+            g.tickets.push({
+              numero_pedido: numeroPedido,
+              usuario: usuario,
+              marca: marca,
+              canal: canal,
+              tipo_pago: rawTipoPago,
+              propina: propina,
+              total_sin_propina: totalSinPropina,
+              total: total
+            });
             
             if (tipoPago.includes('crédito') || tipoPago.includes('credito')) {
               g.montoCredito += totalSinPropina;
@@ -2217,7 +2239,8 @@ export default function BancoTab({
           cuenta_bancaria_id: parrotCuenta ? parrotCuenta.id : null,
           cuentaBancariaId: parrotCuenta ? parrotCuenta.id : null,
           storage_provider: 'Supabase',
-          storageProvider: 'Supabase'
+          storageProvider: 'Supabase',
+          desglose_tickets: g.tickets || []
         };
 
         const res = await onCrearComprobante(payload);
@@ -3037,6 +3060,17 @@ export default function BancoTab({
                                             </span>
                                             <span className="font-mono text-[9px] text-gray-400">({new Date(c.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })})</span>
                                           </div>
+                                          {Array.isArray(c.desglose_tickets) && c.desglose_tickets.length > 0 && (
+                                            <button
+                                              type="button"
+                                              onClick={() => setViewingTicketsComp(c)}
+                                              className="mt-1.5 inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/40 dark:hover:bg-amber-900/50 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 text-[10px] font-extrabold transition-all shadow-2xs cursor-pointer"
+                                              title="Ver lista de ventas y tickets de este día"
+                                            >
+                                              <Receipt size={11} className="text-amber-500" />
+                                              <span>Ver {c.desglose_tickets.length} ventas / tickets</span>
+                                            </button>
+                                          )}
                                           <div className="flex items-center gap-1.5 shrink-0">
                                             {c.archivo_url && (
                                               <button
@@ -3833,12 +3867,36 @@ export default function BancoTab({
                                   propinaEfectivo: String(g.propinaEfectivo),
                                   montoParrotpay: String(g.montoParrotpay),
                                   propinaParrotpay: String(g.propinaParrotpay),
+                                  desgloseTickets: g.tickets || []
                                 }));
                               }}
                               className="w-full text-left px-2 py-1.5 bg-white dark:bg-gray-900 hover:bg-emerald-100 dark:hover:bg-emerald-900/40 border border-emerald-100 dark:border-emerald-800/30 rounded text-[10px] text-gray-700 dark:text-gray-300 transition-colors flex justify-between items-center"
                             >
-                              <span className="font-bold">{g.fecha}</span>
-                              <span className="font-mono">{formatCurrency(g.totalAgrupado)}</span>
+                              <span className="font-bold flex items-center gap-1.5">
+                                {g.fecha}
+                                <span className="text-[9px] font-normal text-emerald-600 dark:text-emerald-400 font-mono">
+                                  ({g.tickets?.length || 0} tickets)
+                                </span>
+                              </span>
+                              <div className="flex items-center gap-2">
+                                <span className="font-mono">{formatCurrency(g.totalAgrupado)}</span>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setViewingTicketsComp({
+                                      fecha: g.fecha,
+                                      tipo: 'corte_parrot',
+                                      monto: g.totalAgrupado,
+                                      desglose_tickets: g.tickets
+                                    });
+                                  }}
+                                  className="p-1 text-gray-400 hover:text-amber-500 transition-colors"
+                                  title="Ver tickets de este día"
+                                >
+                                  <Receipt size={12} />
+                                </button>
+                              </div>
                             </button>
                           ))}
                         </div>
@@ -4288,7 +4346,8 @@ export default function BancoTab({
                               propina_parrotpay: parseInputNumber(newCompForm.propinaParrotpay || 0),
                               comision_transacciones: parseInputNumber(newCompForm.comisionTransacciones || 0),
                               iva_transacciones: parseInputNumber(newCompForm.ivaTransacciones || 0),
-                              otros_cargos: parseInputNumber(newCompForm.otrosCargos || 0)
+                              otros_cargos: parseInputNumber(newCompForm.otrosCargos || 0),
+                              desglose_tickets: newCompForm.desgloseTickets || []
                             };
 
                             let res;
@@ -4504,6 +4563,17 @@ export default function BancoTab({
                                         )}
                                       </div>
                                     )}
+                                    {Array.isArray(c.desglose_tickets) && c.desglose_tickets.length > 0 && (
+                                      <button
+                                        type="button"
+                                        onClick={() => setViewingTicketsComp(c)}
+                                        className="mt-1.5 inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/40 dark:hover:bg-amber-900/50 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 text-[10px] font-extrabold transition-all shadow-2xs cursor-pointer"
+                                        title="Ver lista de ventas y tickets de este día"
+                                      >
+                                        <Receipt size={11} className="text-amber-500" />
+                                        <span>Ver {c.desglose_tickets.length} ventas / tickets</span>
+                                      </button>
+                                    )}
                                   </td>
                                   <td className="p-3 font-medium text-gray-700 dark:text-gray-300">
                                     {cuentasBancarias?.find(cb => cb.id === c.cuenta_bancaria_id)?.nombre || '-'}
@@ -4552,6 +4622,16 @@ export default function BancoTab({
                                   </td>
                                   <td className="p-3 text-right">
                                     <div className="flex justify-end gap-1.5 flex-wrap">
+                                      {Array.isArray(c.desglose_tickets) && c.desglose_tickets.length > 0 && (
+                                        <button
+                                          type="button"
+                                          onClick={() => setViewingTicketsComp(c)}
+                                          className="p-1 text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-955/20 rounded font-bold text-[10px] flex items-center gap-0.5"
+                                          title="Ver lista de ventas y tickets de este día"
+                                        >
+                                          <Receipt size={11} /> Ventas ({c.desglose_tickets.length})
+                                        </button>
+                                      )}
                                       <button
                                         type="button"
                                         onClick={() => setActiveCompToLink(c)}
@@ -4585,7 +4665,8 @@ export default function BancoTab({
                                             propinaParrotpay: String(c.propina_parrotpay || ''),
                                             comisionTransacciones: String(c.comision_transacciones || ''),
                                             ivaTransacciones: String(c.iva_transacciones || ''),
-                                            otrosCargos: String(c.otros_cargos || '')
+                                            otrosCargos: String(c.otros_cargos || ''),
+                                            desgloseTickets: c.desglose_tickets || []
                                           });
                                         }}
                                         className="p-1 text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-955/20 rounded font-bold text-[10px] flex items-center gap-0.5"
@@ -8003,6 +8084,11 @@ export default function BancoTab({
         onDownloadFile={onDownloadFile}
         onOpenReconcileModal={handleOpenReconcileModal}
         token={token}
+      />
+      <DetalleTicketsModal
+        isOpen={!!viewingTicketsComp}
+        onClose={() => setViewingTicketsComp(null)}
+        comprobante={viewingTicketsComp}
       />
     </div>
   );

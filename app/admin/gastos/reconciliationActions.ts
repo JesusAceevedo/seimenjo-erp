@@ -3016,6 +3016,8 @@ export async function crearComprobanteDeposito(
     comision_transacciones?: number;
     iva_transacciones?: number;
     otros_cargos?: number;
+    desglose_tickets?: any[];
+    [key: string]: any;
   },
   token: string
 ) {
@@ -3060,7 +3062,8 @@ export async function crearComprobanteDeposito(
       propina_parrotpay: propinaParrotpay,
       comision_transacciones: Number(p.comision_transacciones ?? p.comisionTransacciones ?? 0),
       iva_transacciones: Number(p.iva_transacciones ?? p.ivaTransacciones ?? 0),
-      otros_cargos: Number(p.otros_cargos ?? p.otrosCargos ?? 0)
+      otros_cargos: Number(p.otros_cargos ?? p.otrosCargos ?? 0),
+      desglose_tickets: p.desglose_tickets || p.desgloseTickets || []
     };
 
     let { data, error } = await supabaseAdmin
@@ -3128,6 +3131,8 @@ export async function actualizarComprobanteDeposito(
     comision_transacciones?: number;
     iva_transacciones?: number;
     otros_cargos?: number;
+    desglose_tickets?: any[];
+    [key: string]: any;
   },
   token: string
 ) {
@@ -3153,7 +3158,10 @@ export async function actualizarComprobanteDeposito(
       propina_parrotpay: payload.propina_parrotpay || 0,
       comision_transacciones: payload.comision_transacciones || 0,
       iva_transacciones: payload.iva_transacciones || 0,
-      otros_cargos: payload.otros_cargos || 0
+      otros_cargos: payload.otros_cargos || 0,
+      ...(payload.desglose_tickets !== undefined || (payload as any).desgloseTickets !== undefined
+        ? { desglose_tickets: payload.desglose_tickets ?? (payload as any).desgloseTickets }
+        : {})
     };
 
     let { data, error } = await supabaseAdmin
