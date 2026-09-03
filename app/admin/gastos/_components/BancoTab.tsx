@@ -2034,9 +2034,22 @@ export default function BancoTab({
           rawData.forEach(row => {
             const keys = Object.keys(row);
             const getVal = (possibleKeys: string[]) => {
-              for (const k of keys) {
-                if (possibleKeys.some(pk => k.toLowerCase().includes(pk))) {
-                  return row[k];
+              // 1. Coincidencia exacta primero
+              for (const pk of possibleKeys) {
+                const target = pk.toLowerCase().trim();
+                for (const k of keys) {
+                  if (k.toLowerCase().trim() === target) {
+                    return row[k];
+                  }
+                }
+              }
+              // 2. Coincidencia parcial si no hubo exacta
+              for (const pk of possibleKeys) {
+                const target = pk.toLowerCase().trim();
+                for (const k of keys) {
+                  if (k.toLowerCase().trim().includes(target)) {
+                    return row[k];
+                  }
                 }
               }
               return '';
@@ -2075,7 +2088,7 @@ export default function BancoTab({
 
             if (!yyyyMmDd || yyyyMmDd.length < 8) return;
 
-            const tipoPago = String(getVal(['tipo de pago', 'type']) || '').toLowerCase();
+            const tipoPago = String(getVal(['tipo de pago', 'tipo de pa', 'type', 'metodo de pago']) || '').toLowerCase();
             const parseNum = (val: any) => {
               if (typeof val === 'number') return isNaN(val) ? 0 : val;
               if (!val) return 0;
@@ -2085,7 +2098,7 @@ export default function BancoTab({
             };
 
             const propina = parseNum(getVal(['propina', 'tip']));
-            const totalSinPropina = parseNum(getVal(['total sin propina', 'subtotal']));
+            const totalSinPropina = parseNum(getVal(['total sin propina', 'total sin p', 'subtotal']));
             const rawTotal = parseNum(getVal(['total']));
             const total = rawTotal > 0 ? rawTotal : (totalSinPropina + propina);
 
@@ -2115,9 +2128,17 @@ export default function BancoTab({
             } else if (tipoPago.includes('efectivo')) {
               g.montoEfectivo += totalSinPropina;
               g.propinaEfectivo += propina;
-            } else {
+            } else if (tipoPago.includes('terminal') || tipoPago.includes('tarjeta') || tipoPago.includes('pos') || tipoPago.includes('card')) {
+              // "Pago Terminal" en Parrot POS representa cobro con tarjeta física en la terminal
+              g.montoDebito += totalSinPropina;
+              g.propinaDebito += propina;
+            } else if (tipoPago.includes('parrot') || tipoPago.includes('qr') || tipoPago.includes('transferencia')) {
               g.montoParrotpay += totalSinPropina;
               g.propinaParrotpay += propina;
+            } else {
+              // Si no especifica, agrupar como tarjeta/terminal
+              g.montoDebito += totalSinPropina;
+              g.propinaDebito += propina;
             }
             g.totalAgrupado += total;
           });
