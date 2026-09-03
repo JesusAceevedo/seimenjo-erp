@@ -32,7 +32,7 @@ export default function CargasEstadosCuentaPage() {
       const { data: cbData } = await supabase
         .from('cuentas_bancarias')
         .select('*')
-        .or(`empresa_id.is.null,empresa_id.eq.${empresaId}`)
+        .eq('empresa_id', empresaId)
         .order('nombre', { ascending: true });
 
       setCuentasBancarias(cbData || []);

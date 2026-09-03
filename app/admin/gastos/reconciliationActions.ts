@@ -2013,24 +2013,115 @@ export async function guardarConciliacionManual(
                   // Extraer campos del CFDI
                   const receptor = cfdi['cfdi:Receptor'] || cfdi['Receptor'];
                   const rfcReceptor = receptor?.['@_Rfc'] || receptor?.['@_rfc'];
+                  const emisor = cfdi['cfdi:Emisor'] || cfdi['Emisor'];
+                  const rfcEmisor = (emisor?.['@_Rfc'] || emisor?.['@_rfc'] || '').trim().toUpperCase();
+                  const nombreEmisor = emisor?.['@_Nombre'] || emisor?.['@_nombre'];
 
-                  // Validación estricta por RFC de la empresa
-                  if (rfcReceptor && empresaId) {
+                  // Validación por RFC de la empresa activa
+                  if (empresaId) {
                     const { data: empData } = await supabaseAdmin
                       .from('empresas')
                       .select('rfc')
                       .eq('id', empresaId)
                       .maybeSingle();
 
-                    if (empData?.rfc && rfcReceptor.trim().toUpperCase() !== empData.rfc.trim().toUpperCase()) {
-                      console.warn(`Saltando registro automático de gasto: RFC receptor del XML (${rfcReceptor}) no coincide con el RFC de la empresa activa (${empData.rfc}).`);
+                    const currentEmpresaRfc = empData?.rfc?.trim().toUpperCase();
+
+                    // CASO A: Si el EMISOR es la empresa activa, es una FACTURA EMITIDA (Venta / Ingreso)
+                    if (currentEmpresaRfc && rfcEmisor === currentEmpresaRfc) {
+                      const { data: existingFc } = await supabaseAdmin
+                        .from('facturas_clientes')
+                        .select('id')
+                        .eq('uuid_fiscal', uuid.toLowerCase())
+                        .maybeSingle();
+
+                      if (!existingFc) {
+                        let clienteId = null;
+                        if (rfcReceptor) {
+                          const cleanRec = rfcReceptor.trim().toUpperCase();
+                          let { data: cli } = await supabaseAdmin
+                            .from('clientes')
+                            .select('id')
+                            .eq('rfc', cleanRec)
+                            .eq('empresa_id', empresaId)
+                            .maybeSingle();
+
+                          if (!cli) {
+                            const nombreRec = receptor?.['@_Nombre'] || receptor?.['@_nombre'] || `CLIENTE ${cleanRec}`;
+                            const { data: newCli } = await supabaseAdmin
+                              .from('clientes')
+                              .insert({
+                                rfc: cleanRec,
+                                nombre_local: nombreRec,
+                                razon_social: nombreRec,
+                                empresa_id: empresaId,
+                                es_anonimo: false
+                              })
+                              .select('id')
+                              .single();
+                            cli = newCli;
+                          }
+                          clienteId = cli?.id || null;
+                        }
+
+                        const totalV = parseFloat(cfdi['@_Total'] || cfdi['@_total'] || '0');
+                        const subtotalV = parseFloat(cfdi['@_SubTotal'] || cfdi['@_subtotal'] || '0') || totalV;
+                        const fechaV = cfdi['@_Fecha'] || cfdi['@_fecha'] || '';
+                        const fechaEmisionV = fechaV ? fechaV.split('T')[0] : new Date().toISOString().split('T')[0];
+                        const serieV = (cfdi['@_Serie'] || cfdi['@_serie'] || '').trim();
+                        const folioV = (cfdi['@_Folio'] || cfdi['@_folio'] || '').trim();
+                        const folioStrV = folioV ? `${serieV}${folioV}` : serieV || 'FAC';
+                        const formaPagoCodeV = (cfdi['@_FormaPago'] || cfdi['@_formaPago'] || '').trim();
+
+                        const { data: fpList } = await supabaseAdmin
+                          .from('formas_pago')
+                          .select('id')
+                          .eq('codigo', formaPagoCodeV)
+                          .limit(1);
+
+                        const { data: estList } = await supabaseAdmin
+                          .from('estatus_factura')
+                          .select('id')
+                          .ilike('nombre', 'Facturado')
+                          .limit(1);
+
+                        let globalIvaV = 0;
+                        const impV = cfdi['cfdi:Impuestos'] || cfdi['Impuestos'];
+                        const trasV = impV?.['cfdi:Traslados']?.['cfdi:Traslado'] || impV?.['Traslados']?.['Traslado'];
+                        if (trasV) {
+                          const trasArrV = Array.isArray(trasV) ? trasV : [trasV];
+                          for (const t of trasArrV) {
+                            if (t['@_Impuesto'] === '002') globalIvaV += parseFloat(t['@_Importe'] || '0');
+                          }
+                        }
+
+                        await supabaseAdmin
+                          .from('facturas_clientes')
+                          .insert({
+                            empresa_id: empresaId,
+                            cliente_id: clienteId,
+                            uuid_fiscal: uuid.toLowerCase(),
+                            serie_folio: folioStrV,
+                            total: totalV,
+                            subtotal: subtotalV,
+                            iva_trasladado: globalIvaV,
+                            fecha_emision: fechaEmisionV,
+                            forma_pago_id: fpList?.[0]?.id || null,
+                            estatus_factura_id: estList?.[0]?.id || null,
+                            uso_cfdi_clave: receptor?.['@_UsoCFDI'] || 'G03',
+                            xml_url: path,
+                            pdf_url: payload.pdfFacturaUrl || null
+                          });
+                      }
+                      continue;
+                    }
+
+                    // CASO B: Si es un gasto (egreso), validar que el RECEPTOR sea la empresa activa
+                    if (currentEmpresaRfc && rfcReceptor && rfcReceptor.trim().toUpperCase() !== currentEmpresaRfc) {
+                      console.warn(`Saltando registro automático de gasto: RFC receptor del XML (${rfcReceptor}) no coincide con el RFC de la empresa activa (${currentEmpresaRfc}).`);
                       continue;
                     }
                   }
-
-                  const emisor = cfdi['cfdi:Emisor'] || cfdi['Emisor'];
-                  const rfcEmisor = emisor?.['@_Rfc'] || emisor?.['@_rfc'];
-                  const nombreEmisor = emisor?.['@_Nombre'] || emisor?.['@_nombre'];
 
                   const total = parseFloat(cfdi['@_Total'] || cfdi['@_total'] || '0');
                   const subtotal = parseFloat(cfdi['@_SubTotal'] || cfdi['@_subtotal'] || '0') || total;
@@ -2271,25 +2362,32 @@ export async function guardarConciliacionManual(
     }
 
     if (primaryMov.tipo_movimiento === 'Deposito' && payload.pedidosIds.length > 0) {
+      const cleanPedidosIds = payload.pedidosIds.map(id => id.replace(/^suelta_/, ''));
       const { error: linkErr } = await supabaseAdmin
         .from('pedidos')
         .update({ movimiento_bancario_id: primaryMovId, estatus_pago: 'Liquidado' })
-        .in('id', payload.pedidosIds)
+        .in('id', cleanPedidosIds)
         .eq('empresa_id', empresaId);
 
       if (linkErr) throw linkErr;
 
+      const rawPedidosIds = payload.pedidosIds.map(id => id.replace(/^suelta_/, ''));
+
       const { data: pedidosInfo } = await supabaseAdmin
         .from('pedidos')
-        .select('id, precio_total')
-        .in('id', payload.pedidosIds)
+        .select('id, precio_total, folio_factura')
+        .in('id', rawPedidosIds)
         .eq('empresa_id', empresaId);
+
+      const foliosFromPedidos = (pedidosInfo || [])
+        .map(p => p.folio_factura)
+        .filter(Boolean);
 
       const { data: pedidosFiles } = await supabaseAdmin
         .from('facturas_clientes')
         .select('xml_url, pdf_url, ticket_url')
-        .in('pedido_id', payload.pedidosIds)
-        .eq('empresa_id', empresaId);
+        .eq('empresa_id', empresaId)
+        .or(`pedido_id.in.(${rawPedidosIds.join(',')}),id.in.(${rawPedidosIds.join(',')})${foliosFromPedidos.length > 0 ? `,serie_folio.in.(${foliosFromPedidos.map(f => `"${f}"`).join(',')})` : ''}`);
 
       if (pedidosFiles) {
         const xmls: string[] = [];
@@ -2310,28 +2408,38 @@ export async function guardarConciliacionManual(
       for (const mItem of targetMovements) {
         const movMonto = Math.abs(Number(mItem.monto) || Number(mItem.deposito) || 0);
         for (const pId of payload.pedidosIds) {
-          const pInfo = pedidosInfo?.find((p) => p.id === pId);
+          const cleanPid = pId.replace(/^suelta_/, '');
+          const pInfo = pedidosInfo?.find((p) => p.id === cleanPid);
 
-          const { data: priorConcs } = await supabaseAdmin
-            .from('conciliaciones_bancarias')
-            .select('monto_asociado')
-            .eq('pedido_id', pId)
-            .neq('movimiento_id', mItem.id);
+          if (pInfo) {
+            const { data: priorConcs } = await supabaseAdmin
+              .from('conciliaciones_bancarias')
+              .select('monto_asociado')
+              .eq('pedido_id', cleanPid)
+              .neq('movimiento_id', mItem.id);
 
-          const totalPrior = (priorConcs || []).reduce((s, c) => s + Number(c.monto_asociado || 0), 0);
-          const totalPedido = pInfo ? Number(pInfo.precio_total || 0) : movMonto;
-          const saldoPendiente = Math.max(0, totalPedido - totalPrior);
+            const totalPrior = (priorConcs || []).reduce((s, c) => s + Number(c.monto_asociado || 0), 0);
+            const totalPedido = Number(pInfo.precio_total || 0);
+            const saldoPendiente = Math.max(0, totalPedido - totalPrior);
 
-          const montoAsoc = targetMovIds.length > 1
-            ? movMonto
-            : (saldoPendiente > 0 ? Math.min(movMonto, saldoPendiente) : movMonto);
+            const montoAsoc = targetMovIds.length > 1
+              ? movMonto
+              : (saldoPendiente > 0 ? Math.min(movMonto, saldoPendiente) : movMonto);
 
-          junctionEntries.push({
-            movimiento_id: mItem.id,
-            pedido_id: pId,
-            monto_asociado: montoAsoc,
-            empresa_id: empresaId
-          });
+            junctionEntries.push({
+              movimiento_id: mItem.id,
+              pedido_id: cleanPid,
+              monto_asociado: montoAsoc,
+              empresa_id: empresaId
+            });
+          } else {
+            // Es una factura suelta (facturas_clientes)
+            await supabaseAdmin
+              .from('facturas_clientes')
+              .update({ movimiento_bancario_id: mItem.id })
+              .eq('id', cleanPid)
+              .eq('empresa_id', empresaId);
+          }
         }
       }
 
@@ -3027,7 +3135,7 @@ export async function actualizarComprobanteDeposito(
     const { empresaId } = await getUserEmpresaId(token);
     const updatePayload: any = {
       tipo: payload.tipo,
-      fecha: payload.fecha,
+      fecha: payload.fecha ? String(payload.fecha).substring(0, 10) : payload.fecha,
       monto: payload.monto,
       descripcion: payload.descripcion || null,
       archivo_url: payload.archivo_url || null,

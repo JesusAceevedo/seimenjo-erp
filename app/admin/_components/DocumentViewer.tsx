@@ -47,14 +47,16 @@ export default function DocumentViewer({ open, onClose, title, documents }: Docu
         // Obtenemos la URL firmada para cualquier tipo de documento (PDF o XML)
         const res = await obtenerSignedUrl(activeDoc.url, token);
         if (!res.success || !res.url) {
-          throw new Error('No se pudo obtener el archivo.');
+          throw new Error(res.error || 'No se pudo obtener el archivo.');
         }
 
         setSignedPdfUrl(res.url);
 
         if (activeDoc.type === 'xml' || activeDoc.type === 'cfdi') {
           const fetchRes = await fetch(res.url);
-          if (!fetchRes.ok) throw new Error('Error al cargar el XML');
+          if (!fetchRes.ok) {
+            throw new Error('Error al cargar el XML: ' + (fetchRes.statusText || 'Error desconocido'));
+          }
           const text = await fetchRes.text();
           setXmlContent(text);
           if (activeDoc.type === 'cfdi') {

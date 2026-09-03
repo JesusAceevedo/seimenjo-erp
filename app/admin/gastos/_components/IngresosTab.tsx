@@ -637,10 +637,16 @@ export default function IngresosTab({
                               </button>
                             ))}
                             {inv.xml_url && handleViewCfdi && (
-                              <button onClick={() => handleViewCfdi(inv.xml_url!.split(',')[0])} title="Ver XML"
-                                className="p-1.5 bg-indigo-50 dark:bg-indigo-900/20 hover:bg-indigo-100 rounded border border-indigo-200 dark:border-indigo-900/50 text-indigo-500">
-                                <Eye size={13} />
-                              </button>
+                              <>
+                                <button onClick={() => handleViewCfdi(inv.xml_url!.split(',')[0])} title="Ver XML"
+                                  className="p-1.5 bg-indigo-50 dark:bg-indigo-900/20 hover:bg-indigo-100 rounded border border-indigo-200 dark:border-indigo-900/50 text-indigo-500">
+                                  <Eye size={13} />
+                                </button>
+                                <button onClick={() => handleViewCfdi(inv.xml_url!.split(',')[0])} title="Ver representación CFDI"
+                                  className="p-1.5 bg-emerald-50 dark:bg-emerald-900/20 hover:bg-emerald-100 rounded border border-emerald-200 dark:border-emerald-900/50 text-emerald-500">
+                                  <SlidersHorizontal size={11} />
+                                </button>
+                              </>
                             )}
                             {inv.ticket_url && inv.ticket_url.split(',').filter(Boolean).map((url, si) => (
                               <button key={si} onClick={() => onDownloadFile(url)} title="Ticket"

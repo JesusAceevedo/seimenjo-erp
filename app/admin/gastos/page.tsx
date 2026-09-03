@@ -25,7 +25,10 @@ import {
   crearComprobanteDeposito,
   actualizarComprobanteDeposito,
   eliminarComprobanteDeposito,
-  eliminarMultiplesComprobantes
+  eliminarMultiplesComprobantes,
+  vincularComprobanteAMovimiento,
+  desvincularComprobanteDeMovimiento,
+  fusionarMovimientosReembolso
 } from './reconciliationActions';
 import { EditGastoModal, EditMovimientoModal } from './_components/EditModals';
 import {
@@ -769,6 +772,24 @@ export default function EgresosModule() {
                     onEliminarMultiplesComprobantes={async (ids) => {
                       const token = await getSessionToken();
                       const res = await eliminarMultiplesComprobantes(ids, token);
+                      if (res.success) fetchData();
+                      return res;
+                    }}
+                    onVincularComprobante={async (comprobanteId, movimientoBancarioId, montoAsociado) => {
+                      const token = await getSessionToken();
+                      const res = await vincularComprobanteAMovimiento(comprobanteId, movimientoBancarioId, token, montoAsociado);
+                      if (res.success) fetchData();
+                      return res;
+                    }}
+                    onDesvincularComprobante={async (comprobanteId, movimientoBancarioId = null) => {
+                      const token = await getSessionToken();
+                      const res = await desvincularComprobanteDeMovimiento(comprobanteId, movimientoBancarioId, token);
+                      if (res.success) fetchData();
+                      return res;
+                    }}
+                    onFusionarReembolso={async (movId1, movId2, payload) => {
+                      const token = await getSessionToken();
+                      const res = await fusionarMovimientosReembolso(movId1, movId2, payload, token);
                       if (res.success) fetchData();
                       return res;
                     }}

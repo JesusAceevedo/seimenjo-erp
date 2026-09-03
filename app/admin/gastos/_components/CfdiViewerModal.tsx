@@ -60,7 +60,7 @@ export default function CfdiViewerModal({ xmlUrl, onClose }: CfdiViewerModalProp
 
         // 2. Fetch XML content
         const fetchRes = await fetch(res.url);
-        if (!fetchRes.ok) throw new Error('Error al descargar el archivo.');
+        if (!fetchRes.ok) throw new Error('Error al descargar el archivo: ' + (fetchRes.statusText || ''));
         const xmlText = await fetchRes.text();
 
         // Check if response starts with %PDF

@@ -10,10 +10,12 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.106.0",
+    "@types/nodemailer": "^8.0.1",
     "autoprefixer": "^10.5.0",
     "fast-xml-parser": "^5.8.0",
     "lucide-react": "^1.16.0",
     "next": "^16.2.6",
+    "nodemailer": "^9.1.1",
     "opencode-ai": "^1.18.12",
     "postcss": "^8.5.15",
     "qrcode.react": "^4.2.0",

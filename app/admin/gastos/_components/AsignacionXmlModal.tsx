@@ -90,7 +90,7 @@ export default function AsignacionXmlModal({
 
   // Selecciones
   const [selectedXmlId, setSelectedXmlId] = useState<string | null>(null);
-  const [selectedPedidoId, setSelectedPedidoId] = useState<string | null>(null);
+  const [selectedPedidoIds, setSelectedPedidoIds] = useState<string[]>([]);
   const [processingId, setProcessingId] = useState<string | null>(null);
   const [autoMatching, setAutoMatching] = useState(false);
 
@@ -217,9 +217,19 @@ export default function AsignacionXmlModal({
     return facturas.find(f => f.id === selectedXmlId) || null;
   }, [facturas, selectedXmlId]);
 
-  const activePedido = useMemo(() => {
-    return pedidos.find(p => p.id === selectedPedidoId) || null;
-  }, [pedidos, selectedPedidoId]);
+  const selectedPedidos = useMemo(() => {
+    return pedidos.filter(p => selectedPedidoIds.includes(p.id));
+  }, [pedidos, selectedPedidoIds]);
+
+  const totalPedidosSeleccionados = useMemo(() => {
+    return selectedPedidos.reduce((sum, p) => sum + cleanNumber(p.precio_total), 0);
+  }, [selectedPedidos]);
+
+  const toggleSelectPedido = (id: string) => {
+    setSelectedPedidoIds(prev =>
+      prev.includes(id) ? prev.filter(pId => pId !== id) : [...prev, id]
+    );
+  };
 
   // Función helper de coincidencia
   const checkCoincidencia = useCallback((p: any, xml: any) => {
@@ -400,18 +410,18 @@ export default function AsignacionXmlModal({
   }, [facturasDelMes, pedidosDelMes, checkCoincidencia]);
 
   // Vincular
-  const handleVincular = async (xmlId: string, pedidoId: string) => {
+  const handleVincular = async (xmlId: string, targetPedidoIds: string | string[]) => {
     setProcessingId(xmlId);
     setMessage(null);
     try {
       const token = await getSessionToken();
       if (!token) throw new Error('Sesión expirada.');
 
-      const res = await vincularFacturaAPedido(xmlId, pedidoId, token);
+      const res = await vincularFacturaAPedido(xmlId, targetPedidoIds, token);
       if (res.success) {
-        setMessage({ text: 'Factura XML asignada exitosamente al pedido.', type: 'success' });
+        setMessage({ text: 'Factura XML asignada exitosamente a los pedido(s).', type: 'success' });
         setSelectedXmlId(null);
-        setSelectedPedidoId(null);
+        setSelectedPedidoIds([]);
         await fetchData();
         onSuccess?.();
       } else {
@@ -695,7 +705,7 @@ export default function AsignacionXmlModal({
                       key={f.id}
                       onClick={() => {
                         setSelectedXmlId(isSelected ? null : f.id);
-                        setSelectedPedidoId(null);
+                        setSelectedPedidoIds([]);
                       }}
                       className={`p-2.5 rounded-xl border transition-all cursor-pointer ${
                         isSelected
@@ -918,7 +928,7 @@ export default function AsignacionXmlModal({
                 </div>
               ) : (
                 pedidosProcesados.map((p) => {
-                  const isSelected = selectedPedidoId === p.id;
+                  const isSelected = selectedPedidoIds.includes(p.id);
                   const clientName = p.clientes?.nombre_local || p.cliente_nombre || 'Cliente General';
                   const rfc = p.clientes?.rfc || 'S/N';
                   const isMatch = p._isMatch;
@@ -930,7 +940,7 @@ export default function AsignacionXmlModal({
                   return (
                     <div
                       key={p.id}
-                      onClick={() => setSelectedPedidoId(isSelected ? null : p.id)}
+                      onClick={() => toggleSelectPedido(p.id)}
                       className={`p-2.5 rounded-xl border transition-all cursor-pointer ${
                         isSelected
                           ? 'border-blue-500 bg-blue-500/10 shadow-xs ring-2 ring-blue-500/30'
@@ -946,56 +956,64 @@ export default function AsignacionXmlModal({
                       }`}
                     >
                       <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            <span className="font-extrabold text-xs text-gray-900 dark:text-white">
-                              Pedido #{p.numero_pedido}
-                            </span>
+                        <div className="flex items-start gap-2.5 min-w-0 flex-1">
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => {}}
+                            className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 border-gray-300 dark:border-gray-700 pointer-events-none mt-0.5 shrink-0"
+                          />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="font-extrabold text-xs text-gray-900 dark:text-white">
+                                Pedido #{p.numero_pedido}
+                              </span>
 
-                            {isLinkedToThis ? (
-                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-black bg-emerald-600 text-white shadow-xs">
-                                <CheckCircle size={9} /> Vinculado a este XML
-                              </span>
-                            ) : isExact ? (
-                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-black bg-emerald-500 text-white shadow-xs">
-                                <Sparkles size={9} /> Coincide Importe Exacto
-                              </span>
-                            ) : isMatch ? (
-                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-teal-100 dark:bg-teal-950 text-teal-700 dark:text-teal-300">
-                                Coincide ({p._matchTipo === 'sin_envio' ? 'Sin Envío' : 'Centavos'})
-                              </span>
-                            ) : null}
+                              {isLinkedToThis ? (
+                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-black bg-emerald-600 text-white shadow-xs">
+                                  <CheckCircle size={9} /> Vinculado a este XML
+                                </span>
+                              ) : isExact ? (
+                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-black bg-emerald-500 text-white shadow-xs">
+                                  <Sparkles size={9} /> Coincide Importe Exacto
+                                </span>
+                              ) : isMatch ? (
+                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-teal-100 dark:bg-teal-950 text-teal-700 dark:text-teal-300">
+                                  Coincide ({p._matchTipo === 'sin_envio' ? 'Sin Envío' : 'Centavos'})
+                                </span>
+                              ) : null}
 
-                            {p._isClientMatch && (
-                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-blue-100 dark:bg-blue-950 text-blue-700 dark:text-blue-300">
-                                Mismo Cliente
-                              </span>
-                            )}
+                              {p._isClientMatch && (
+                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-blue-100 dark:bg-blue-950 text-blue-700 dark:text-blue-300">
+                                  Mismo Cliente
+                                </span>
+                              )}
 
-                            {hasOtherInvoice ? (
-                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-gray-100 dark:bg-gray-800 text-gray-500" title={`Asignado a factura: ${p.folio_factura}`}>
-                                Folio: {p.folio_factura || 'Facturado'}
-                              </span>
-                            ) : !isLinkedToThis ? (
-                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
-                                Sin Factura
-                              </span>
-                            ) : null}
+                              {hasOtherInvoice ? (
+                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-gray-100 dark:bg-gray-800 text-gray-500" title={`Asignado a factura: ${p.folio_factura}`}>
+                                  Folio: {p.folio_factura || 'Facturado'}
+                                </span>
+                              ) : !isLinkedToThis ? (
+                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
+                                  Sin Factura
+                                </span>
+                              ) : null}
 
-                            {(p.movimiento_bancario_id || p.movimientos_bancarios) && (
-                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-purple-100 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800" title={p.movimientos_bancarios?.concepto ? `Banco: ${p.movimientos_bancarios.concepto}` : 'Banco Conciliado'}>
-                                <Landmark size={9} /> Banco Conciliado
-                              </span>
-                            )}
-                          </div>
+                              {(p.movimiento_bancario_id || p.movimientos_bancarios) && (
+                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-purple-100 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800" title={p.movimientos_bancarios?.concepto ? `Banco: ${p.movimientos_bancarios.concepto}` : 'Banco Conciliado'}>
+                                  <Landmark size={9} /> Banco Conciliado
+                                </span>
+                              )}
+                            </div>
 
-                          <div className="font-semibold text-xs text-gray-800 dark:text-gray-200 truncate mt-0.5">
-                            {clientName}
-                          </div>
-                          <div className="text-[10px] text-gray-400 font-mono flex items-center gap-2">
-                            <span>RFC: {rfc}</span>
-                            <span>·</span>
-                            <span>{p.fecha_pedido ? new Date(p.fecha_pedido).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' }) : 'Sin fecha'}</span>
+                            <div className="font-semibold text-xs text-gray-800 dark:text-gray-200 truncate mt-0.5">
+                              {clientName}
+                            </div>
+                            <div className="text-[10px] text-gray-400 font-mono flex items-center gap-2">
+                              <span>RFC: {rfc}</span>
+                              <span>·</span>
+                              <span>{p.fecha_pedido ? new Date(p.fecha_pedido).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' }) : 'Sin fecha'}</span>
+                            </div>
                           </div>
                         </div>
 
@@ -1018,7 +1036,8 @@ export default function AsignacionXmlModal({
                               disabled={processingId === activeXml.id}
                               onClick={(e) => {
                                 e.stopPropagation();
-                                handleVincular(activeXml.id, p.id);
+                                const targets = selectedPedidoIds.length > 0 ? selectedPedidoIds : [p.id];
+                                handleVincular(activeXml.id, targets);
                               }}
                               className={`mt-1.5 px-2.5 py-1 rounded-lg text-[10px] font-black transition-all flex items-center gap-1 shadow-xs ml-auto cursor-pointer ${
                                 isExact
@@ -1027,7 +1046,7 @@ export default function AsignacionXmlModal({
                               }`}
                             >
                               <Link2 size={11} />
-                              <span>{hasOtherInvoice ? 'Reasignar' : isExact ? 'Asignar' : 'Vincular'}</span>
+                              <span>{selectedPedidoIds.length > 1 ? `Vincular (${selectedPedidoIds.length})` : hasOtherInvoice ? 'Reasignar' : isExact ? 'Asignar' : 'Vincular'}</span>
                             </button>
                           )}
                         </div>
@@ -1063,31 +1082,35 @@ export default function AsignacionXmlModal({
                 <Receipt size={16} />
               </div>
               <div className="min-w-0">
-                <span className="text-[9px] uppercase font-bold text-gray-400 block">Pedido Seleccionado</span>
-                {activePedido ? (
-                  <span className="text-xs font-black text-gray-900 dark:text-white truncate block">
-                    Pedido #{activePedido.numero_pedido} — {formatCurrency(activePedido.precio_total)}
+                <span className="text-[9px] uppercase font-bold text-gray-400 block">
+                  {selectedPedidoIds.length > 1 ? `Pedidos Seleccionados (${selectedPedidoIds.length})` : 'Pedido Seleccionado'}
+                </span>
+                {selectedPedidoIds.length > 0 ? (
+                  <span className="text-xs font-black text-gray-900 dark:text-white truncate block font-mono">
+                    {selectedPedidoIds.length === 1
+                      ? `Pedido #${selectedPedidos[0]?.numero_pedido} — ${formatCurrency(selectedPedidos[0]?.precio_total)}`
+                      : `${selectedPedidoIds.length} Pedidos — Total: ${formatCurrency(totalPedidosSeleccionados)}`}
                   </span>
                 ) : (
                   <span className="text-xs text-gray-400 italic">
-                    Selecciona un pedido en la lista derecha
+                    Selecciona uno o más pedidos en la lista derecha
                   </span>
                 )}
               </div>
             </div>
 
             <div className="flex items-center gap-2 shrink-0">
-              {activePedido && (
+              {selectedPedidoIds.length > 0 && (
                 <div className="text-right mr-1 hidden md:block">
                   <span className="text-[9px] uppercase font-bold text-gray-400 block">Diferencia</span>
                   <span className={`text-xs font-mono font-bold ${
-                    Math.abs(cleanNumber(activePedido.precio_total) - cleanNumber(activeXml.total)) < 0.05
+                    Math.abs(cleanNumber(totalPedidosSeleccionados) - cleanNumber(activeXml.total)) < 0.05
                       ? 'text-emerald-500'
                       : 'text-amber-500'
                   }`}>
-                    {Math.abs(cleanNumber(activePedido.precio_total) - cleanNumber(activeXml.total)) < 0.05
+                    {Math.abs(cleanNumber(totalPedidosSeleccionados) - cleanNumber(activeXml.total)) < 0.05
                       ? '✓ Monto Exacto'
-                      : formatCurrency(cleanNumber(activePedido.precio_total) - cleanNumber(activeXml.total))}
+                      : formatCurrency(cleanNumber(totalPedidosSeleccionados) - cleanNumber(activeXml.total))}
                   </span>
                 </div>
               )}
@@ -1096,7 +1119,7 @@ export default function AsignacionXmlModal({
                 type="button"
                 onClick={() => {
                   setSelectedXmlId(null);
-                  setSelectedPedidoId(null);
+                  setSelectedPedidoIds([]);
                 }}
                 className="px-2.5 py-1.5 text-xs text-gray-500 hover:text-gray-700 font-bold cursor-pointer"
               >
@@ -1105,16 +1128,16 @@ export default function AsignacionXmlModal({
 
               <button
                 type="button"
-                disabled={!activePedido || processingId === activeXml.id}
+                disabled={selectedPedidoIds.length === 0 || processingId === activeXml.id}
                 onClick={() => {
-                  if (activePedido) {
-                    handleVincular(activeXml.id, activePedido.id);
+                  if (selectedPedidoIds.length > 0) {
+                    handleVincular(activeXml.id, selectedPedidoIds);
                   }
                 }}
                 className="px-3.5 py-1.5 rounded-xl text-xs font-extrabold bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-md transition-all flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
               >
                 <Check size={14} />
-                <span>{processingId === activeXml.id ? 'Vinculando...' : 'Asignar Factura a Pedido'}</span>
+                <span>{processingId === activeXml.id ? 'Vinculando...' : `Asignar Factura a ${selectedPedidoIds.length} Pedido(s)`}</span>
               </button>
             </div>
           </div>

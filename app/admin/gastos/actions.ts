@@ -1,11 +1,37 @@
 'use server';
 
+import nodemailer from 'nodemailer';
+import { XMLParser } from 'fast-xml-parser';
 import {
   supabaseAdmin,
   getUserEmpresaId,
   getFormaPagoIdByCode,
   getEstatusFacturaIdByName
 } from '../../../lib/supabaseAdmin';
+
+// Configuración SMTP por empresa (se cargará desde las variables de entorno o la configuración de la empresa)
+let smtpTransporter: nodemailer.Transporter | null = null;
+
+function getSmtpConfig() {
+  if (smtpTransporter) return smtpTransporter;
+
+  const smtpHost = process.env.SMTP_HOST || 'smtp.gmail.com';
+  const smtpPort = parseInt(process.env.SMTP_PORT || '587', 10);
+  const smtpUser = process.env.SMTP_USER || '';
+  const smtpPass = process.env.SMTP_PASS || '';
+
+  smtpTransporter = nodemailer.createTransport({
+    host: smtpHost,
+    port: smtpPort,
+    secure: smtpPort === 465, // true for 465, false for other ports
+    auth: {
+      user: smtpUser,
+      pass: smtpPass
+    }
+  });
+
+  return smtpTransporter;
+}
 
 // 1. Generate Signed URL for secure downloads
 export async function obtenerSignedUrl(filePath: string, token: string): Promise<{ success: boolean; url?: string; error?: string }> {
@@ -19,12 +45,12 @@ export async function obtenerSignedUrl(filePath: string, token: string): Promise
 
     // Use admin client to create the signed URL to bypass storage RLS safely for authorized users
     const { data, error } = await supabaseAdmin.storage.from('facturas').createSignedUrl(filePath, 900); // Valid for 15 minutes
-    if (error) throw error;
+    if (error) return { success: false, error: error.message || 'Error al generar enlace de firma' };
+    if (!data?.signedUrl) return { success: false, error: 'URL firmada no disponible' };
     return { success: true, url: data.signedUrl };
   } catch (err: any) {
     console.error('Error generating signed URL:', err);
-    const message = err?.message || (typeof err === 'string' ? err : JSON.stringify(err));
-    return { success: false, error: message || 'Error al generar enlace de descarga' };
+    return { success: false, error: err?.message || 'Error al generar enlace de descarga' };
   }
 }
 
@@ -80,6 +106,36 @@ export async function enviarFacturaPorCorreo(pedidoId: string, token: string): P
         : Promise.resolve(null)
     ]);
 
+    // 4. Send email via SMTP
+    const transport = getSmtpConfig();
+    const attachmentLinks = [];
+    if (xmlUrl) {
+      attachmentLinks.push(`<a href="${xmlUrl}" target="_blank" rel="noreferrer">Descargar XML</a>`);
+    }
+    if (pdfUrl) {
+      attachmentLinks.push(`<a href="${pdfUrl}" target="_blank" rel="noreferrer">Descargar PDF</a>`);
+    }
+
+    const mailOptions = {
+      from: process.env.SMTP_FROM || 'facturacion@seimenjo.com',
+      to: cliente.email_facturacion,
+      subject: `Factura Electrónica SAT CFDI 4.0 - Pedido #${pedido.numero_pedido}`,
+      text: `Estimado/a ${cliente.nombre_local},\n\nLe hacemos llegar la factura correspondiente a su pedido con número #${pedido.numero_pedido} por un total de $${pedido.precio_total} MXN.\n\nUUID Fiscal: ${factura.uuid_fiscal}\n\nLos archivos adjuntos están disponibles en los enlaces firmados a continuación.\n\nSaludos cordiales,\nSistema de Facturación`,
+      html: `<p>Estimado/a <strong>${cliente.nombre_local}</strong>,</p>
+        <p>Le hacemos llegar la factura correspondiente a su pedido con número <strong>#${pedido.numero_pedido}</strong> por un total de <strong>$${pedido.precio_total} MXN</strong>.</p>
+        <p>UUID Fiscal: ${factura.uuid_fiscal}</p>
+        <div>
+          <p class="text-xs text-gray-600 font-mono">Archivos Adjuntos (Enlaces Firmados de Storage):</p>
+          <div>${attachmentLinks.join(' | ')}</div>
+        </div>`,
+      attachments: [
+        ...(xmlUrl ? [{ path: xmlUrl }] : []),
+        ...(pdfUrl ? [{ path: pdfUrl }] : [])
+      ]
+    };
+
+    await transport.sendMail(mailOptions);
+
     return {
       success: true,
       email: cliente.email_facturacion,
@@ -91,9 +147,9 @@ export async function enviarFacturaPorCorreo(pedidoId: string, token: string): P
       pdfUrl
     };
   } catch (err: any) {
-    console.error('Error simulating invoice email:', err);
+    console.error('Error sending invoice email:', err);
     const message = err?.message || (typeof err === 'string' ? err : JSON.stringify(err));
-    return { success: false, error: message || 'Error en el envío de correo' };
+    return { success: false, error: message || 'Error al enviar el correo' };
   }
 }
 
@@ -1252,12 +1308,15 @@ export async function consultarSatYActualizarCfdi(
 
 export async function vincularFacturaAPedido(
   facturaId: string,
-  pedidoId: string,
+  pedidoId: string | string[],
   token: string
 ): Promise<{ success: boolean; error?: string }> {
   try {
     const { empresaId } = await getUserEmpresaId(token);
     if (!empresaId) throw new Error('Sesión no válida o empresa no especificada.');
+
+    const targetPedidoIds = Array.isArray(pedidoId) ? pedidoId : [pedidoId];
+    if (targetPedidoIds.length === 0) throw new Error('Debes seleccionar al menos un pedido.');
 
     // 1. Obtener la factura de cliente
     const { data: factura, error: fErr } = await supabaseAdmin
@@ -1269,56 +1328,57 @@ export async function vincularFacturaAPedido(
 
     if (fErr || !factura) throw new Error('Factura de cliente no encontrada.');
 
-    // 2. Obtener el pedido objetivo
-    const { data: pedido, error: pErr } = await supabaseAdmin
+    // 2. Obtener los pedidos objetivos
+    const { data: pedidosList, error: pErr } = await supabaseAdmin
       .from('pedidos')
       .select('*, clientes(rfc)')
-      .eq('id', pedidoId)
-      .eq('empresa_id', empresaId)
-      .single();
+      .in('id', targetPedidoIds)
+      .eq('empresa_id', empresaId);
 
-    if (pErr || !pedido) throw new Error('Pedido no encontrado.');
+    if (pErr || !pedidosList || pedidosList.length === 0) throw new Error('Pedido(s) no encontrado(s).');
 
-    // 3. Vincular la factura al pedido
+    // 3. Vincular la factura al primer pedido en la tabla facturas_clientes
+    const primaryPedidoId = targetPedidoIds[0];
     const { error: updFErr } = await supabaseAdmin
       .from('facturas_clientes')
-      .update({ pedido_id: pedidoId })
+      .update({ pedido_id: primaryPedidoId })
       .eq('id', facturaId)
       .eq('empresa_id', empresaId);
 
     if (updFErr) throw updFErr;
 
-    // 4. Sincronizar el folio de factura en el pedido
+    // 4. Sincronizar el folio de factura en TODOS los pedidos seleccionados
     const folioStr = factura.serie_folio || (factura.uuid_fiscal ? `UUID:${factura.uuid_fiscal.substring(0, 8)}` : '');
     if (folioStr) {
       await supabaseAdmin
         .from('pedidos')
         .update({ folio_factura: folioStr })
-        .eq('id', pedidoId)
+        .in('id', targetPedidoIds)
         .eq('empresa_id', empresaId);
     }
 
-    // 5. Si el pedido ya tiene un movimiento bancario conciliado, sincronizar los documentos XML/PDF al movimiento bancario
-    if (pedido.movimiento_bancario_id) {
-      const xmlToSet = factura.xml_url || null;
-      const pdfToSet = factura.pdf_url || null;
-      const ticketToSet = factura.ticket_url || null;
+    // 5. Si alguno de los pedidos ya tiene un movimiento bancario conciliado, sincronizar los documentos XML/PDF al movimiento bancario
+    const xmlToSet = factura.xml_url || null;
+    const pdfToSet = factura.pdf_url || null;
+    const ticketToSet = factura.ticket_url || null;
 
-      await supabaseAdmin
-        .from('movimientos_bancarios')
-        .update({
-          ...(xmlToSet ? { xml_url: xmlToSet } : {}),
-          ...(pdfToSet ? { pdf_factura_url: pdfToSet } : {}),
-          ...(ticketToSet ? { pdf_ticket_url: ticketToSet } : {}),
-          visible_ingresos: true
-        })
-        .eq('id', pedido.movimiento_bancario_id)
-        .eq('empresa_id', empresaId);
+    for (const p of pedidosList) {
+      if (p.movimiento_bancario_id) {
+        await supabaseAdmin
+          .from('movimientos_bancarios')
+          .update({
+            ...(xmlToSet ? { xml_url: xmlToSet } : {}),
+            ...(pdfToSet ? { pdf_url: pdfToSet } : {}),
+            ...(ticketToSet ? { pdf_ticket_url: ticketToSet } : {})
+          })
+          .eq('id', p.movimiento_bancario_id)
+          .eq('empresa_id', empresaId);
+      }
     }
 
     return { success: true };
   } catch (err: any) {
-    console.error('Error al vincular factura a pedido:', err);
+    console.error('Error al vincular factura a pedido(s):', err);
     return { success: false, error: err.message || 'Error al vincular factura.' };
   }
 }
@@ -1422,11 +1482,25 @@ export async function obtenerTrayectoriaPedido(
     if (pErr || !pedido) throw new Error('Pedido no encontrado.');
 
     // 2. Facturas de clientes asociadas
-    const { data: facturas } = await supabaseAdmin
+    let { data: facturas } = await supabaseAdmin
       .from('facturas_clientes')
       .select('*, estatus_factura(nombre), formas_pago(nombre, codigo)')
       .eq('pedido_id', pedidoId)
       .eq('empresa_id', empresaId);
+
+    // Fallback: Si la factura fue vinculada a múltiples pedidos o mediante folio_factura
+    if ((!facturas || facturas.length === 0) && pedido.folio_factura) {
+      const folioClean = pedido.folio_factura.trim().toLowerCase();
+      const { data: factByFolio } = await supabaseAdmin
+        .from('facturas_clientes')
+        .select('*, estatus_factura(nombre), formas_pago(nombre, codigo)')
+        .eq('empresa_id', empresaId)
+        .or(`serie_folio.ilike.%${folioClean}%,uuid_fiscal.ilike.%${folioClean}%`);
+
+      if (factByFolio && factByFolio.length > 0) {
+        facturas = factByFolio;
+      }
+    }
 
     // 3. Movimiento bancario (si existe)
     let movimientoBancario = null;
@@ -1472,4 +1546,401 @@ export async function obtenerTrayectoriaPedido(
     return { success: false, error: err.message || 'Error al obtener la trayectoria.' };
   }
 }
+
+export async function crearPedidoDesdeFactura(
+  facturaId: string,
+  token: string
+): Promise<{ success: boolean; pedido?: any; error?: string }> {
+  try {
+    const { empresaId } = await getUserEmpresaId(token);
+    if (!empresaId) throw new Error('Sesión no válida o empresa no especificada.');
+
+    // 1. Obtener los datos de la factura
+    const { data: factura, error: fErr } = await supabaseAdmin
+      .from('facturas_clientes')
+      .select('*, clientes(id, nombre_local, rfc)')
+      .eq('id', facturaId)
+      .eq('empresa_id', empresaId)
+      .single();
+
+    if (fErr || !factura) throw new Error('Factura no encontrada.');
+
+    // 2. Determinar el siguiente número de pedido disponible
+    const { data: maxPed } = await supabaseAdmin
+      .from('pedidos')
+      .select('numero_pedido')
+      .eq('empresa_id', empresaId)
+      .order('numero_pedido', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    const nextNumeroPedido = (maxPed?.numero_pedido ? Number(maxPed.numero_pedido) : 0) + 1;
+    const clienteNombre = factura.clientes?.nombre_local || factura.razon_social_receptor || 'Público en General';
+    const folioStr = factura.serie_folio || (factura.uuid_fiscal ? `UUID:${factura.uuid_fiscal.substring(0, 8)}` : `FAC-${nextNumeroPedido}`);
+
+    // 3. Crear el nuevo registro en pedidos
+    const { data: newPedido, error: pErr } = await supabaseAdmin
+      .from('pedidos')
+      .insert({
+        empresa_id: empresaId,
+        numero_pedido: nextNumeroPedido,
+        cliente_id: factura.cliente_id || null,
+        cliente_nombre: clienteNombre,
+        precio_total: Number(factura.total || 0),
+        costo_envio: 0,
+        estatus_pago: 'Liquidado',
+        folio_factura: folioStr,
+        fecha_pedido: factura.fecha_emision || new Date().toISOString().split('T')[0],
+        metodo_pago: factura.metodo_pago || '03',
+        movimiento_bancario_id: factura.movimiento_bancario_id || null
+      })
+      .select('*, clientes(id, nombre_local, rfc)')
+      .single();
+
+    if (pErr || !newPedido) throw new Error(pErr?.message || 'Error al crear el pedido.');
+
+    // 4. Vincular la factura al nuevo pedido creado
+    await supabaseAdmin
+      .from('facturas_clientes')
+      .update({ pedido_id: newPedido.id })
+      .eq('id', facturaId)
+      .eq('empresa_id', empresaId);
+
+    // 5. Si la factura tiene un movimiento bancario, asociarle los documentos XML/PDF
+    if (factura.movimiento_bancario_id) {
+      await supabaseAdmin
+        .from('movimientos_bancarios')
+        .update({
+          ...(factura.xml_url ? { xml_url: factura.xml_url } : {}),
+          ...(factura.pdf_url ? { pdf_url: factura.pdf_url } : {})
+        })
+        .eq('id', factura.movimiento_bancario_id)
+        .eq('empresa_id', empresaId);
+    }
+
+    return { success: true, pedido: newPedido };
+  } catch (err: any) {
+    console.error('Error al crear pedido desde factura:', err);
+    return { success: false, error: err.message || 'Error al generar el pedido.' };
+  }
+}
+
+/**
+ * Vincula una factura emitida a un cliente buscado o creado a partir de su RFC.
+ */
+export async function vincularFacturaClientePorRfc(
+  facturaId: string,
+  rfc: string,
+  token: string,
+  nombreSugerido?: string
+): Promise<{ success: boolean; cliente?: any; error?: string }> {
+  try {
+    const { empresaId } = await getUserEmpresaId(token);
+    if (!empresaId) throw new Error('Sesión no válida o empresa no especificada.');
+
+    const cleanRfc = (rfc || '').trim().toUpperCase();
+    if (!cleanRfc) throw new Error('El RFC es requerido.');
+
+    // 1. Buscar cliente por RFC en la empresa
+    let { data: cliente } = await supabaseAdmin
+      .from('clientes')
+      .select('id, nombre_local, razon_social, rfc')
+      .eq('empresa_id', empresaId)
+      .eq('rfc', cleanRfc)
+      .maybeSingle();
+
+    // 2. Si no existe, crearlo
+    if (!cliente) {
+      const nombreNuevo = (nombreSugerido || '').trim() || `CLIENTE ${cleanRfc}`;
+      const { data: newCli, error: insErr } = await supabaseAdmin
+        .from('clientes')
+        .insert({
+          empresa_id: empresaId,
+          rfc: cleanRfc,
+          nombre_local: nombreNuevo,
+          razon_social: nombreNuevo,
+          es_anonimo: false
+        })
+        .select('id, nombre_local, razon_social, rfc')
+        .single();
+
+      if (insErr || !newCli) {
+        throw new Error(`Error al crear cliente con RFC ${cleanRfc}: ${insErr?.message}`);
+      }
+      cliente = newCli;
+    }
+
+    // 3. Actualizar la factura
+    const { error: upErr } = await supabaseAdmin
+      .from('facturas_clientes')
+      .update({ cliente_id: cliente.id })
+      .eq('id', facturaId)
+      .eq('empresa_id', empresaId);
+
+    if (upErr) throw upErr;
+
+    return { success: true, cliente };
+  } catch (err: any) {
+    console.error('Error al vincular cliente por RFC:', err);
+    return { success: false, error: err.message || 'Error al vincular el cliente.' };
+  }
+}
+
+/**
+ * Escanea facturas emitidas de la empresa sin cliente asignado y las vincula
+ * automáticamente al cliente correspondiente con base en el RFC receptor del XML.
+ */
+export async function autoVincularFacturasEmitidasPorRfc(
+  token: string
+): Promise<{ success: boolean; vinculadasCount: number; error?: string }> {
+  try {
+    const { empresaId } = await getUserEmpresaId(token);
+    if (!empresaId) throw new Error('Sesión no válida o empresa no especificada.');
+
+    // 1. Obtener facturas de la empresa que no tengan cliente asignado
+    const { data: facturas, error: fcErr } = await supabaseAdmin
+      .from('facturas_clientes')
+      .select('id, xml_url, cliente_id')
+      .eq('empresa_id', empresaId);
+
+    if (fcErr) throw fcErr;
+    if (!facturas || facturas.length === 0) {
+      return { success: true, vinculadasCount: 0 };
+    }
+
+    // 2. Cargar todos los clientes de la empresa
+    const { data: clientes } = await supabaseAdmin
+      .from('clientes')
+      .select('id, rfc, nombre_local')
+      .eq('empresa_id', empresaId);
+
+    const clientByRfc = new Map<string, any>();
+    (clientes || []).forEach((c: any) => {
+      if (c.rfc) clientByRfc.set(c.rfc.trim().toUpperCase(), c);
+    });
+
+    let vinculadasCount = 0;
+
+    for (const f of facturas) {
+      if (!f.cliente_id && f.xml_url) {
+        try {
+          const { data: fileData } = await supabaseAdmin.storage.from('facturas').download(f.xml_url);
+          if (fileData) {
+            const xmlText = await fileData.text();
+            const receptorMatch = xmlText.match(/<cfdi:Receptor[^>]+Rfc="([^"]+)"/i) ||
+                                  xmlText.match(/<Receptor[^>]+Rfc="([^"]+)"/i) ||
+                                  xmlText.match(/rfc="([^"]+)"/i);
+            const rfcReceptor = receptorMatch ? receptorMatch[1].trim().toUpperCase() : null;
+
+            if (rfcReceptor) {
+              let matchedCli = clientByRfc.get(rfcReceptor);
+              if (!matchedCli) {
+                const nameMatch = xmlText.match(/<cfdi:Receptor[^>]+Nombre="([^"]+)"/i) ||
+                                  xmlText.match(/<Receptor[^>]+Nombre="([^"]+)"/i);
+                const nombreReceptor = nameMatch ? nameMatch[1].trim() : `CLIENTE ${rfcReceptor}`;
+                const { data: newC } = await supabaseAdmin
+                  .from('clientes')
+                  .insert({
+                    empresa_id: empresaId,
+                    rfc: rfcReceptor,
+                    nombre_local: nombreReceptor,
+                    razon_social: nombreReceptor,
+                    es_anonimo: false
+                  })
+                  .select('id, rfc, nombre_local')
+                  .single();
+
+                if (newC) {
+                  matchedCli = newC;
+                  clientByRfc.set(rfcReceptor, newC);
+                }
+              }
+
+              if (matchedCli) {
+                await supabaseAdmin
+                  .from('facturas_clientes')
+                  .update({ cliente_id: matchedCli.id })
+                  .eq('id', f.id);
+                vinculadasCount++;
+              }
+            }
+          }
+        } catch (xmlErr) {
+          console.warn(`No se pudo procesar XML de factura ${f.id}:`, xmlErr);
+        }
+      }
+    }
+
+    return { success: true, vinculadasCount };
+  } catch (err: any) {
+    console.error('Error en autoVincularFacturasEmitidasPorRfc:', err);
+    return { success: false, vinculadasCount: 0, error: err.message || 'Error al auto-vincular facturas.' };
+  }
+}
+
+/**
+ * Sincroniza automáticamente cualquier XML de CFDI emitido por la empresa activa
+ * que haya sido adjuntado a movimientos bancarios (depósitos de ingresos),
+ * asegurando que quede registrado en facturas_clientes y ligado a su cliente por RFC.
+ */
+export async function sincronizarFacturasEmitidasDesdeDepositos(
+  token: string
+): Promise<{ success: boolean; insertadasCount: number; error?: string }> {
+  try {
+    const { empresaId } = await getUserEmpresaId(token);
+    if (!empresaId) throw new Error('Sesión no válida o empresa no especificada.');
+
+    // 1. Obtener RFC de la empresa activa
+    const { data: empData } = await supabaseAdmin
+      .from('empresas')
+      .select('rfc')
+      .eq('id', empresaId)
+      .maybeSingle();
+
+    const empresaRfc = (empData?.rfc || '').trim().toUpperCase();
+    if (!empresaRfc) return { success: true, insertadasCount: 0 };
+
+    // 2. Obtener movimientos bancarios de tipo depósito con xml_url
+    const { data: movs, error: movErr } = await supabaseAdmin
+      .from('movimientos_bancarios')
+      .select('id, concepto, monto, deposito, xml_url, pdf_factura_url, fecha')
+      .eq('empresa_id', empresaId)
+      .eq('tipo_movimiento', 'Deposito')
+      .not('xml_url', 'is', null);
+
+    if (movErr) throw movErr;
+    if (!movs || movs.length === 0) return { success: true, insertadasCount: 0 };
+
+    // 3. Catálogos auxiliares
+    const { data: estatusList } = await supabaseAdmin.from('estatus_factura').select('id, nombre');
+    const facturadoEstatus = (estatusList || []).find((e: any) => e.nombre?.toLowerCase() === 'facturado') || estatusList?.[0];
+    const { data: formasPagoList } = await supabaseAdmin.from('formas_pago').select('id, codigo');
+    const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_' });
+
+    let insertadasCount = 0;
+
+    for (const m of movs) {
+      const xmlPaths = (m.xml_url || '').split(',').filter(Boolean);
+      const pdfPaths = (m.pdf_factura_url || '').split(',').filter(Boolean);
+
+      for (let i = 0; i < xmlPaths.length; i++) {
+        const path = xmlPaths[i];
+        const pdfPath = pdfPaths[i] || pdfPaths[0] || null;
+
+        try {
+          const { data: fileData, error: dlErr } = await supabaseAdmin.storage.from('facturas').download(path);
+          if (dlErr || !fileData) continue;
+
+          const xmlText = await fileData.text();
+          const jsonObj = parser.parse(xmlText);
+          const cfdi = jsonObj['cfdi:Comprobante'] || jsonObj['Comprobante'];
+          if (!cfdi) continue;
+
+          const timbre = cfdi?.['cfdi:Complemento']?.['tfd:TimbreFiscalDigital'] || cfdi?.['Complemento']?.['tfd:TimbreFiscalDigital'];
+          const uuid = (timbre?.['@_UUID'] || timbre?.['@_uuid'] || '').trim();
+          if (!uuid) continue;
+
+          const emisor = cfdi?.['cfdi:Emisor'] || cfdi?.['Emisor'];
+          const emisorRfc = (emisor?.['@_Rfc'] || emisor?.['@_rfc'] || '').trim().toUpperCase();
+
+          // Validar que el CFDI sea emitido por esta empresa
+          if (emisorRfc !== empresaRfc) continue;
+
+          // Verificar si ya existe en facturas_clientes
+          const { data: existingFc } = await supabaseAdmin
+            .from('facturas_clientes')
+            .select('id')
+            .eq('uuid_fiscal', uuid.toLowerCase())
+            .maybeSingle();
+
+          if (existingFc) continue;
+
+          const receptor = cfdi?.['cfdi:Receptor'] || cfdi?.['Receptor'];
+          const receptorRfc = (receptor?.['@_Rfc'] || receptor?.['@_rfc'] || '').trim().toUpperCase();
+          const receptorNombre = (receptor?.['@_Nombre'] || receptor?.['@_nombre'] || '').trim();
+
+          // Buscar o crear cliente por RFC receptor
+          let clienteId = null;
+          if (receptorRfc) {
+            let { data: cli } = await supabaseAdmin
+              .from('clientes')
+              .select('id')
+              .eq('rfc', receptorRfc)
+              .eq('empresa_id', empresaId)
+              .maybeSingle();
+
+            if (!cli) {
+              const nombreCli = receptorNombre || `CLIENTE ${receptorRfc}`;
+              const { data: newCli } = await supabaseAdmin
+                .from('clientes')
+                .insert({
+                  rfc: receptorRfc,
+                  nombre_local: nombreCli,
+                  razon_social: nombreCli,
+                  empresa_id: empresaId,
+                  es_anonimo: false
+                })
+                .select('id')
+                .single();
+              cli = newCli;
+            }
+            clienteId = cli?.id || null;
+          }
+
+          const total = parseFloat(cfdi['@_Total'] || cfdi['@_total'] || '0');
+          const subtotal = parseFloat(cfdi['@_SubTotal'] || cfdi['@_subtotal'] || '0') || total;
+          const fechaRaw = cfdi['@_Fecha'] || cfdi['@_fecha'] || '';
+          const fechaEmision = fechaRaw ? fechaRaw.split('T')[0] : m.fecha;
+          const fechaTimbrado = timbre?.['@_FechaTimbrado'] || timbre?.['@_fechaTimbrado'] || null;
+          const serie = (cfdi['@_Serie'] || cfdi['@_serie'] || '').trim();
+          const folio = (cfdi['@_Folio'] || cfdi['@_folio'] || '').trim();
+          const folioStr = folio ? (serie + folio) : (serie || (cfdi['@_TipoDeComprobante'] === 'I' ? 'FAC' : 'CFDI'));
+          const formaPagoCode = (cfdi['@_FormaPago'] || cfdi['@_formaPago'] || '').trim();
+          const fpMatch = (formasPagoList || []).find((f: any) => f.codigo === formaPagoCode);
+          const usoCfdi = (receptor?.['@_UsoCFDI'] || receptor?.['@_usoCFDI'] || 'G03').trim();
+
+          // Calcular IVA
+          let iva = 0;
+          const imp = cfdi['cfdi:Impuestos'] || cfdi['Impuestos'];
+          const tras = imp?.['cfdi:Traslados']?.['cfdi:Traslado'] || imp?.['Traslados']?.['Traslado'];
+          if (tras) {
+            const trasArr = Array.isArray(tras) ? tras : [tras];
+            for (const t of trasArr) {
+              if (t['@_Impuesto'] === '002') iva += parseFloat(t['@_Importe'] || '0');
+            }
+          }
+
+          const { error: insErr } = await supabaseAdmin
+            .from('facturas_clientes')
+            .insert({
+              empresa_id: empresaId,
+              cliente_id: clienteId,
+              uuid_fiscal: uuid.toLowerCase(),
+              serie_folio: folioStr,
+              total: total,
+              subtotal: subtotal,
+              iva_trasladado: iva,
+              fecha_emision: fechaEmision,
+              fecha_timbrado: fechaTimbrado,
+              forma_pago_id: fpMatch ? fpMatch.id : null,
+              estatus_factura_id: facturadoEstatus?.id || null,
+              uso_cfdi_clave: usoCfdi,
+              xml_url: path,
+              pdf_url: pdfPath
+            });
+
+          if (!insErr) insertadasCount++;
+        } catch (subErr) {
+          console.warn(`Error procesando XML de depósito ${path}:`, subErr);
+        }
+      }
+    }
+
+    return { success: true, insertadasCount };
+  } catch (err: any) {
+    console.error('Error en sincronizarFacturasEmitidasDesdeDepositos:', err);
+    return { success: false, insertadasCount: 0, error: err.message || 'Error al sincronizar facturas emitidas.' };
+  }
+}
+
 
