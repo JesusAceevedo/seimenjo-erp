@@ -85,6 +85,9 @@ export function CargasTab({
     return selectedMonth || new Date().toISOString().substring(0, 7);
   });
 
+  // Filtro por cuenta bancaria en la vista de cargas
+  const [selectedCuentaFilter, setSelectedCuentaFilter] = useState<string>('');
+
   const formatDateSafe = (dateStr?: string | null) => {
     if (!dateStr) return 'S/F';
     const clean = String(dateStr).split('T')[0].trim();
@@ -442,6 +445,15 @@ export function CargasTab({
       if (fechaCargaStr !== selectedMonth) return false;
     }
 
+    // Filtro por cuenta bancaria
+    if (selectedCuentaFilter) {
+      if (selectedCuentaFilter === 'sin_cuenta') {
+        if (c.cuenta_bancaria_id) return false;
+      } else if (c.cuenta_bancaria_id !== selectedCuentaFilter) {
+        return false;
+      }
+    }
+
     if (!searchTerm.trim()) return true;
     const s = searchTerm.toLowerCase().trim();
     const nombreMatch = (c.nombre_archivo || '').toLowerCase().includes(s);
@@ -453,6 +465,26 @@ export function CargasTab({
   const totalRegistrosSum = filteredCargas.reduce((acc, curr) => acc + (curr.total_registros || 0), 0);
   const totalDepositosSum = filteredCargas.reduce((acc, curr) => acc + Number(curr.total_depositos || 0), 0);
   const totalRetirosSum = filteredCargas.reduce((acc, curr) => acc + Number(curr.total_retiros || 0), 0);
+
+  // Desglose por cuenta bancaria para el período activo
+  const desglosePorCuenta = React.useMemo(() => {
+    const map: Record<string, { nombre: string; depositos: number; retiros: number; count: number }> = {};
+    cargas.forEach(c => {
+      if (selectedMonth) {
+        const fechaCargaStr = (c.fecha_carga || '').substring(0, 7);
+        if (fechaCargaStr !== selectedMonth) return;
+      }
+      const cuentaId = c.cuenta_bancaria_id || 'sin_cuenta';
+      const cuentaNombre = c.cuentas_bancarias?.nombre || (c.cuenta_bancaria_id ? 'Cuenta asignada' : 'General / Auto-enrutado');
+      if (!map[cuentaId]) {
+        map[cuentaId] = { nombre: cuentaNombre, depositos: 0, retiros: 0, count: 0 };
+      }
+      map[cuentaId].depositos += Number(c.total_depositos || 0);
+      map[cuentaId].retiros += Number(c.total_retiros || 0);
+      map[cuentaId].count += 1;
+    });
+    return Object.entries(map).map(([id, val]) => ({ id, ...val }));
+  }, [cargas, selectedMonth]);
 
   return (
     <div className="space-y-6 font-sans pb-12 overflow-y-auto">
@@ -539,17 +571,77 @@ export function CargasTab({
         </div>
       </div>
 
+      {/* Desglose por Cuenta si no hay filtro activo y existen múltiples cuentas */}
+      {desglosePorCuenta.length > 0 && (
+        <div className="bg-gradient-to-r from-amber-500/10 via-amber-500/5 to-transparent border border-amber-500/20 p-3.5 rounded-2xl flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs">
+          <div className="flex items-center gap-2">
+            <Building2 className="text-amber-500 shrink-0" size={16} />
+            <span className="font-bold text-gray-800 dark:text-gray-200">
+              {selectedCuentaFilter ? 'Cuenta Filtrada en Métricas:' : 'Desglose de Depósitos por Cuenta:'}
+            </span>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={() => setSelectedCuentaFilter('')}
+              className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                !selectedCuentaFilter
+                  ? 'bg-amber-500 text-white shadow-xs'
+                  : 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-750'
+              }`}
+            >
+              Todas (Consolidado)
+            </button>
+            {desglosePorCuenta.map(d => {
+              const isSelected = selectedCuentaFilter === d.id;
+              return (
+                <button
+                  key={d.id}
+                  onClick={() => setSelectedCuentaFilter(isSelected ? '' : d.id)}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-mono transition-all flex items-center gap-1.5 cursor-pointer ${
+                    isSelected
+                      ? 'bg-emerald-600 text-white font-bold shadow-xs'
+                      : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-700 hover:border-emerald-500 dark:hover:border-emerald-500'
+                  }`}
+                  title={`Filtrar solo ${d.nombre}`}
+                >
+                  <span className="font-sans font-semibold">{d.nombre}:</span>
+                  <span className={isSelected ? 'text-white font-bold' : 'text-emerald-600 dark:text-emerald-400 font-bold'}>
+                    ${d.depositos.toLocaleString('es-MX', { minimumFractionDigits: 2 })}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Acciones principales y Búsqueda */}
       <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 p-4 rounded-2xl shadow-sm flex flex-col md:flex-row items-center justify-between gap-4">
-        <div className="relative w-full md:w-96">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
-          <input
-            type="text"
-            placeholder="Buscar por archivo, cuenta o fecha..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 pl-9 pr-4 py-2 rounded-xl text-xs outline-none focus:ring-2 focus:ring-amber-500 transition-all"
-          />
+        <div className="flex flex-col sm:flex-row items-center gap-2.5 w-full md:w-auto">
+          <div className="relative w-full sm:w-72">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+            <input
+              type="text"
+              placeholder="Buscar por archivo, cuenta o fecha..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 pl-9 pr-4 py-2 rounded-xl text-xs outline-none focus:ring-2 focus:ring-amber-500 transition-all"
+            />
+          </div>
+
+          <div className="flex items-center gap-1.5 w-full sm:w-auto">
+            <select
+              value={selectedCuentaFilter}
+              onChange={(e) => setSelectedCuentaFilter(e.target.value)}
+              className="w-full sm:w-auto bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 px-3 py-2 rounded-xl text-xs font-semibold text-gray-700 dark:text-gray-200 outline-none focus:ring-2 focus:ring-amber-500 transition-all cursor-pointer"
+            >
+              <option value="">🏦 Todas las Cuentas</option>
+              {cuentasBancarias.map(cb => (
+                <option key={cb.id} value={cb.id}>{cb.nombre} {cb.numero_cuenta ? `(•••${cb.numero_cuenta.slice(-4)})` : ''}</option>
+              ))}
+              <option value="sin_cuenta">General / Auto-enrutado</option>
+            </select>
+          </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">

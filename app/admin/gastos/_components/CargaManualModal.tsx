@@ -1,9 +1,11 @@
 'use client';
 import React, { useState } from 'react';
-import { X, UploadCloud, Link as LinkIcon, FileText, CheckCircle, AlertTriangle } from 'lucide-react';
+import { X, UploadCloud, Link as LinkIcon, FileText, CheckCircle, AlertTriangle, Mail } from 'lucide-react';
 import { supabase } from '../../../../lib/supabase';
 import { conciliarGastoEfectivoAutomatico } from '../reconciliationActions';
 import { SAT_FORMAS_PAGO } from '../../../../lib/constants/sat';
+import { useSessionToken } from '../../../../lib/hooks/useSessionToken';
+import { enviarFacturaPorCorreo } from '../actions';
 
 interface CargaManualModalProps {
   onClose: () => void;
@@ -14,9 +16,12 @@ interface CargaManualModalProps {
 }
 
 export default function CargaManualModal({ onClose, onSuccess, tipo, registroId, empresaRfc }: CargaManualModalProps) {
+  const getSessionToken = useSessionToken();
   const [procesando, setProcesando] = useState(false);
   const [errorGlobal, setErrorGlobal] = useState('');
   const [verTodos, setVerTodos] = useState(false);
+  const [emailFacturacion, setEmailFacturacion] = useState('');
+  const [enviarFacturaEmail, setEnviarFacturaEmail] = useState(true);
 
   // Catálogos
   const [formasPago, setFormasPago] = useState<{ id: string; nombre: string; codigo?: string | null }[]>([]);
@@ -156,6 +161,9 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId,
 
           if (docData) {
             data = docData;
+            if (docData.clientes?.email_facturacion) {
+              setEmailFacturacion(docData.clientes.email_facturacion);
+            }
           } else {
             const { data: pedData } = await supabase
               .from('pedidos')
@@ -164,6 +172,9 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId,
               .maybeSingle();
 
             if (pedData) {
+              if (pedData.clientes?.email_facturacion) {
+                setEmailFacturacion(pedData.clientes.email_facturacion);
+              }
               setManualFields({
                 fecha: pedData.creado_en ? pedData.creado_en.split('T')[0] : new Date().toISOString().split('T')[0],
                 rfc: pedData.clientes?.rfc || '',
@@ -685,6 +696,17 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId,
               })
               .eq('id', registroId);
           }
+
+          // Enviar factura por correo si está seleccionado
+          const targetPedId = existingFc?.pedido_id || registroId;
+          if (enviarFacturaEmail && emailFacturacion.trim() && targetPedId) {
+            try {
+              const token = await getSessionToken();
+              await enviarFacturaPorCorreo(targetPedId, token, emailFacturacion.trim());
+            } catch (mailErr) {
+              console.warn('Error al enviar factura por correo tras carga:', mailErr);
+            }
+          }
         } else {
           const updateData: any = {};
           if (tipo === 'movimiento') {
@@ -1074,6 +1096,45 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId,
                 }}
                 className="w-5 h-5 accent-blue-600 rounded cursor-pointer"
               />
+            </div>
+          )}
+
+          {tipo === 'venta' && (
+            <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-5 shadow-sm space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Mail size={18} className="text-blue-500" />
+                  <div>
+                    <label className="text-sm font-bold text-gray-950 dark:text-white block">
+                      Envío por Correo Electrónico
+                    </label>
+                    <p className="text-xs text-gray-500">
+                      Enviar factura y archivos CFDI (XML y PDF) al cliente al guardar.
+                    </p>
+                  </div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={enviarFacturaEmail}
+                  onChange={(e) => setEnviarFacturaEmail(e.target.checked)}
+                  className="w-5 h-5 accent-blue-600 rounded cursor-pointer"
+                />
+              </div>
+
+              {enviarFacturaEmail && (
+                <div className="pt-2 border-t border-gray-100 dark:border-gray-800 space-y-1">
+                  <label className="block text-[10px] font-bold text-gray-500 uppercase">
+                    Correo Electrónico de Facturación del Cliente
+                  </label>
+                  <input
+                    type="email"
+                    placeholder="cliente@empresa.com"
+                    value={emailFacturacion}
+                    onChange={(e) => setEmailFacturacion(e.target.value)}
+                    className="w-full bg-gray-50 dark:bg-gray-950 border border-gray-300 dark:border-gray-700 p-2.5 rounded-xl text-xs text-gray-900 dark:text-white outline-none focus:ring-1 focus:ring-blue-500"
+                  />
+                </div>
+              )}
             </div>
           )}
 

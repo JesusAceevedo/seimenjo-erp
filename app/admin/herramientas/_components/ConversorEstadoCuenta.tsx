@@ -133,17 +133,44 @@ export default function ConversorEstadoCuenta() {
     const pageHeaderCols: { [page: number]: { xCargos?: number; xAbonos?: number; xSaldo?: number } } = {};
 
     items.forEach((item) => {
-      const txtUpper = item.text.toUpperCase();
+      const txtUpper = item.text.toUpperCase().trim();
       if (!pageHeaderCols[item.page]) pageHeaderCols[item.page] = {};
 
-      if (txtUpper === 'CARGOS' || txtUpper === 'RETIROS' || txtUpper === 'CARGO') {
+      if (
+        (txtUpper.includes('CARGO') || txtUpper.includes('RETIRO')) &&
+        !txtUpper.includes('TOTAL')
+      ) {
         pageHeaderCols[item.page].xCargos = item.x;
-      } else if (txtUpper === 'ABONOS' || txtUpper === 'DEPOSITOS' || txtUpper === 'DEPÓSITOS' || txtUpper === 'ABONO') {
+      } else if (
+        (txtUpper.includes('ABONO') || txtUpper.includes('DEPOSITO') || txtUpper.includes('DEPÓSITO')) &&
+        !txtUpper.includes('TOTAL')
+      ) {
         pageHeaderCols[item.page].xAbonos = item.x;
-      } else if (txtUpper === 'SALDO' || txtUpper.startsWith('SALDO ')) {
+      } else if (
+        (txtUpper === 'SALDO' || txtUpper.startsWith('SALDO ') || txtUpper.includes('SALDO')) &&
+        !txtUpper.includes('TOTAL') && !txtUpper.includes('ANTERIOR') && !txtUpper.includes('PROMEDIO')
+      ) {
         pageHeaderCols[item.page].xSaldo = item.x;
       }
     });
+
+    // Detectar año del estado de cuenta a partir del texto del documento
+    let docYear = new Date().getFullYear();
+    for (const it of items) {
+      const yrMatch = it.text.match(/\b(202[0-9])\b/);
+      if (yrMatch) {
+        const yVal = parseInt(yrMatch[1], 10);
+        if (yVal >= 2020 && yVal <= 2040) {
+          docYear = yVal;
+          break;
+        }
+      }
+    }
+
+    const MESES_MAP: Record<string, number> = {
+      ENE: 1, FEB: 2, MAR: 3, ABR: 4, MAY: 5, JUN: 6, JUL: 7, AGO: 8, SEP: 9, SET: 9, OCT: 10, NOV: 11, DIC: 12,
+      JAN: 1, APR: 4, AUG: 8, DEC: 12
+    };
 
     // 2. Agrupar por página y por línea Y (con tolerancia de ~3.5pt)
     const pageGroups: { [page: number]: { [lineKey: string]: { x: number; text: string }[] } } = {};
@@ -161,8 +188,8 @@ export default function ConversorEstadoCuenta() {
     });
 
     const parsedTransactions: TransaccionBancaria[] = [];
-    const dateRegexBBVA = /^(\d{2}\/[A-Z]{3}|\d{2}\/\d{2}\/\d{4}|\d{2}\/\d{2})$/i;
-    const dateRegexGeneric = /^(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}|\d{2}[\/\-][A-Z]{3})$/i;
+    const dateRegexBBVA = /^(\d{1,2}\/[A-Z]{3}|\d{1,2}\/\d{1,2}\/\d{2,4}|\d{1,2}\/\d{1,2})$/i;
+    const dateRegexGeneric = /^(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}|\d{1,2}[\/\-][A-Z]{3})$/i;
 
     let transactionCounter = 0;
 
@@ -196,7 +223,7 @@ export default function ConversorEstadoCuenta() {
             const lastTx = parsedTransactions[parsedTransactions.length - 1];
             if (fullLineStr.length < 120 && !dateRegexBBVA.test(lineItems[0]?.text || '')) {
               lastTx.concepto += ' ' + fullLineStr.trim();
-              const refMatch = lastTx.concepto.match(/(?:REF|FOLIO|AUT|NOMINA|TALON|TRAN|CVE)[:\s]*([A-Z0-9]{4,20})/i);
+              const refMatch = lastTx.concepto.match(/(?:REF|FOLIO|AUT|NOMINA|TALON|TRAN|CVE)[:\s.]*([A-Z0-9]{4,25})/i);
               if (refMatch) lastTx.referencia = refMatch[1];
             }
           }
@@ -205,27 +232,48 @@ export default function ConversorEstadoCuenta() {
 
         const firstToken = lineItems[0]?.text || '';
         const secondToken = lineItems[1]?.text || '';
-        const combinedFirstTwo = `${firstToken} ${secondToken}`.trim();
 
         let dateFound = '';
         let restTokens: { x: number; text: string }[] = [];
 
-        if (dateRegexBBVA.test(firstToken) || dateRegexGeneric.test(firstToken)) {
-          dateFound = firstToken;
+        // 1. Detectar si el primer token contiene dos fechas juntas (ej: "28/AGO 28/AGO" o "28/AGO 28/AGO C02...")
+        const doubleDateInFirst = firstToken.match(/^(\d{1,2}[\/\-][A-Za-z]{3}|\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)\s+(\d{1,2}[\/\-][A-Za-z]{3}|\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)(.*)$/i);
+        if (doubleDateInFirst) {
+          dateFound = doubleDateInFirst[1];
+          const remainder = doubleDateInFirst[3].trim();
           restTokens = lineItems.slice(1);
-        } else if (dateRegexBBVA.test(combinedFirstTwo) || dateRegexGeneric.test(combinedFirstTwo)) {
-          dateFound = combinedFirstTwo;
-          restTokens = lineItems.slice(2);
+          if (remainder) {
+            restTokens.unshift({ x: lineItems[0].x, text: remainder });
+          }
+        } else if (dateRegexBBVA.test(firstToken) || dateRegexGeneric.test(firstToken)) {
+          dateFound = firstToken;
+          // Si el segundo token es la fecha de liquidación en BBVA (ej. 28/AGO 28/AGO), consumirlo para no ensuciar el concepto
+          if (dateRegexBBVA.test(secondToken) || dateRegexGeneric.test(secondToken)) {
+            restTokens = lineItems.slice(2);
+          } else {
+            restTokens = lineItems.slice(1);
+          }
+        } else {
+          // Detectar si el primer token empieza con fecha (ej: "28/AGO C02...")
+          const startsWithDate = firstToken.match(/^(\d{1,2}[\/\-][A-Za-z]{3}|\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)\s+(.*)$/i);
+          if (startsWithDate) {
+            dateFound = startsWithDate[1];
+            const rem = startsWithDate[2].trim();
+            restTokens = lineItems.slice(1);
+            if (rem) {
+              restTokens.unshift({ x: lineItems[0].x, text: rem });
+            }
+          }
         }
 
         if (!dateFound) {
-          // Es una sub-línea complementaria de la descripción anterior
+          // Es una sub-línea complementaria de la descripción anterior (ej. "Ref. 11308EFECTIVO")
           if (parsedTransactions.length > 0) {
             const lastTx = parsedTransactions[parsedTransactions.length - 1];
             const cleanText = lineItems.map((i) => i.text).join(' ').trim();
             if (cleanText && !cleanText.toUpperCase().includes('TOTAL') && cleanText.length < 120) {
               lastTx.concepto += ' ' + cleanText;
-              const refMatch = lastTx.concepto.match(/(?:REF|FOLIO|AUT|NOMINA|TALON|TRAN|CVE)[:\s]*([A-Z0-9]{4,20})/i);
+              const refMatch = lastTx.concepto.match(/(?:REF|FOLIO|AUT|NOMINA|TALON|TRAN|CVE)[:\s.]*([A-Z0-9]{4,25})/i);
               if (refMatch) lastTx.referencia = refMatch[1];
             }
           }

@@ -1,10 +1,10 @@
 'use client';
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import React, { useState, useEffect } from 'react';
-import { X, Link as LinkIcon, FileCode, Search, RefreshCw, AlertTriangle, CheckCircle } from 'lucide-react';
+import { X, Link as LinkIcon, FileCode, Search, RefreshCw, AlertTriangle, CheckCircle, Mail } from 'lucide-react';
 import { formatCurrency } from '../../../../lib/formatters';
 import { useSessionToken } from '../../../../lib/hooks/useSessionToken';
-import { obtenerFacturasClientesSinVincular, vincularFacturaAPedido } from '../actions';
+import { obtenerFacturasClientesSinVincular, vincularFacturaAPedido, enviarFacturaPorCorreo } from '../actions';
 
 interface VincularXmlPedidoModalProps {
   pedidoId: string;
@@ -25,6 +25,7 @@ export default function VincularXmlPedidoModal({
   const [selectedFacturaId, setSelectedFacturaId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [enviarPorCorreo, setEnviarPorCorreo] = useState(true);
 
   const fetchFacturas = async () => {
     setLoading(true);
@@ -57,6 +58,13 @@ export default function VincularXmlPedidoModal({
       const token = await getSessionToken();
       const res = await vincularFacturaAPedido(selectedFacturaId, pedidoId, token);
       if (res.success) {
+        if (enviarPorCorreo) {
+          try {
+            await enviarFacturaPorCorreo(pedidoId, token);
+          } catch (mailErr) {
+            console.warn('Error al enviar correo tras vincular factura:', mailErr);
+          }
+        }
         onSuccess();
       } else {
         setError(res.error || 'Error al vincular la factura.');
@@ -185,25 +193,38 @@ export default function VincularXmlPedidoModal({
         </div>
 
         {/* Footer */}
-        <div className="p-6 border-t border-gray-100 dark:border-gray-900 bg-gray-50/50 dark:bg-gray-900/20 flex justify-end gap-3">
-          <button
-            onClick={onClose}
-            disabled={saving}
-            className="px-5 py-2.5 rounded-xl font-bold text-xs text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-800 transition-colors"
-          >
-            Cancelar
-          </button>
-          <button
-            onClick={handleVincular}
-            disabled={!selectedFacturaId || saving}
-            className="bg-blue-600 hover:bg-blue-500 text-white px-6 py-2.5 rounded-xl font-bold text-xs shadow-md transition-all flex items-center gap-2 disabled:opacity-50"
-          >
-            {saving ? (
-              <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Vinculando...</>
-            ) : (
-              <>Vincular Factura Seleccionada</>
-            )}
-          </button>
+        <div className="p-4 sm:px-6 border-t border-gray-100 dark:border-gray-900 bg-gray-50/50 dark:bg-gray-900/20 flex items-center justify-between gap-3 flex-wrap">
+          <label className="flex items-center gap-2 text-xs text-gray-700 dark:text-gray-300 font-medium cursor-pointer">
+            <input
+              type="checkbox"
+              checked={enviarPorCorreo}
+              onChange={(e) => setEnviarPorCorreo(e.target.checked)}
+              className="w-4 h-4 accent-blue-600 rounded cursor-pointer"
+            />
+            <Mail size={14} className="text-blue-500" />
+            <span>Enviar factura por correo al cliente al vincular</span>
+          </label>
+
+          <div className="flex items-center gap-2">
+            <button
+              onClick={onClose}
+              disabled={saving}
+              className="px-4 py-2 rounded-xl font-bold text-xs text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-800 transition-colors"
+            >
+              Cancelar
+            </button>
+            <button
+              onClick={handleVincular}
+              disabled={!selectedFacturaId || saving}
+              className="bg-blue-600 hover:bg-blue-500 text-white px-5 py-2 rounded-xl font-bold text-xs shadow-md transition-all flex items-center gap-2 disabled:opacity-50"
+            >
+              {saving ? (
+                <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Vinculando...</>
+              ) : (
+                <>Vincular Factura Seleccionada</>
+              )}
+            </button>
+          </div>
         </div>
       </div>
     </div>

@@ -7,7 +7,8 @@ import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabase';
 import {
   ShoppingCart, LogOut, Plus, Minus, Send, CheckCircle2, AlertTriangle,
-  FileText, FileCode, RefreshCw, Lock, Sparkles, Sun, Moon
+  FileText, FileCode, RefreshCw, Lock, Sparkles, Sun, Moon,
+  Package, Clock, Truck, ChevronDown, ChevronUp, CheckCircle
 } from 'lucide-react';
 import Image from 'next/image';
 import { useProtectedRoute } from '../../lib/useProtectedRoute';
@@ -17,6 +18,34 @@ import { useThemeMode } from '../../lib/useThemeMode';
 interface Producto { id: string; nombre: string; categoria: string; imagen_url: string; }
 interface Variante { id: string; producto_id: string; gramaje: string; precio_base: number; }
 interface ItemCarrito { variante_id: string; producto_nombre: string; gramaje: string; cantidad: number; precio_unitario: number; }
+
+interface DetallePedido {
+  id: string;
+  variante_id: string;
+  cantidad: number;
+  precio_aplicado: number;
+  subtotal: number;
+  comentarios?: string;
+  producto_variantes?: {
+    gramaje: string;
+    productos?: {
+      nombre: string;
+    } | null;
+  } | null;
+}
+
+interface PedidoCliente {
+  id: string;
+  numero_pedido: number | string;
+  fecha_pedido?: string;
+  creado_en?: string;
+  fecha_entrega?: string;
+  estatus_pedido: string;
+  estatus_pago: string;
+  precio_total: number;
+  comentarios?: string;
+  pedido_detalles?: DetallePedido[];
+}
 
 export default function Tienda() {
   useProtectedRoute(); // Protege esta ruta - redirige a login si no hay sesión
@@ -42,8 +71,67 @@ export default function Tienda() {
 
   const [seleccionGramaje, setSeleccionGramaje] = useState<Record<string, string>>({});
 
+  // Pestañas de navegación
+  const [activeTab, setActiveTab] = useState<'comprar' | 'pedidos' | 'facturas'>('comprar');
+
+  // Estados del Historial de Pedidos del Cliente
+  const [misPedidos, setMisPedidos] = useState<PedidoCliente[]>([]);
+  const [loadingPedidos, setLoadingPedidos] = useState(false);
+  const [errorPedidos, setErrorPedidos] = useState('');
+  const [pedidoDetalleAbierto, setPedidoDetalleAbierto] = useState<Record<string, boolean>>({});
+
+  const toggleDetallePedido = (id: string) => {
+    setPedidoDetalleAbierto(prev => ({ ...prev, [id]: !prev[id] }));
+  };
+
+  const cargarMisPedidos = async (clienteId: string) => {
+    setLoadingPedidos(true);
+    setErrorPedidos('');
+    try {
+      const { data, error } = await supabase
+        .from('pedidos')
+        .select(`
+          id,
+          numero_pedido,
+          fecha_pedido,
+          fecha_entrega,
+          estatus_pedido,
+          estatus_pago,
+          precio_total,
+          comentarios,
+          creado_en,
+          pedido_detalles(
+            id,
+            variante_id,
+            cantidad,
+            precio_aplicado,
+            subtotal,
+            comentarios,
+            producto_variantes(
+              gramaje,
+              productos(nombre)
+            )
+          )
+        `)
+        .eq('cliente_id', clienteId)
+        .order('creado_en', { ascending: false });
+
+      if (error) throw error;
+      setMisPedidos((data as unknown as PedidoCliente[]) || []);
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        console.error("Error al cargar pedidos:", err);
+        setErrorPedidos(err.message || 'Error al cargar los pedidos');
+      } else {
+        console.error("Error al cargar pedidos:", err);
+        setErrorPedidos('Error al cargar los pedidos');
+      }
+    } finally {
+      setLoadingPedidos(false);
+    }
+  };
+
   // Estados del Portal de Facturas
-  const [activeTab, setActiveTab] = useState<'comprar' | 'facturas'>('comprar');
   const [facturas, setFacturas] = useState<any[]>([]);
   const [loadingFacturas, setLoadingFacturas] = useState(false);
   const [errorFacturas, setErrorFacturas] = useState('');
@@ -159,8 +247,9 @@ export default function Tienda() {
             });
           }
 
-          // Cargar facturas
+          // Cargar facturas y pedidos del cliente
           cargarFacturas(datosSesion.id);
+          cargarMisPedidos(datosSesion.id);
         }
 
         setSesion({ ...datosSesion, empresa_id: clientEmpresaId });
@@ -272,7 +361,9 @@ export default function Tienda() {
       setPedidoExitoso(true);
       setCarrito([]);
       setComentarios('');
-      alert("¡Pedido enviado correctamente!");
+      if (sesionInfo?.id) {
+        cargarMisPedidos(sesionInfo.id);
+      }
 
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Error desconocido';
@@ -287,6 +378,38 @@ export default function Tienda() {
       setEnviando(false);
     }
   };
+
+  const getBadgeEstatusPedido = (estatus: string) => {
+    switch (estatus?.toLowerCase()) {
+      case 'entregado':
+        return {
+          bg: 'bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800/60',
+          label: 'Entregado',
+          icon: CheckCircle
+        };
+      case 'en producción':
+      case 'en produccion':
+      case 'produccion':
+        return {
+          bg: 'bg-blue-50 dark:bg-blue-950/30 text-blue-700 dark:text-blue-400 border border-blue-200 dark:border-blue-800/60',
+          label: 'En Producción',
+          icon: Truck
+        };
+      case 'cancelado':
+        return {
+          bg: 'bg-red-50 dark:bg-red-950/30 text-red-700 dark:text-red-400 border border-red-200 dark:border-red-800/60',
+          label: 'Cancelado',
+          icon: AlertTriangle
+        };
+      default:
+        return {
+          bg: 'bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-800/60',
+          label: estatus || 'Pendiente',
+          icon: Clock
+        };
+    }
+  };
+
   if (loading) return (
     <div className={`${isDarkMode ? 'dark' : ''} min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900 transition-colors`}>
       <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-amber-600"></div>
@@ -304,16 +427,34 @@ export default function Tienda() {
 
   if (pedidoExitoso) return (
     <div className={`${isDarkMode ? 'dark' : ''} min-h-screen flex flex-col items-center justify-center bg-gray-50 dark:bg-gray-900 px-4 text-center transition-colors`}>
-      <CheckCircle2 className="w-20 h-20 text-emerald-500 mb-4" />
-      <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-2 font-sans">¡Pedido Recibido!</h2>
-      <p className="text-gray-600 dark:text-gray-450 mb-8 font-sans">Tu orden está en estatus Pendiente. La liquidación será contra entrega.</p>
-      <button onClick={() => setPedidoExitoso(false)} className="bg-amber-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-amber-500 transition shadow-lg">
-        Realizar otro pedido
-      </button>
+      <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-3xl p-8 sm:p-12 max-w-md w-full shadow-2xl flex flex-col items-center">
+        <CheckCircle2 className="w-20 h-20 text-emerald-500 mb-4 animate-bounce" />
+        <h2 className="text-3xl font-extrabold text-gray-900 dark:text-white mb-2 font-sans">¡Pedido Recibido!</h2>
+        <p className="text-gray-600 dark:text-gray-300 mb-6 font-sans text-sm">
+          Tu solicitud fue registrada con éxito en estatus <strong className="text-amber-600 dark:text-amber-400">Pendiente</strong>. Nuestro equipo de cocina la procesará a la brevedad.
+        </p>
+        <div className="flex flex-col sm:flex-row gap-3 w-full">
+          <button
+            onClick={() => {
+              setPedidoExitoso(false);
+              setActiveTab('pedidos');
+              if (sesion?.id) cargarMisPedidos(sesion.id);
+            }}
+            className="flex-1 bg-amber-600 text-white px-4 py-3 rounded-xl font-bold hover:bg-amber-500 transition shadow-lg flex items-center justify-center gap-2 text-sm"
+          >
+            <Package className="w-4 h-4" />
+            Ver mis pedidos
+          </button>
+          <button
+            onClick={() => setPedidoExitoso(false)}
+            className="flex-1 bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 px-4 py-3 rounded-xl font-bold hover:bg-gray-200 dark:hover:bg-gray-700 transition text-sm"
+          >
+            Hacer otro pedido
+          </button>
+        </div>
+      </div>
     </div>
   );
-
-  
 
   return (
     <div className={`${isDarkMode ? 'dark' : ''} min-h-screen bg-gray-100 dark:bg-gray-900 flex flex-col transition-colors`}>
@@ -321,38 +462,58 @@ export default function Tienda() {
       <header className="bg-white dark:bg-gray-950 border-b border-gray-200 dark:border-gray-800 shadow-sm sticky top-0 z-30 transition-colors">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between h-16 items-center">
-            <div className="flex items-center space-x-8">
+            <div className="flex items-center space-x-4 sm:space-x-8">
               <div className="flex items-center">
                 {empresaLogoUrl && !logoError ? (
                   <Image src={empresaLogoUrl} alt="Logo" onError={() => setLogoError(true)} width={32} height={32} className="h-8 w-8 rounded-lg object-contain mr-2 border border-amber-100 dark:border-amber-900 bg-white shadow-sm" />
                 ) : (
                   <Sparkles className="h-6 w-6 text-amber-500 mr-2 animate-pulse" />
                 )}
-                <span className="text-xl font-bold text-gray-900 dark:text-white tracking-tight font-sans">{empresaNombre}</span>
+                <span className="text-xl font-bold text-gray-900 dark:text-white tracking-tight font-sans hidden sm:inline">{empresaNombre}</span>
               </div>
-              <nav className="flex space-x-1" aria-label="Tabs">
+              <nav className="flex space-x-1 sm:space-x-2" aria-label="Tabs">
                 <button
                   onClick={() => setActiveTab('comprar')}
-                  className={`px-4 py-2 text-sm font-bold rounded-lg transition-all ${activeTab === 'comprar'
+                  className={`px-3 sm:px-4 py-2 text-xs sm:text-sm font-bold rounded-lg transition-all ${activeTab === 'comprar'
                       ? 'bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 shadow-sm'
                       : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-900'
                     }`}
                 >
-                  🛒 Realizar Pedido
+                  🛒 Solicitar Pedido
                 </button>
                 {sesion?.tipo === 'b2b' && (
-                  <button
-                    onClick={() => {
-                      setActiveTab('facturas');
-                      if (sesion?.id) cargarFacturas(sesion.id);
-                    }}
-                    className={`px-4 py-2 text-sm font-bold rounded-lg transition-all ${activeTab === 'facturas'
-                        ? 'bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 shadow-sm'
-                        : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-900'
-                      }`}
-                  >
-                    📄 Mis Facturas
-                  </button>
+                  <>
+                    <button
+                      onClick={() => {
+                        setActiveTab('pedidos');
+                        if (sesion?.id) cargarMisPedidos(sesion.id);
+                      }}
+                      className={`px-3 sm:px-4 py-2 text-xs sm:text-sm font-bold rounded-lg transition-all flex items-center gap-1.5 ${activeTab === 'pedidos'
+                          ? 'bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 shadow-sm'
+                          : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-900'
+                        }`}
+                    >
+                      <Package className="w-4 h-4" />
+                      <span>Mis Pedidos</span>
+                      {misPedidos.length > 0 && (
+                        <span className="ml-1 text-[11px] bg-amber-200 dark:bg-amber-900/60 text-amber-800 dark:text-amber-300 font-extrabold px-1.5 py-0.2 rounded-full">
+                          {misPedidos.length}
+                        </span>
+                      )}
+                    </button>
+                    <button
+                      onClick={() => {
+                        setActiveTab('facturas');
+                        if (sesion?.id) cargarFacturas(sesion.id);
+                      }}
+                      className={`px-3 sm:px-4 py-2 text-xs sm:text-sm font-bold rounded-lg transition-all ${activeTab === 'facturas'
+                          ? 'bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 shadow-sm'
+                          : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-900'
+                        }`}
+                    >
+                      📄 Facturas
+                    </button>
+                  </>
                 )}
               </nav>
             </div>
@@ -502,6 +663,181 @@ export default function Tienda() {
               </div>
             </div>
           </>
+        ) : activeTab === 'pedidos' ? (
+          /* PESTAÑA DE MIS PEDIDOS */
+          <div className="flex-1 p-6 overflow-y-auto max-w-7xl mx-auto w-full bg-gray-50 dark:bg-gray-900 transition-colors">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
+              <div>
+                <h2 className="text-2xl font-extrabold text-gray-900 dark:text-white flex items-center">
+                  <Package className="w-6 h-6 mr-2 text-amber-500" /> Mis Pedidos
+                </h2>
+                <p className="text-sm text-gray-500 dark:text-gray-400">
+                  Da seguimiento al estado de tus órdenes, producción y entrega.
+                </p>
+              </div>
+              <button
+                onClick={() => sesion?.id && cargarMisPedidos(sesion.id)}
+                disabled={loadingPedidos}
+                className="inline-flex items-center gap-1.5 px-3 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-sm font-bold shadow-md hover:shadow-lg transition-all disabled:opacity-50"
+              >
+                <RefreshCw className={`w-4 h-4 ${loadingPedidos ? 'animate-spin' : ''}`} />
+                Actualizar
+              </button>
+            </div>
+
+            {errorPedidos && (
+              <div className="bg-red-50 dark:bg-red-950/20 text-red-650 dark:text-red-400 border border-red-200 dark:border-red-900/50 p-4 rounded-xl mb-6 flex items-center gap-3">
+                <AlertTriangle className="w-5 h-5 flex-shrink-0" />
+                <p className="text-sm font-medium">{errorPedidos}</p>
+              </div>
+            )}
+
+            {loadingPedidos ? (
+              <div className="py-20 flex flex-col items-center justify-center">
+                <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-amber-600 mb-3"></div>
+                <p className="text-gray-500 text-sm font-medium">Cargando tus pedidos...</p>
+              </div>
+            ) : misPedidos.length === 0 ? (
+              <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-2xl p-12 text-center shadow-sm">
+                <Package className="w-16 h-16 mx-auto text-gray-300 dark:text-gray-700 mb-4" />
+                <h3 className="text-lg font-bold text-gray-800 dark:text-white mb-1">Aún no tienes pedidos registrados</h3>
+                <p className="text-gray-500 dark:text-gray-400 text-sm max-w-md mx-auto mb-6">
+                  Explora nuestro catálogo para armar tu orden de ramen y enviarla directamente a cocina.
+                </p>
+                <button
+                  onClick={() => setActiveTab('comprar')}
+                  className="inline-flex items-center gap-2 px-5 py-2.5 bg-amber-600 hover:bg-amber-500 text-white font-bold text-sm rounded-xl shadow-lg transition"
+                >
+                  <ShoppingCart className="w-4 h-4" />
+                  Ir al Catálogo de Productos
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {misPedidos.map((pedido) => {
+                  const estatusInfo = getBadgeEstatusPedido(pedido.estatus_pedido);
+                  const EstatusIcon = estatusInfo.icon;
+                  const estaAbierto = !!pedidoDetalleAbierto[pedido.id];
+                  const totalItems = pedido.pedido_detalles?.reduce((acc, d) => acc + d.cantidad, 0) || 0;
+                  const fechaStr = pedido.creado_en
+                    ? new Date(pedido.creado_en).toLocaleString('es-MX', {
+                        day: '2-digit',
+                        month: 'short',
+                        year: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit'
+                      })
+                    : 'N/A';
+
+                  return (
+                    <div
+                      key={pedido.id}
+                      className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-2xl shadow-sm hover:shadow transition overflow-hidden"
+                    >
+                      {/* Cabecera de la tarjeta del pedido */}
+                      <div className="p-4 sm:p-5 flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-gray-100 dark:border-gray-800/60">
+                        <div className="flex items-start sm:items-center gap-3">
+                          <div className="p-2.5 rounded-xl bg-amber-500/10 dark:bg-amber-500/20 text-amber-600 dark:text-amber-400 font-bold">
+                            <Package className="w-6 h-6" />
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="font-mono text-base font-extrabold text-gray-900 dark:text-white">
+                                Pedido #{pedido.numero_pedido || pedido.id.slice(0, 8)}
+                              </span>
+                              <span className="text-xs text-gray-450 dark:text-gray-500 font-medium">
+                                • {fechaStr}
+                              </span>
+                            </div>
+                            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                              {totalItems} {totalItems === 1 ? 'artículo' : 'artículos'} solicitados
+                            </p>
+                          </div>
+                        </div>
+
+                        {/* Badges de estatus y total */}
+                        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+                          <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold ${estatusInfo.bg}`}>
+                            <EstatusIcon className="w-3.5 h-3.5" />
+                            <span>{estatusInfo.label}</span>
+                          </span>
+
+                          <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold ${
+                            pedido.estatus_pago?.toLowerCase() === 'liquidado'
+                              ? 'bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800/60'
+                              : 'bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-800/60'
+                          }`}>
+                            {pedido.estatus_pago?.toLowerCase() === 'liquidado' ? '💵 Liquidado' : '⏳ Pago Pendiente'}
+                          </span>
+
+                          <div className="text-right ml-auto sm:ml-2">
+                            <div className="text-base font-black text-gray-900 dark:text-white">
+                              ${Number(pedido.precio_total).toFixed(2)} <span className="text-xs font-normal text-gray-500">MXN</span>
+                            </div>
+                          </div>
+
+                          <button
+                            onClick={() => toggleDetallePedido(pedido.id)}
+                            className="p-1.5 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-900 transition"
+                            title={estaAbierto ? 'Ocultar detalles' : 'Ver detalles'}
+                          >
+                            {estaAbierto ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Detalles del pedido (acordeón desplegable) */}
+                      {estaAbierto && (
+                        <div className="p-4 sm:p-5 bg-gray-50 dark:bg-gray-900/40">
+                          {pedido.comentarios && (
+                            <div className="mb-4 p-3 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/40 rounded-xl text-xs text-amber-900 dark:text-amber-200">
+                              <span className="font-bold block mb-0.5">Instrucciones de entrega:</span>
+                              <p className="italic">{pedido.comentarios}</p>
+                            </div>
+                          )}
+
+                          <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-3">
+                            Productos Solicitados
+                          </h4>
+
+                          <div className="space-y-2">
+                            {pedido.pedido_detalles && pedido.pedido_detalles.length > 0 ? (
+                              pedido.pedido_detalles.map((detalle) => {
+                                const prodNombre = detalle.producto_variantes?.productos?.nombre || 'Producto';
+                                const prodGramaje = detalle.producto_variantes?.gramaje || '';
+
+                                return (
+                                  <div
+                                    key={detalle.id}
+                                    className="flex justify-between items-center bg-white dark:bg-gray-950 p-3 rounded-xl border border-gray-200 dark:border-gray-800 text-sm"
+                                  >
+                                    <div>
+                                      <p className="font-bold text-gray-900 dark:text-white">
+                                        {prodNombre}
+                                      </p>
+                                      <p className="text-xs text-gray-500 dark:text-gray-400">
+                                        {prodGramaje && `${prodGramaje} • `}
+                                        {detalle.cantidad} {detalle.cantidad === 1 ? 'unidad' : 'unidades'} x ${Number(detalle.precio_aplicado).toFixed(2)}
+                                      </p>
+                                    </div>
+                                    <div className="text-right font-bold text-gray-900 dark:text-white">
+                                      ${Number(detalle.subtotal).toFixed(2)}
+                                    </div>
+                                  </div>
+                                );
+                              })
+                            ) : (
+                              <p className="text-xs text-gray-450 dark:text-gray-500 italic">No hay desglose de productos disponible.</p>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         ) : (
           /* PESTAÑA DE MIS FACTURAS */
           <div className="flex-1 p-6 overflow-y-auto max-w-7xl mx-auto w-full bg-gray-50 dark:bg-gray-900 transition-colors">

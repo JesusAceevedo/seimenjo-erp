@@ -5,13 +5,14 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../../lib/supabase';
-import { Plus, Filter, Soup, ShoppingCart, Truck, FileCheck, Search, Sun, Moon, FileText, ChevronLeft, ChevronRight, Users, LayoutDashboard, Printer, Mail, FileCode, Edit3, Trash2, DollarSign, AlertTriangle } from 'lucide-react';
+import { Plus, Filter, Soup, ShoppingCart, Truck, FileCheck, Search, Sun, Moon, FileText, ChevronLeft, ChevronRight, Users, LayoutDashboard, Printer, Mail, FileCode, Edit3, Trash2, DollarSign, AlertTriangle, UploadCloud, Loader2 } from 'lucide-react';
 import { useThemeMode } from '../../../lib/useThemeMode';
-import { enviarFacturaPorCorreo } from '../gastos/actions';
+import { enviarFacturaPorCorreo, obtenerSignedUrl } from '../gastos/actions';
 import { eliminarDetallesPedido } from './actions';
 import { Pedido, Cliente, ProductoVariante, Repartidor, FormaPago, PrecioEspecialMap, DetallePedido } from '../types';
 import { SAT_FORMAS_PAGO, getMetodoPagoLabel } from '../../../lib/constants/sat';
 import { useEmpresaId } from '../../../lib/hooks/useEmpresaId';
+import SubirFacturaPedidoModal from './_components/SubirFacturaPedidoModal';
 
 // --- ESTADOS INICIALES (Optimizados fuera del componente para no recrearlos en cada render) ---
 const getPedidoInicial = () => ({
@@ -153,7 +154,9 @@ export default function AdminMonitor() {
   // Estados de UI y Modales
   const { isDarkMode, toggleDarkMode } = useThemeMode();
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [mostrarSelectorManualCliente, setMostrarSelectorManualCliente] = useState(false);
   const [liquidarModal, setLiquidarModal] = useState({ open: false, pedido: null as unknown, fecha: '', costo_envio: 0, entregado_por: '', metodo_pago: '' });
+  const [subirFacturaModal, setSubirFacturaModal] = useState<{ open: boolean; pedido: Pedido | null }>({ open: false, pedido: null });
   const [verTodosMetodos, setVerTodosMetodos] = useState(false);
   const [emailModal, setEmailModal] = useState<{ open: boolean; details: any | null }>({ open: false, details: null });
   const [isSendingEmail, setIsSendingEmail] = useState(false);
@@ -162,6 +165,31 @@ export default function AdminMonitor() {
   // Formulario
   const [nuevoPedido, setNuevoPedido] = useState(getPedidoInicial());
   const [preciosEspecialesCliente, setPreciosEspecialesCliente] = useState<PrecioEspecialMap>({});
+
+  // Asignar automáticamente RAMEN DE PLAYA / SAKURA al abrir modal en modo Sakura
+  useEffect(() => {
+    if (isModalOpen && isSeimenjoEmpresa && activeSubTab === 'sakura' && !idPedidoEditar) {
+      const ramenCli = clientes.find(c =>
+        c.id === 'a9c0e309-7a2a-41c9-aa42-38b9f49b4688' ||
+        c.nombre_local?.toLowerCase().includes('sakura') ||
+        c.nombre_local?.toLowerCase().includes('ramen de playa') ||
+        c.razon_social?.toLowerCase().includes('ramen de playa')
+      );
+      if (ramenCli) {
+        setNuevoPedido(prev => ({
+          ...prev,
+          cliente_id: ramenCli.id,
+          cliente_nombre: ramenCli.razon_social || ramenCli.nombre_local || 'RAMEN DE PLAYA'
+        }));
+      } else {
+        setNuevoPedido(prev => ({
+          ...prev,
+          cliente_id: 'a9c0e309-7a2a-41c9-aa42-38b9f49b4688',
+          cliente_nombre: 'RAMEN DE PLAYA'
+        }));
+      }
+    }
+  }, [isModalOpen, isSeimenjoEmpresa, activeSubTab, idPedidoEditar, clientes]);
 
   // --- CARGA DE PRECIOS ESPECIALES AL SELECCIONAR CLIENTE EN FORMULARIO ---
   useEffect(() => {
@@ -231,7 +259,7 @@ export default function AdminMonitor() {
 
       let query = supabase
         .from('pedidos')
-        .select('*, pedido_detalles(*, producto_variantes(*, productos(*))), clientes(nombre_local, telefono, rfc)')
+        .select('*, pedido_detalles(*, producto_variantes(*, productos(*))), clientes(id, nombre_local, razon_social, telefono, rfc, email_facturacion), facturas_clientes(*)')
         .eq('empresa_id', targetEmpresaId)
         .order('numero_pedido', { ascending: false });
 
@@ -272,7 +300,9 @@ export default function AdminMonitor() {
       const targetEmpresaId = await getTargetEmpresaId();
       const [prodsRes, clisRes, repsRes, formasRes] = await Promise.all([
         supabase.from('producto_variantes').select('id, gramaje, precio_base, productos(nombre)'),
-        targetEmpresaId ? supabase.from('clientes').select('id, nombre_local').eq('empresa_id', targetEmpresaId) : supabase.from('clientes').select('id, nombre_local'),
+        targetEmpresaId
+          ? supabase.from('clientes').select('id, nombre_local').or(`empresa_id.eq.${targetEmpresaId},empresa_id.is.null,nombre_local.ilike.%ramen%playa%,razon_social.ilike.%ramen%playa%`)
+          : supabase.from('clientes').select('id, nombre_local'),
         targetEmpresaId ? supabase.from('repartidores').select('*').or(`empresa_id.is.null,empresa_id.eq.${targetEmpresaId}`).order('nombre', { ascending: true }) : supabase.from('repartidores').select('*').order('nombre', { ascending: true }),
         supabase.from('formas_pago').select('*').order('nombre', { ascending: true })
       ]);
@@ -396,9 +426,10 @@ export default function AdminMonitor() {
       };
     });
 
+    const fallbackClienteNombre = (isSeimenjoEmpresa && activeSubTab === 'sakura') ? 'RAMEN DE PLAYA' : null;
     const payload: any = {
       cliente_id: nuevoPedido.cliente_id || null,
-      cliente_nombre: nuevoPedido.cliente_id ? null : (nuevoPedido.cliente_nombre || null),
+      cliente_nombre: nuevoPedido.cliente_id ? null : (nuevoPedido.cliente_nombre || fallbackClienteNombre),
       cliente_telefono: nuevoPedido.cliente_id ? null : (nuevoPedido.cliente_telefono || null),
       precio_total: totalCalculado,
       fecha_produccion: nuevoPedido.fecha_produccion || null,
@@ -526,6 +557,63 @@ export default function AdminMonitor() {
   };
 
 
+
+  const [cargandoDocPedidoId, setCargandoDocPedidoId] = useState<string | null>(null);
+
+  const handleVerDocumentoPedido = async (pedido: any, tipo: 'pdf' | 'xml') => {
+    setCargandoDocPedidoId(`${pedido.id}_${tipo}`);
+    try {
+      const fac = Array.isArray(pedido.facturas_clientes) ? pedido.facturas_clientes[0] : pedido.facturas_clientes;
+      let targetPath = tipo === 'pdf' ? fac?.pdf_url : fac?.xml_url;
+
+      if (!targetPath) {
+        let { data: facDb } = await supabase
+          .from('facturas_clientes')
+          .select('xml_url, pdf_url')
+          .eq('pedido_id', pedido.id)
+          .maybeSingle();
+
+        if (!facDb && pedido.folio_factura) {
+          const { data: facByFolio } = await supabase
+            .from('facturas_clientes')
+            .select('xml_url, pdf_url')
+            .or(`serie_folio.eq.${pedido.folio_factura},uuid_fiscal.eq.${pedido.folio_factura}`)
+            .limit(1)
+            .maybeSingle();
+          if (facByFolio) facDb = facByFolio;
+        }
+
+        targetPath = tipo === 'pdf' ? facDb?.pdf_url : facDb?.xml_url;
+      }
+
+      if (!targetPath) {
+        alert(`No se encontró el archivo ${tipo.toUpperCase()} de la factura para este pedido.`);
+        return;
+      }
+
+      if (targetPath.startsWith('http://') || targetPath.startsWith('https://')) {
+        window.open(targetPath, '_blank');
+        return;
+      }
+
+      const token = await getSessionToken();
+      const res = await obtenerSignedUrl(targetPath, token);
+      if (res?.success && res.url) {
+        window.open(res.url, '_blank');
+      } else {
+        const { data, error } = await supabase.storage.from('facturas').createSignedUrl(targetPath, 300);
+        if (data?.signedUrl) {
+          window.open(data.signedUrl, '_blank');
+        } else {
+          alert(`No se pudo abrir el archivo: ${res?.error || error?.message || 'Error desconocido'}`);
+        }
+      }
+    } catch (err: any) {
+      alert(`Error al abrir documento: ${err.message}`);
+    } finally {
+      setCargandoDocPedidoId(null);
+    }
+  };
 
   const handleResendInvoice = async (pedidoId: string) => {
     setIsSendingEmail(true);
@@ -936,6 +1024,12 @@ export default function AdminMonitor() {
                           # {p.numero_pedido || p.id.split('-')[0]}
                         </div>
                         <div className="font-semibold mt-0.5 text-gray-900 dark:text-white">{p.clientes?.nombre_local || p.cliente_nombre || 'Ocasional'}</div>
+                        {p.folio_factura && (
+                          <div className="mt-1 flex items-center gap-1 text-[10px] text-blue-600 dark:text-blue-400 font-mono">
+                            <FileText size={11} className="shrink-0" />
+                            <span className="truncate max-w-[130px]" title={p.folio_factura}>Factura: {p.folio_factura}</span>
+                          </div>
+                        )}
                       </td>
                       <td className="p-4 space-y-1 font-mono text-[11px] text-gray-900 dark:text-white">
                         <div><span className="text-gray-500">Ped:</span> {new Date(p.fecha_pedido || '').toLocaleDateString()}</div>
@@ -988,15 +1082,55 @@ export default function AdminMonitor() {
                           <div className="text-emerald-600 dark:text-emerald-400 font-medium bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20 rounded py-1 px-2 text-[10px] flex items-center justify-center gap-1"><FileCheck className="w-3 h-3" /> Cobro Listo</div>
                         )}
                         {p.folio_factura ? (
-                          <button
-                            onClick={() => handleResendInvoice(p.id)}
-                            disabled={isSendingEmail}
-                            className="w-full px-2 py-1 bg-blue-600 hover:bg-blue-500 text-white font-medium rounded shadow transition-colors text-[10px] flex items-center justify-center gap-1 uppercase font-sans font-semibold disabled:opacity-50"
-                          >
-                            <Mail size={11} /> Reenviar Factura
-                          </button>
+                          <div className="space-y-1">
+                            <div className="grid grid-cols-2 gap-1">
+                              <button
+                                type="button"
+                                onClick={() => handleVerDocumentoPedido(p, 'pdf')}
+                                disabled={!!cargandoDocPedidoId}
+                                className="px-1.5 py-1 bg-red-50 hover:bg-red-100 dark:bg-red-950/40 dark:hover:bg-red-900/50 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-900/40 rounded text-[10px] font-bold flex items-center justify-center gap-1 transition-colors cursor-pointer shadow-sm disabled:opacity-50"
+                                title="Ver / Descargar factura en PDF"
+                              >
+                                {cargandoDocPedidoId === `${p.id}_pdf` ? (
+                                  <Loader2 size={11} className="animate-spin" />
+                                ) : (
+                                  <FileText size={11} />
+                                )}
+                                <span>PDF</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleVerDocumentoPedido(p, 'xml')}
+                                disabled={!!cargandoDocPedidoId}
+                                className="px-1.5 py-1 bg-blue-50 hover:bg-blue-100 dark:bg-blue-950/40 dark:hover:bg-blue-900/50 text-blue-600 dark:text-blue-400 border border-blue-200 dark:border-blue-900/40 rounded text-[10px] font-bold flex items-center justify-center gap-1 transition-colors cursor-pointer shadow-sm disabled:opacity-50"
+                                title="Ver / Descargar XML CFDI 4.0"
+                              >
+                                {cargandoDocPedidoId === `${p.id}_xml` ? (
+                                  <Loader2 size={11} className="animate-spin" />
+                                ) : (
+                                  <FileCode size={11} />
+                                )}
+                                <span>XML</span>
+                              </button>
+                            </div>
+
+                            <button
+                              onClick={() => handleResendInvoice(p.id)}
+                              disabled={isSendingEmail || !!cargandoDocPedidoId}
+                              className="w-full px-2 py-1 bg-blue-600 hover:bg-blue-500 text-white font-medium rounded shadow transition-colors text-[10px] flex items-center justify-center gap-1 uppercase font-sans font-semibold disabled:opacity-50 cursor-pointer"
+                              title="Reenviar factura por correo al cliente"
+                            >
+                              <Mail size={11} /> Reenviar
+                            </button>
+                          </div>
                         ) : (
-                          <button disabled className="w-full px-2 py-1 bg-gray-100 dark:bg-gray-800 text-gray-400 border border-gray-200 dark:border-gray-700 rounded text-[10px] font-sans font-medium cursor-not-allowed">Factura Pendiente</button>
+                          <button
+                            onClick={() => setSubirFacturaModal({ open: true, pedido: p })}
+                            className="w-full px-2 py-1 bg-amber-500 hover:bg-amber-600 text-white font-medium rounded shadow transition-colors text-[10px] flex items-center justify-center gap-1 uppercase font-sans font-semibold cursor-pointer"
+                            title="Subir factura XML/PDF y enviar por correo al cliente"
+                          >
+                            <UploadCloud size={11} /> Subir Factura
+                          </button>
                         )}
                         <button
                           onClick={() => imprimirTicketPOS(p)}
@@ -1058,39 +1192,108 @@ export default function AdminMonitor() {
               </div>
 
               <div className="mb-6 p-4 bg-gray-50 dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800">
-                <h4 className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase mb-3">1. Información del Cliente</h4>
-                <div className="relative mb-3">
-                  <Search className="absolute left-3 top-2.5 text-gray-400" size={16} />
-                  <input placeholder="Buscar cliente..." className="w-full bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 text-gray-900 dark:text-white p-2 pl-10 rounded-lg text-sm" onChange={(e) => setFiltroCliente(e.target.value)} />
+                <div className="flex items-center justify-between mb-3">
+                  <h4 className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase">1. Información del Cliente</h4>
+                  {isSeimenjoEmpresa && activeSubTab === 'sakura' && !idPedidoEditar && (
+                    <button
+                      type="button"
+                      onClick={() => setMostrarSelectorManualCliente(!mostrarSelectorManualCliente)}
+                      className="text-[11px] text-rose-600 dark:text-rose-400 hover:underline font-semibold"
+                    >
+                      {mostrarSelectorManualCliente ? 'Usar RAMEN DE PLAYA' : 'Cambiar cliente'}
+                    </button>
+                  )}
                 </div>
-                <select className="w-full bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 text-gray-900 dark:text-white p-2.5 rounded-lg text-sm mb-3" value={nuevoPedido.cliente_id || ''} onChange={e => setNuevoPedido({ ...nuevoPedido, cliente_id: e.target.value })}>
-                  <option value="">Cliente Ocasional / No registrado...</option>
-                  {clientesFiltrados.map(c => <option key={c.id} value={c.id}>{c.nombre_local}</option>)}
-                </select>
 
-                {!nuevoPedido.cliente_id && (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-3 border-t border-gray-200 dark:border-gray-800">
-                    <div>
-                      <label className="text-xs font-semibold text-gray-500 dark:text-gray-400">Nombre Cliente Ocasional</label>
-                      <input
-                        type="text"
-                        placeholder="Nombre del cliente"
-                        value={nuevoPedido.cliente_nombre || ''}
-                        className="w-full mt-1 bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 text-gray-900 dark:text-white p-2 rounded-lg text-sm"
-                        onChange={e => setNuevoPedido({ ...nuevoPedido, cliente_nombre: e.target.value })}
-                      />
-                    </div>
-                    <div>
-                      <label className="text-xs font-semibold text-gray-500 dark:text-gray-400">Teléfono Cliente Ocasional</label>
-                      <input
-                        type="tel"
-                        placeholder="Teléfono"
-                        value={nuevoPedido.cliente_telefono || ''}
-                        className="w-full mt-1 bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 text-gray-900 dark:text-white p-2 rounded-lg text-sm"
-                        onChange={e => setNuevoPedido({ ...nuevoPedido, cliente_telefono: e.target.value })}
-                      />
+                {isSeimenjoEmpresa && activeSubTab === 'sakura' && !mostrarSelectorManualCliente && !idPedidoEditar ? (
+                  <div className="p-3.5 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/60 rounded-xl flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-rose-500/15 text-rose-600 dark:text-rose-400 flex items-center justify-center text-xl shadow-inner">
+                        🍜
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-black text-gray-900 dark:text-white">
+                            RAMEN DE PLAYA
+                          </span>
+                          <span className="text-[10px] bg-rose-100 dark:bg-rose-900/60 text-rose-700 dark:text-rose-300 px-2 py-0.5 rounded-full font-bold">
+                            Cliente Sakura
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5">
+                          Cliente asignado automáticamente para las órdenes de Sakura Ramen
+                        </p>
+                      </div>
                     </div>
                   </div>
+                ) : (
+                  <>
+                    {isSeimenjoEmpresa && activeSubTab === 'sakura' && !idPedidoEditar && (
+                      <div className="flex justify-end mb-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setMostrarSelectorManualCliente(false);
+                            const ramenCli = clientes.find(c =>
+                              c.id === 'a9c0e309-7a2a-41c9-aa42-38b9f49b4688' ||
+                              c.nombre_local?.toLowerCase().includes('sakura') ||
+                              c.nombre_local?.toLowerCase().includes('ramen de playa') ||
+                              c.razon_social?.toLowerCase().includes('ramen de playa')
+                            );
+                            setNuevoPedido(prev => ({
+                              ...prev,
+                              cliente_id: ramenCli?.id || 'a9c0e309-7a2a-41c9-aa42-38b9f49b4688',
+                              cliente_nombre: ramenCli?.razon_social || ramenCli?.nombre_local || 'RAMEN DE PLAYA'
+                            }));
+                          }}
+                          className="text-[11px] text-rose-600 dark:text-rose-400 hover:underline font-semibold"
+                        >
+                          ← Volver a RAMEN DE PLAYA
+                        </button>
+                      </div>
+                    )}
+                    <div className="relative mb-3">
+                      <Search className="absolute left-3 top-2.5 text-gray-400" size={16} />
+                      <input placeholder="Buscar cliente..." className="w-full bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 text-gray-900 dark:text-white p-2 pl-10 rounded-lg text-sm" onChange={(e) => setFiltroCliente(e.target.value)} />
+                    </div>
+                    <select className="w-full bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 text-gray-900 dark:text-white p-2.5 rounded-lg text-sm mb-3" value={nuevoPedido.cliente_id || ''} onChange={e => {
+                      const selId = e.target.value;
+                      const selCli = clientes.find(c => c.id === selId);
+                      setNuevoPedido({
+                        ...nuevoPedido,
+                        cliente_id: selId,
+                        cliente_nombre: (selCli?.nombre_local || selCli?.razon_social) || ''
+                      });
+                    }}>
+                      <option value="">Cliente Ocasional / No registrado...</option>
+                      {clientesFiltrados.map(c => <option key={c.id} value={c.id}>{c.nombre_local}</option>)}
+                    </select>
+
+                    {!nuevoPedido.cliente_id && (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-3 border-t border-gray-200 dark:border-gray-800">
+                        <div>
+                          <label className="text-xs font-semibold text-gray-500 dark:text-gray-400">Nombre Cliente Ocasional</label>
+                          <input
+                            type="text"
+                            placeholder="Nombre del cliente"
+                            value={nuevoPedido.cliente_nombre || ''}
+                            className="w-full mt-1 bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 text-gray-900 dark:text-white p-2 rounded-lg text-sm"
+                            onChange={e => setNuevoPedido({ ...nuevoPedido, cliente_nombre: e.target.value })}
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs font-semibold text-gray-500 dark:text-gray-400">Teléfono Cliente Ocasional</label>
+                          <input
+                            type="tel"
+                            placeholder="Teléfono"
+                            value={nuevoPedido.cliente_telefono || ''}
+                            className="w-full mt-1 bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 text-gray-900 dark:text-white p-2 rounded-lg text-sm"
+                            onChange={e => setNuevoPedido({ ...nuevoPedido, cliente_telefono: e.target.value })}
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
 
@@ -1187,7 +1390,7 @@ export default function AdminMonitor() {
               </div>
 
               <div className="flex gap-3 pt-6 border-t border-gray-200 dark:border-gray-800">
-                <button onClick={() => { setIsModalOpen(false); setIdPedidoEditar(null); setNuevoPedido(getPedidoInicial()); }} className="flex-1 py-3 font-semibold border border-gray-300 dark:border-gray-700 text-gray-900 dark:text-white rounded-xl hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">Cancelar</button>
+                <button onClick={() => { setIsModalOpen(false); setIdPedidoEditar(null); setMostrarSelectorManualCliente(false); setNuevoPedido(getPedidoInicial()); }} className="flex-1 py-3 font-semibold border border-gray-300 dark:border-gray-700 text-gray-900 dark:text-white rounded-xl hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">Cancelar</button>
                 <button onClick={capturarPedidoDetallado} className="flex-1 py-3 bg-amber-600 hover:bg-amber-500 text-white font-semibold rounded-xl shadow-lg transition-colors">
                   {idPedidoEditar ? 'Guardar Cambios' : 'Procesar Orden Completa'}
                 </button>
@@ -1324,6 +1527,23 @@ export default function AdminMonitor() {
               </div>
             </div>
           </div>
+        )}
+
+        {/* MODAL SUBIR FACTURA A PEDIDO */}
+        {subirFacturaModal.open && subirFacturaModal.pedido && (
+          <SubirFacturaPedidoModal
+            isOpen={subirFacturaModal.open}
+            pedido={subirFacturaModal.pedido}
+            getSessionToken={getSessionToken}
+            onClose={() => setSubirFacturaModal({ open: false, pedido: null })}
+            onSuccess={(emailDetails) => {
+              setSubirFacturaModal({ open: false, pedido: null });
+              fetchPedidos();
+              if (emailDetails) {
+                setEmailModal({ open: true, details: emailDetails });
+              }
+            }}
+          />
         )}
 
 

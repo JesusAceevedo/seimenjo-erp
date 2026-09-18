@@ -8,6 +8,7 @@ import {
   getFormaPagoIdByCode,
   getEstatusFacturaIdByName
 } from '../../../lib/supabaseAdmin';
+import { getMetodoPagoLabel } from '../../../lib/constants/sat';
 
 // Configuración SMTP por empresa (se cargará desde las variables de entorno o la configuración de la empresa)
 let smtpTransporter: nodemailer.Transporter | null = null;
@@ -17,8 +18,8 @@ function getSmtpConfig() {
 
   const smtpHost = process.env.SMTP_HOST || 'smtp.gmail.com';
   const smtpPort = parseInt(process.env.SMTP_PORT || '587', 10);
-  const smtpUser = process.env.SMTP_USER || '';
-  const smtpPass = process.env.SMTP_PASS || '';
+  const smtpUser = (process.env.SMTP_USER || '').trim();
+  const smtpPass = (process.env.SMTP_PASS || '').replace(/\s+/g, '');
 
   smtpTransporter = nodemailer.createTransport({
     host: smtpHost,
@@ -54,41 +55,265 @@ export async function obtenerSignedUrl(filePath: string, token: string): Promise
   }
 }
 
-// 2. Simulated Mailer for customer invoices
-export async function enviarFacturaPorCorreo(pedidoId: string, token: string): Promise<{ success: boolean; error?: string; email?: string; cliente?: string; numero_pedido?: string; total?: number; uuid_fiscal?: string; xmlUrl?: string | null; pdfUrl?: string | null }> {
+// Helper to retrieve customer email from various sources in the database
+export async function obtenerEmailClientePedido(params: {
+  pedidoId?: string;
+  clienteId?: string;
+  clienteNombre?: string;
+  rfc?: string;
+  token?: string;
+}): Promise<{
+  success: boolean;
+  email?: string;
+  clienteNombre?: string;
+  clienteId?: string;
+  origen?: string;
+}> {
+  try {
+    let empresaId: string | null = null;
+    if (params.token) {
+      try {
+        const auth = await getUserEmpresaId(params.token);
+        empresaId = auth.empresaId;
+      } catch {
+        // Fallback
+      }
+    }
+
+    let targetClienteId = params.clienteId;
+    let targetClienteNombre = params.clienteNombre;
+    let targetRfc = params.rfc;
+
+    // 1. Si se dio pedidoId, indagar en la tabla pedidos
+    if (params.pedidoId) {
+      const { data: ped } = await supabaseAdmin
+        .from('pedidos')
+        .select('id, cliente_id, cliente_nombre, empresa_id')
+        .eq('id', params.pedidoId)
+        .maybeSingle();
+      if (ped) {
+        if (!targetClienteId && ped.cliente_id) targetClienteId = ped.cliente_id;
+        if (!targetClienteNombre && ped.cliente_nombre) targetClienteNombre = ped.cliente_nombre;
+      }
+    }
+
+    // 2. Si tenemos targetClienteId, buscar en clientes
+    if (targetClienteId) {
+      const { data: cli } = await supabaseAdmin
+        .from('clientes')
+        .select('*')
+        .eq('id', targetClienteId)
+        .maybeSingle();
+      if (cli) {
+        const foundEmail = (cli.email_facturacion || cli.email || '').toString().trim();
+        if (foundEmail) {
+          return {
+            success: true,
+            email: foundEmail,
+            clienteNombre: cli.nombre_local || cli.razon_social,
+            clienteId: cli.id,
+            origen: 'catalogo_cliente_id'
+          };
+        }
+        if (!targetRfc && cli.rfc) targetRfc = cli.rfc;
+        if (!targetClienteNombre && (cli.nombre_local || cli.razon_social)) {
+          targetClienteNombre = cli.nombre_local || cli.razon_social;
+        }
+      }
+    }
+
+    // 3. Buscar por RFC si está disponible y no es genérico
+    if (targetRfc && targetRfc.trim() && targetRfc.toUpperCase() !== 'XAXX010101000') {
+      let qRfc = supabaseAdmin
+        .from('clientes')
+        .select('*')
+        .ilike('rfc', targetRfc.trim())
+        .not('email_facturacion', 'is', null);
+      if (empresaId) {
+        qRfc = qRfc.or(`empresa_id.eq.${empresaId},empresa_id.is.null`);
+      }
+      const { data: clientsRfc } = await qRfc.limit(5);
+      if (clientsRfc && clientsRfc.length > 0) {
+        const match = clientsRfc.find(c => (c.email_facturacion || c.email || '').toString().trim());
+        if (match) {
+          const emailVal = (match.email_facturacion || match.email).toString().trim();
+          return {
+            success: true,
+            email: emailVal,
+            clienteNombre: match.nombre_local || match.razon_social,
+            clienteId: match.id,
+            origen: 'catalogo_rfc'
+          };
+        }
+      }
+    }
+
+    // 4. Buscar por nombre del cliente (nombre_local o razon_social)
+    if (targetClienteNombre && targetClienteNombre.trim()) {
+      const cleanNom = targetClienteNombre.trim();
+      let qNom = supabaseAdmin
+        .from('clientes')
+        .select('*')
+        .or(`nombre_local.ilike.%${cleanNom}%,razon_social.ilike.%${cleanNom}%`);
+      if (empresaId) {
+        qNom = qNom.or(`empresa_id.eq.${empresaId},empresa_id.is.null`);
+      }
+      const { data: clientsNom } = await qNom.limit(10);
+      if (clientsNom && clientsNom.length > 0) {
+        const match = clientsNom.find(c => (c.email_facturacion || c.email || '').toString().trim());
+        if (match) {
+          const emailVal = (match.email_facturacion || match.email).toString().trim();
+          return {
+            success: true,
+            email: emailVal,
+            clienteNombre: match.nombre_local || match.razon_social,
+            clienteId: match.id,
+            origen: 'catalogo_nombre'
+          };
+        }
+      }
+    }
+
+    // 5. Buscar en auth.users si el cliente tiene portal registrado
+    if (targetClienteId || targetClienteNombre) {
+      try {
+        const { data: authUsers } = await supabaseAdmin.auth.admin.listUsers();
+        if (authUsers?.users) {
+          const userPortal = authUsers.users.find(u => 
+            (targetClienteId && u.user_metadata?.cliente_id === targetClienteId) ||
+            (targetClienteNombre && u.user_metadata?.nombre?.toLowerCase() === targetClienteNombre.toLowerCase())
+          );
+          if (userPortal?.email) {
+            return {
+              success: true,
+              email: userPortal.email.trim(),
+              clienteNombre: targetClienteNombre,
+              clienteId: targetClienteId,
+              origen: 'portal_cliente_auth'
+            };
+          }
+        }
+      } catch (authErr) {
+        console.warn('Error checking auth.users for client portal email:', authErr);
+      }
+    }
+
+    return { success: false };
+  } catch (err: any) {
+    console.error('Error al obtener email del cliente:', err);
+    return { success: false };
+  }
+}
+
+// 2. Mailer for customer invoices
+export async function enviarFacturaPorCorreo(
+  pedidoId: string,
+  token: string,
+  customEmail?: string
+): Promise<{
+  success: boolean;
+  error?: string;
+  simulated?: boolean;
+  messageId?: string;
+  email?: string;
+  cliente?: string;
+  numero_pedido?: string;
+  total?: number;
+  uuid_fiscal?: string;
+  xmlUrl?: string | null;
+  pdfUrl?: string | null;
+}> {
   try {
     const { empresaId } = await getUserEmpresaId(token);
 
-    // 1. Get Pedido (must belong to active company)
+    // 1. Get Pedido por ID exacto
     const { data: pedido, error: pedErr } = await supabaseAdmin
       .from('pedidos')
-      .select('id, numero_pedido, precio_total, cliente_id')
+      .select('id, numero_pedido, precio_total, cliente_id, cliente_nombre, folio_factura, empresa_id, estatus_pago, metodo_pago')
       .eq('id', pedidoId)
-      .eq('empresa_id', empresaId)
-      .single();
-    if (pedErr || !pedido) throw new Error('Pedido no encontrado');
-
-    const { data: cliente, error: cliErr } = await supabaseAdmin
-      .from('clientes')
-      .select('nombre_local, email_facturacion')
-      .eq('id', pedido.cliente_id)
-      .eq('empresa_id', empresaId)
-      .single();
-    if (cliErr || !cliente) throw new Error('Cliente no encontrado');
-
-    if (!cliente.email_facturacion) {
-      throw new Error(`El cliente ${cliente.nombre_local} no tiene registrado correo de facturación.`);
-    }
-
-    // 2. Get Factura files
-    const { data: factura, error: facErr } = await supabaseAdmin
-      .from('facturas_clientes')
-      .select('xml_url, pdf_url, uuid_fiscal')
-      .eq('pedido_id', pedidoId)
-      .eq('empresa_id', empresaId)
       .maybeSingle();
 
-    if (facErr || !factura) {
+    if (pedErr || !pedido) throw new Error('Pedido no encontrado');
+
+    let nombreEmpresa = '';
+    if (pedido.empresa_id) {
+      const { data: emp } = await supabaseAdmin
+        .from('empresas')
+        .select('nombre')
+        .eq('id', pedido.empresa_id)
+        .maybeSingle();
+      if (emp?.nombre) {
+        nombreEmpresa = emp.nombre.trim();
+      }
+    }
+
+    let cliente: any = null;
+    if (pedido.cliente_id) {
+      const { data: c } = await supabaseAdmin
+        .from('clientes')
+        .select('id, nombre_local, razon_social, email_facturacion')
+        .eq('id', pedido.cliente_id)
+        .maybeSingle();
+      if (c) cliente = c;
+    }
+
+    // Fallback: si no se encontró por cliente_id, buscar por cliente_nombre
+    if (!cliente && pedido.cliente_nombre) {
+      const cleanNom = pedido.cliente_nombre.trim();
+      let cliNomQuery = supabaseAdmin
+        .from('clientes')
+        .select('id, nombre_local, razon_social, email_facturacion')
+        .or(`nombre_local.ilike.%${cleanNom}%,razon_social.ilike.%${cleanNom}%`);
+      if (empresaId) {
+        cliNomQuery = cliNomQuery.or(`empresa_id.eq.${empresaId},empresa_id.is.null`);
+      }
+      const { data: c } = await cliNomQuery.limit(1).maybeSingle();
+      if (c) cliente = c;
+    }
+
+    const clienteNombre = cliente?.nombre_local || cliente?.razon_social || pedido.cliente_nombre || 'Cliente';
+    const targetEmail = customEmail?.trim() || cliente?.email_facturacion?.trim();
+
+    if (!targetEmail) {
+      throw new Error(`El cliente ${clienteNombre} no tiene registrado correo de facturación.`);
+    }
+
+    // Si se especificó un customEmail y difiere o no existía, actualizarlo en el cliente si existe
+    if (cliente?.id && customEmail?.trim() && customEmail.trim() !== cliente.email_facturacion?.trim()) {
+      await supabaseAdmin
+        .from('clientes')
+        .update({ email_facturacion: customEmail.trim() })
+        .eq('id', cliente.id);
+    }
+
+    // 2. Get Factura files (primary lookup by pedido_id, fallback to folio_factura)
+    let factura: any = null;
+    const { data: facByPedido } = await supabaseAdmin
+      .from('facturas_clientes')
+      .select('xml_url, pdf_url, uuid_fiscal, serie_folio, total')
+      .eq('pedido_id', pedidoId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (facByPedido) {
+      factura = facByPedido;
+    } else if (pedido.folio_factura) {
+      let facFolioQuery = supabaseAdmin
+        .from('facturas_clientes')
+        .select('xml_url, pdf_url, uuid_fiscal, serie_folio, total');
+      if (pedido.empresa_id) {
+        facFolioQuery = facFolioQuery.eq('empresa_id', pedido.empresa_id);
+      }
+      const { data: facByFolio } = await facFolioQuery
+        .or(`serie_folio.eq.${pedido.folio_factura},uuid_fiscal.eq.${pedido.folio_factura}`)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (facByFolio) factura = facByFolio;
+    }
+
+    if (!factura) {
       throw new Error('No se encontró factura emitida para este pedido.');
     }
 
@@ -106,31 +331,65 @@ export async function enviarFacturaPorCorreo(pedidoId: string, token: string): P
         : Promise.resolve(null)
     ]);
 
-    // 4. Send email via SMTP
-    const transport = getSmtpConfig();
-    const attachmentLinks = [];
-    if (xmlUrl) {
-      attachmentLinks.push(`<a href="${xmlUrl}" target="_blank" rel="noreferrer">Descargar XML</a>`);
-    }
-    if (pdfUrl) {
-      attachmentLinks.push(`<a href="${pdfUrl}" target="_blank" rel="noreferrer">Descargar PDF</a>`);
+    const formaPagoCode = pedido.metodo_pago || '03';
+    const formaPagoStr = getMetodoPagoLabel(formaPagoCode);
+    const isLiquidado = (pedido.estatus_pago || '').toLowerCase() === 'liquidado';
+    const metodoPagoStr = isLiquidado ? 'PUE - Pago en una sola exhibición' : 'PPD - Pago en parcialidades o diferido';
+    const estatusStr = isLiquidado ? 'Liquidado' : 'Pendiente de pago';
+    const empresaLabel = nombreEmpresa ? ` (${nombreEmpresa})` : '';
+    const totalMonto = pedido.precio_total || factura.total || 0;
+    const totalFormatted = Number(totalMonto).toLocaleString('es-MX', { minimumFractionDigits: 2 });
+
+    const htmlContent = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e5e7eb; border-radius: 12px; background-color: #ffffff;">
+        <h2 style="color: #d97706; margin-top: 0; margin-bottom: 12px; font-size: 20px;">Factura Electrónica SAT CFDI 4.0</h2>
+        <p style="color: #374151; font-size: 14px; margin-bottom: 12px;">Hola <strong>${clienteNombre}</strong>,</p>
+        <p style="color: #374151; font-size: 14px; margin-bottom: 16px; line-height: 1.5;">Te hacemos llegar la factura correspondiente al pedido <strong>#${pedido.numero_pedido}${empresaLabel}</strong> por un total de <strong>$${totalFormatted} MXN</strong>.</p>
+        
+        <div style="background-color: #f9fafb; padding: 14px; border-radius: 8px; margin: 16px 0; border: 1px solid #e5e7eb;">
+          <p style="margin: 4px 0; font-size: 13px; color: #4b5563;"><strong>UUID Fiscal:</strong> ${factura.uuid_fiscal || 'N/A'}</p>
+          <p style="margin: 4px 0; font-size: 13px; color: #4b5563;"><strong>Forma de Pago:</strong> ${formaPagoStr}</p>
+          <p style="margin: 4px 0; font-size: 13px; color: #4b5563;"><strong>Método de Pago:</strong> ${metodoPagoStr}</p>
+          <p style="margin: 4px 0; font-size: 13px; color: #4b5563;"><strong>Estatus:</strong> ${estatusStr}</p>
+        </div>
+
+        <p style="font-size: 13px; color: #4b5563; margin-top: 20px; margin-bottom: 20px;">Los archivos CFDI XML y la representación impresa en PDF vienen adjuntos en este mensaje.</p>
+        <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 20px 0;" />
+        <p style="font-size: 11px; color: #9ca3af; text-align: center; margin: 0;">Playa Seimenjo ERP • Facturación Electrónica</p>
+      </div>
+    `;
+
+    const plainText = `Hola ${clienteNombre},\n\nTe hacemos llegar la factura correspondiente al pedido #${pedido.numero_pedido}${empresaLabel} por un total de $${totalFormatted} MXN.\n\nUUID Fiscal: ${factura.uuid_fiscal || 'N/A'}\nForma de Pago: ${formaPagoStr}\nMétodo de Pago: ${metodoPagoStr}\nEstatus: ${estatusStr}\n\nLos archivos CFDI XML y la representación impresa en PDF vienen adjuntos en este mensaje.\n\nPlaya Seimenjo ERP • Facturación Electrónica`;
+
+    // 4. Send email via SMTP (or simulate if credentials not set)
+    const isSmtpConfigured = !!(process.env.SMTP_USER && process.env.SMTP_PASS);
+
+    if (!isSmtpConfigured) {
+      console.warn('[SMTP] Credenciales SMTP_USER/SMTP_PASS no configuradas. Correo simulado exitosamente.');
+      return {
+        success: true,
+        simulated: true,
+        email: targetEmail,
+        cliente: clienteNombre,
+        numero_pedido: pedido.numero_pedido,
+        total: pedido.precio_total,
+        uuid_fiscal: factura.uuid_fiscal,
+        xmlUrl,
+        pdfUrl
+      };
     }
 
+    const transport = getSmtpConfig();
+
     const mailOptions = {
-      from: process.env.SMTP_FROM || 'facturacion@seimenjo.com',
-      to: cliente.email_facturacion,
+      from: process.env.SMTP_FROM || `"Facturación Sakura / Seimenjo" <${process.env.SMTP_USER || 'facturacionsakuraramen@gmail.com'}>`,
+      to: targetEmail,
       subject: `Factura Electrónica SAT CFDI 4.0 - Pedido #${pedido.numero_pedido}`,
-      text: `Estimado/a ${cliente.nombre_local},\n\nLe hacemos llegar la factura correspondiente a su pedido con número #${pedido.numero_pedido} por un total de $${pedido.precio_total} MXN.\n\nUUID Fiscal: ${factura.uuid_fiscal}\n\nLos archivos adjuntos están disponibles en los enlaces firmados a continuación.\n\nSaludos cordiales,\nSistema de Facturación`,
-      html: `<p>Estimado/a <strong>${cliente.nombre_local}</strong>,</p>
-        <p>Le hacemos llegar la factura correspondiente a su pedido con número <strong>#${pedido.numero_pedido}</strong> por un total de <strong>$${pedido.precio_total} MXN</strong>.</p>
-        <p>UUID Fiscal: ${factura.uuid_fiscal}</p>
-        <div>
-          <p class="text-xs text-gray-600 font-mono">Archivos Adjuntos (Enlaces Firmados de Storage):</p>
-          <div>${attachmentLinks.join(' | ')}</div>
-        </div>`,
+      text: plainText,
+      html: htmlContent,
       attachments: [
-        ...(xmlUrl ? [{ path: xmlUrl }] : []),
-        ...(pdfUrl ? [{ path: pdfUrl }] : [])
+        ...(xmlUrl ? [{ filename: `Factura_${factura.uuid_fiscal || pedido.numero_pedido}.xml`, path: xmlUrl }] : []),
+        ...(pdfUrl ? [{ filename: `Factura_${factura.uuid_fiscal || pedido.numero_pedido}.pdf`, path: pdfUrl }] : [])
       ]
     };
 
@@ -138,8 +397,9 @@ export async function enviarFacturaPorCorreo(pedidoId: string, token: string): P
 
     return {
       success: true,
-      email: cliente.email_facturacion,
-      cliente: cliente.nombre_local,
+      simulated: false,
+      email: targetEmail,
+      cliente: clienteNombre,
       numero_pedido: pedido.numero_pedido,
       total: pedido.precio_total,
       uuid_fiscal: factura.uuid_fiscal,

@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   X, CheckCircle, Clock, AlertTriangle, FileCode, FileText,
-  CreditCard, Landmark, ArrowRight, RefreshCw, Link as LinkIcon, Unlink, Eye, User, Calendar, Tag
+  CreditCard, Landmark, ArrowRight, RefreshCw, Link as LinkIcon, Unlink, Eye, User, Calendar, Tag, Mail
 } from 'lucide-react';
 import { formatCurrency } from '../../../../lib/formatters';
 import { useSessionToken } from '../../../../lib/hooks/useSessionToken';
@@ -11,7 +11,8 @@ import {
   obtenerTrayectoriaPedido,
   vincularFacturaAPedido,
   desvincularFacturaDePedido,
-  obtenerSignedUrl
+  obtenerSignedUrl,
+  enviarFacturaPorCorreo
 } from '../actions';
 import { useCfdiViewer } from '../../_components/CfdiViewerContext';
 import VincularXmlPedidoModal from './VincularXmlPedidoModal';
@@ -35,6 +36,27 @@ export default function TrayectoriaPedidoModal({
   const [error, setError] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
   const [showVincularModal, setShowVincularModal] = useState(false);
+  const [sendingEmail, setSendingEmail] = useState(false);
+  const [emailMessage, setEmailMessage] = useState<string | null>(null);
+
+  const handleSendEmail = async () => {
+    if (!pedidoId) return;
+    setSendingEmail(true);
+    setEmailMessage(null);
+    try {
+      const token = await getSessionToken();
+      const res = await enviarFacturaPorCorreo(pedidoId, token);
+      if (res.success) {
+        setEmailMessage(`Factura enviada exitosamente por correo a ${res.email}`);
+      } else {
+        alert(res.error || 'Error al enviar la factura por correo.');
+      }
+    } catch (err: any) {
+      alert(err.message || 'Error al enviar correo.');
+    } finally {
+      setSendingEmail(false);
+    }
+  };
 
   const fetchTrayectoria = async () => {
     setLoading(true);
@@ -278,6 +300,15 @@ export default function TrayectoriaPedidoModal({
                           {hasInvoice ? `Factura ${facturas[0]?.serie_folio || pedido?.folio_factura || 'Asignada'}` : 'Sin Factura Vinculada'}
                         </h3>
                       </div>
+
+                    {emailMessage && (
+                      <div className="p-2.5 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-xl text-emerald-700 dark:text-emerald-300 text-xs flex items-center justify-between">
+                        <span>{emailMessage}</span>
+                        <button onClick={() => setEmailMessage(null)} className="text-gray-400 hover:text-gray-600">
+                          <X size={12} />
+                        </button>
+                      </div>
+                    )}
                       <div className="flex items-center gap-2">
                         {!hasInvoice ? (
                           <button
@@ -350,6 +381,14 @@ export default function TrayectoriaPedidoModal({
                                     <Eye size={13} />
                                   </button>
                                 )}
+                                <button
+                                  onClick={handleSendEmail}
+                                  disabled={sendingEmail}
+                                  title="Enviar factura por correo electrónico al cliente"
+                                  className="p-1.5 bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-200 rounded-lg transition-colors disabled:opacity-50"
+                                >
+                                  <Mail size={13} className={sendingEmail ? 'animate-spin' : ''} />
+                                </button>
                                 <button
                                   onClick={() => handleDesvincularFactura(f.id)}
                                   disabled={actionLoading}

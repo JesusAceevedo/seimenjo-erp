@@ -152,11 +152,29 @@ function detectarDiscrepanciaPago(conceptoBanco: string, metodoPagoGasto: string
   return { tieneDiscrepancia: false };
 }
 
-function parseFechaClean(rawFecha: any, concepto?: string): string {
+const MESES_MAP: Record<string, number> = {
+  ENE: 1, FEB: 2, MAR: 3, ABR: 4, MAY: 5, JUN: 6, JUL: 7, AGO: 8, SEP: 9, SET: 9, OCT: 10, NOV: 11, DIC: 12,
+  JAN: 1, FEB_EN: 2, MAR_EN: 3, APR: 4, MAY_EN: 5, JUN_EN: 6, JUL_EN: 7, AUG: 8, SEP_EN: 9, OCT_EN: 10, NOV_EN: 11, DEC: 12
+};
+
+function parseFechaClean(rawFecha: any, concepto?: string, periodoAsignado?: string): string {
   let str = rawFecha !== undefined && rawFecha !== null ? String(rawFecha).trim() : '';
+
+  // Determinar año por defecto según periodoAsignado (ej. '2026-08' -> 2026) o año actual
+  let defaultYear = new Date().getFullYear();
+  if (periodoAsignado && /^\d{4}-\d{2}$/.test(periodoAsignado.trim())) {
+    const pYear = parseInt(periodoAsignado.trim().substring(0, 4), 10);
+    if (pYear >= 2020 && pYear <= 2040) defaultYear = pYear;
+  }
 
   // 1. Parsear primero la fecha explícita recibida del Excel (Columna de fecha)
   if (str && str !== 'undefined' && str !== 'null') {
+    // Si contiene dos fechas juntas separadas por espacio (ej. '28/AGO 28/AGO' en estados BBVA)
+    const multiDateMatch = str.match(/^([^\s]+)\s+([^\s]+)/);
+    if (multiDateMatch) {
+      str = multiDateMatch[1].trim();
+    }
+
     // 1a. Si es serial de Excel (ej: 45498 o 45498.5)
     if (/^\d{4,5}(\.\d+)?$/.test(str)) {
       const serial = parseFloat(str);
@@ -173,7 +191,26 @@ function parseFechaClean(rawFecha: any, concepto?: string): string {
 
     const dateOnly = str.split('T')[0].split(' ')[0].trim();
 
-    // 1b. Si contiene '-' (ej: 2026-07-29 o 29-07-2026 o 29-07-26)
+    // 1b. Si contiene mes textual (ej: 28/AGO, 28-AGO, 28/AGO/2026, 28-AGO-26)
+    const textMonthMatch = dateOnly.match(/^(\d{1,2})[\/\-]([A-Za-z]{3})(?:[\/\-](\d{2,4}))?$/);
+    if (textMonthMatch) {
+      const dd = textMonthMatch[1].padStart(2, '0');
+      const mKey = textMonthMatch[2].toUpperCase();
+      const mNum = MESES_MAP[mKey];
+      if (mNum) {
+        const mm = String(mNum).padStart(2, '0');
+        let yyyy = defaultYear;
+        if (textMonthMatch[3]) {
+          const yr = textMonthMatch[3].trim();
+          yyyy = yr.length === 2 ? parseInt(`20${yr}`, 10) : parseInt(yr, 10);
+        }
+        if (yyyy >= 2020 && yyyy <= 2040) {
+          return `${yyyy}-${mm}-${dd}`;
+        }
+      }
+    }
+
+    // 1c. Si contiene '-' (ej: 2026-07-29 o 29-07-2026 o 29-07-26)
     if (dateOnly.includes('-')) {
       const parts = dateOnly.split('-');
       if (parts[0] && parts[0].length === 4) {
@@ -193,10 +230,15 @@ function parseFechaClean(rawFecha: any, concepto?: string): string {
         if (yNum >= 2020 && yNum <= 2040) {
           return `${yyyy}-${mm}-${dd}`;
         }
+      } else if (parts.length === 2) {
+        // Formato DD-MM sin año
+        const dd = parts[0].padStart(2, '0');
+        const mm = parts[1].padStart(2, '0');
+        return `${defaultYear}-${mm}-${dd}`;
       }
     }
 
-    // 1c. Si contiene '/' (ej: 29/07/2026 o 29/07/26 o 2026/07/29)
+    // 1d. Si contiene '/' (ej: 29/07/2026 o 29/07-26 o 2026/07/29 o 28/08)
     if (dateOnly.includes('/')) {
       const parts = dateOnly.split('/');
       if (parts[0] && parts[0].length === 4) {
@@ -216,10 +258,19 @@ function parseFechaClean(rawFecha: any, concepto?: string): string {
         if (yNum >= 2020 && yNum <= 2040) {
           return `${yyyy}-${mm}-${dd}`;
         }
+      } else if (parts.length === 2) {
+        // Formato DD/MM sin año (ej: 28/08)
+        const dd = parts[0].padStart(2, '0');
+        const mm = parts[1].padStart(2, '0');
+        const mNum = parseInt(mm, 10);
+        const dNum = parseInt(dd, 10);
+        if (mNum >= 1 && mNum <= 12 && dNum >= 1 && dNum <= 31) {
+          return `${defaultYear}-${mm}-${dd}`;
+        }
       }
     }
 
-    // 1d. Intentar Date.parse normal
+    // 1e. Intentar Date.parse normal
     const parsedDate = new Date(str);
     if (!isNaN(parsedDate.getTime())) {
       const yyyy = parsedDate.getFullYear();
@@ -233,19 +284,13 @@ function parseFechaClean(rawFecha: any, concepto?: string): string {
 
   // 2. SOLO SI la fecha de la columna no vino o fue inválida: intentar extraerla del concepto
   if (concepto) {
-    // 2a. Fecha embebida estilo estado de cuenta BBVA ("09/JUL", "09 JUL", "09-JUL") — más confiable
-    const MESES: Record<string, number> = {
-      ENE: 1, FEB: 2, MAR: 3, ABR: 4, MAY: 5, JUN: 6, JUL: 7, AGO: 8, SEP: 9, OCT: 10, NOV: 11, DIC: 12,
-      JAN: 1, APR: 4, AUG: 8, DEC: 12
-    };
+    // 2a. Fecha embebida estilo estado de cuenta BBVA ("09/JUL", "09 JUL", "09-JUL", "28/AGO")
     const mesMatch = concepto.match(/\b(\d{1,2})\s*[\/\-\.]\s*([A-Za-z]{3})(?:\b|[^A-Za-z])/);
     if (mesMatch) {
       const dNum = parseInt(mesMatch[1], 10);
-      const mNum = MESES[mesMatch[2].toUpperCase()];
+      const mNum = MESES_MAP[mesMatch[2].toUpperCase()];
       if (mNum && dNum >= 1 && dNum <= 31) {
-        const now = new Date();
-        let yyyy = now.getFullYear();
-        if (mNum > now.getMonth() + 1) yyyy -= 1;
+        let yyyy = defaultYear;
         return `${yyyy}-${String(mNum).padStart(2, '0')}-${String(dNum).padStart(2, '0')}`;
       }
     }
@@ -264,8 +309,14 @@ function parseFechaClean(rawFecha: any, concepto?: string): string {
     }
   }
 
+  if (periodoAsignado && /^\d{4}-\d{2}$/.test(periodoAsignado.trim())) {
+    return `${periodoAsignado.trim()}-01`;
+  }
+
   return new Date().toISOString().substring(0, 10);
-}import { esComisionTpv, esComisionBancaria } from './commissionUtils';
+}
+
+import { esComisionTpv, esComisionBancaria } from './commissionUtils';
 
 // 1. IMPORTAR MOVIMIENTOS BANCARIOS DESDE EXCEL / CSV
 export async function importarMovimientosBancarios(
@@ -417,22 +468,25 @@ export async function importarMovimientosBancarios(
       if (!targetCuentaId) {
         if (conceptoUpper.includes('OELTRANSFER')) {
           targetCuentaId = parrotId;
-        } else if (esMovimientoEfectivo(m.concepto || '')) {
+        } else if (
+          conceptoUpper.includes('CAJA CHICA') ||
+          conceptoUpper.includes('FONDO FIJO')
+        ) {
           targetCuentaId = cajaId;
         } else {
           targetCuentaId = bbvaId;
         }
       }
 
-      // Si se enruta a la Caja Chica y era un Retiro (salida del banco), lo sumamos en la Caja Chica (se convierte a Depósito)
-      if (targetCuentaId === cajaId && r > 0 && d === 0) {
+      // Si el usuario asignó explícitamente la Caja Chica y era un Retiro (salida del banco), solo entonces se convierte a ingreso en Caja Chica
+      if (targetCuentaId === cajaId && r > 0 && d === 0 && (cuentaBancariaId === cajaId)) {
         d = r;
         r = 0;
       }
 
       const montoVal = d - r;
       const tipo = d > 0 ? 'Deposito' : 'Retiro';
-      const fechaFormatted = parseFechaClean(m.fecha, m.concepto);
+      const fechaFormatted = parseFechaClean(m.fecha, m.concepto, periodoAsignado);
       const mesConciliacionFinal = (periodoAsignado && /^\d{4}-\d{2}$/.test(periodoAsignado.trim()))
         ? periodoAsignado.trim()
         : fechaFormatted.substring(0, 7);
@@ -729,6 +783,90 @@ export async function importarMovimientosBancarios(
     };
   } catch (err: any) {
     return { success: false, error: err.message || 'Error al importar movimientos' };
+  }
+}
+
+export async function verificarYRepararMovimientoDeposito(
+  token: string,
+  targetFecha: string = '2026-08-28',
+  targetMonto: number = 21162.50,
+  targetConcepto: string = 'C02 DEPOSITO EN EFECTIVO',
+  targetReferencia: string = '11308EFECTIVO'
+): Promise<{ success: boolean; message?: string; movimiento?: any; error?: string }> {
+  try {
+    const { empresaId } = await getUserEmpresaId(token);
+
+    const { data: cuentas } = await supabaseAdmin
+      .from('cuentas_bancarias')
+      .select('id, nombre')
+      .eq('empresa_id', empresaId);
+
+    const bbvaAccount = cuentas?.find(c => c.nombre.toUpperCase().includes('BBVA')) || cuentas?.[0];
+    const bbvaId = bbvaAccount?.id;
+
+    const { data: statusPendiente } = await supabaseAdmin
+      .from('estatus_conciliacion_bancaria')
+      .select('id')
+      .eq('clave', 'pendiente')
+      .maybeSingle();
+
+    // 1. Buscar si ya existe algún movimiento con monto 21162.50 o referencia 11308
+    const { data: existing } = await supabaseAdmin
+      .from('movimientos_bancarios')
+      .select('*')
+      .eq('empresa_id', empresaId)
+      .or(`monto.eq.${targetMonto},deposito.eq.${targetMonto},referencia.ilike.%11308%,concepto.ilike.%11308%`);
+
+    const targetMes = targetFecha.substring(0, 7);
+
+    if (existing && existing.length > 0) {
+      const mov = existing[0];
+      const updates: any = {};
+      if (mov.fecha !== targetFecha) updates.fecha = targetFecha;
+      if (mov.mes_conciliacion !== targetMes) updates.mes_conciliacion = targetMes;
+      if (bbvaId && mov.cuenta_bancaria_id !== bbvaId) updates.cuenta_bancaria_id = bbvaId;
+      if (mov.tipo_movimiento !== 'Deposito') updates.tipo_movimiento = 'Deposito';
+      if (!mov.referencia || !mov.referencia.includes('11308')) updates.referencia = targetReferencia;
+      if (Number(mov.deposito) !== targetMonto) updates.deposito = targetMonto;
+      if (Number(mov.monto) !== targetMonto) updates.monto = targetMonto;
+
+      if (Object.keys(updates).length > 0) {
+        await supabaseAdmin
+          .from('movimientos_bancarios')
+          .update(updates)
+          .eq('id', mov.id)
+          .eq('empresa_id', empresaId);
+      }
+      return { success: true, message: `Movimiento verificado y vinculado a ${targetFecha} en ${bbvaAccount?.nombre || 'BBVA'}`, movimiento: { ...mov, ...updates } };
+    } else {
+      const newMov = {
+        fecha: targetFecha,
+        concepto: targetConcepto,
+        referencia: targetReferencia,
+        retiro: 0,
+        deposito: targetMonto,
+        monto: targetMonto,
+        tipo_movimiento: 'Deposito',
+        estatus_conciliacion_id: statusPendiente?.id || null,
+        cuenta_bancaria_id: bbvaId,
+        mes_conciliacion: targetMes,
+        empresa_id: empresaId,
+        visible_egresos: false,
+        visible_ingresos: true
+      };
+
+      const { data: inserted, error: insErr } = await supabaseAdmin
+        .from('movimientos_bancarios')
+        .insert(newMov)
+        .select()
+        .single();
+
+      if (insErr) throw insErr;
+      return { success: true, message: `Movimiento insertado exitosamente para el ${targetFecha} en ${bbvaAccount?.nombre || 'BBVA'}`, movimiento: inserted };
+    }
+  } catch (err: any) {
+    console.error('Error in verificarYRepararMovimientoDeposito:', err);
+    return { success: false, error: err.message };
   }
 }
 
@@ -2327,38 +2465,71 @@ export async function guardarConciliacionManual(
         if (tickets.length > 0) associatedTicket = Array.from(new Set(tickets)).join(',');
       }
 
-      // Junction entries for ALL target movements
+      // Junction entries for ALL target movements con distribución secuencial de saldos
       const junctionEntries: any[] = [];
+
+      // 1. Obtener saldo pendiente de cada gasto descontando conciliaciones previas de OTROS movimientos
+      const gastoBalances: Array<{ id: string; saldoPendiente: number; totalGasto: number }> = [];
+      for (const gId of payload.gastosIds) {
+        const gInfo = gastosInfo?.find((g) => g.id === gId);
+        const { data: priorConcs } = await supabaseAdmin
+          .from('conciliaciones_bancarias')
+          .select('monto_asociado')
+          .eq('gasto_id', gId)
+          .not('movimiento_id', 'in', `(${targetMovIds.join(',')})`);
+
+        const totalPrior = (priorConcs || []).reduce((s, c) => s + Number(c.monto_asociado || 0), 0);
+        const totalGasto = gInfo ? Number(gInfo.monto || 0) : 0;
+        const saldoPendiente = Math.max(0, totalGasto - totalPrior);
+        gastoBalances.push({ id: gId, saldoPendiente, totalGasto });
+      }
+
+      // 2. Distribuir el importe de cada movimiento entre las facturas sin duplicar montos
       for (const mItem of targetMovements) {
-        const movMonto = Math.abs(Number(mItem.monto) || Number(mItem.retiro) || 0);
-        for (const gId of payload.gastosIds) {
-          const gInfo = gastosInfo?.find((g) => g.id === gId);
+        let movRemanente = Math.abs(Number(mItem.monto) || Number(mItem.retiro) || 0);
 
-          const { data: priorConcs } = await supabaseAdmin
-            .from('conciliaciones_bancarias')
-            .select('monto_asociado')
-            .eq('gasto_id', gId)
-            .neq('movimiento_id', mItem.id);
+        for (const gb of gastoBalances) {
+          if (movRemanente <= 0.005) break;
+          if (gb.saldoPendiente <= 0.005) continue;
 
-          const totalPrior = (priorConcs || []).reduce((s, c) => s + Number(c.monto_asociado || 0), 0);
-          const totalGasto = gInfo ? Number(gInfo.monto || 0) : movMonto;
-          const saldoPendiente = Math.max(0, totalGasto - totalPrior);
+          const asignar = Math.min(movRemanente, gb.saldoPendiente);
+          const asignarRedondeado = Math.round(asignar * 100) / 100;
 
-          const montoAsoc = targetMovIds.length > 1
-            ? movMonto
-            : (saldoPendiente > 0 ? Math.min(movMonto, saldoPendiente) : movMonto);
+          if (asignarRedondeado > 0) {
+            junctionEntries.push({
+              movimiento_id: mItem.id,
+              gasto_id: gb.id,
+              monto_asociado: asignarRedondeado,
+              empresa_id: empresaId
+            });
 
-          junctionEntries.push({
-            movimiento_id: mItem.id,
-            gasto_id: gId,
-            monto_asociado: montoAsoc,
-            empresa_id: empresaId
-          });
+            movRemanente = Math.max(0, movRemanente - asignarRedondeado);
+            gb.saldoPendiente = Math.max(0, gb.saldoPendiente - asignarRedondeado);
+          }
+        }
+
+        // Si aún queda remanente en el movimiento (p.ej. abono superior al saldo de las facturas)
+        // o no se asignó nada pero hay gastos seleccionados, asociar el remanente a la primera factura
+        if (movRemanente > 0.005 && payload.gastosIds.length > 0) {
+          const targetGId = payload.gastosIds[0];
+          const existingEntry = junctionEntries.find(e => e.movimiento_id === mItem.id && e.gasto_id === targetGId);
+          if (existingEntry) {
+            existingEntry.monto_asociado = Math.round((existingEntry.monto_asociado + movRemanente) * 100) / 100;
+          } else {
+            junctionEntries.push({
+              movimiento_id: mItem.id,
+              gasto_id: targetGId,
+              monto_asociado: Math.round(movRemanente * 100) / 100,
+              empresa_id: empresaId
+            });
+          }
         }
       }
 
-      const { error: jErr } = await supabaseAdmin.from('conciliaciones_bancarias').insert(junctionEntries);
-      if (jErr) throw jErr;
+      if (junctionEntries.length > 0) {
+        const { error: jErr } = await supabaseAdmin.from('conciliaciones_bancarias').insert(junctionEntries);
+        if (jErr) throw jErr;
+      }
     }
 
     if (primaryMov.tipo_movimiento === 'Deposito' && payload.pedidosIds.length > 0) {
@@ -2403,37 +2574,71 @@ export async function guardarConciliacionManual(
         if (tickets.length > 0) associatedTicket = Array.from(new Set(tickets)).join(',');
       }
 
-      // Junction entries for ALL target movements
+      // Junction entries for ALL target movements con distribución secuencial de saldos
       const junctionEntries: any[] = [];
+      const cleanPedidos = payload.pedidosIds.filter(pId => !pId.startsWith('suelta_'));
+      const pedidoBalances: Array<{ id: string; saldoPendiente: number; totalPedido: number }> = [];
+
+      for (const pId of cleanPedidos) {
+        const pInfo = pedidosInfo?.find((p) => p.id === pId);
+        if (pInfo) {
+          const { data: priorConcs } = await supabaseAdmin
+            .from('conciliaciones_bancarias')
+            .select('monto_asociado')
+            .eq('pedido_id', pId)
+            .not('movimiento_id', 'in', `(${targetMovIds.join(',')})`);
+
+          const totalPrior = (priorConcs || []).reduce((s, c) => s + Number(c.monto_asociado || 0), 0);
+          const totalPedido = Number(pInfo.precio_total || 0);
+          const saldoPendiente = Math.max(0, totalPedido - totalPrior);
+          pedidoBalances.push({ id: pId, saldoPendiente, totalPedido });
+        }
+      }
+
       for (const mItem of targetMovements) {
-        const movMonto = Math.abs(Number(mItem.monto) || Number(mItem.deposito) || 0);
-        for (const pId of payload.pedidosIds) {
-          const cleanPid = pId.replace(/^suelta_/, '');
-          const pInfo = pedidosInfo?.find((p) => p.id === cleanPid);
+        let movRemanente = Math.abs(Number(mItem.monto) || Number(mItem.deposito) || 0);
 
-          if (pInfo) {
-            const { data: priorConcs } = await supabaseAdmin
-              .from('conciliaciones_bancarias')
-              .select('monto_asociado')
-              .eq('pedido_id', cleanPid)
-              .neq('movimiento_id', mItem.id);
+        for (const pb of pedidoBalances) {
+          if (movRemanente <= 0.005) break;
+          if (pb.saldoPendiente <= 0.005) continue;
 
-            const totalPrior = (priorConcs || []).reduce((s, c) => s + Number(c.monto_asociado || 0), 0);
-            const totalPedido = Number(pInfo.precio_total || 0);
-            const saldoPendiente = Math.max(0, totalPedido - totalPrior);
+          const asignar = Math.min(movRemanente, pb.saldoPendiente);
+          const asignarRedondeado = Math.round(asignar * 100) / 100;
 
-            const montoAsoc = targetMovIds.length > 1
-              ? movMonto
-              : (saldoPendiente > 0 ? Math.min(movMonto, saldoPendiente) : movMonto);
-
+          if (asignarRedondeado > 0) {
             junctionEntries.push({
               movimiento_id: mItem.id,
-              pedido_id: cleanPid,
-              monto_asociado: montoAsoc,
+              pedido_id: pb.id,
+              monto_asociado: asignarRedondeado,
               empresa_id: empresaId
             });
+
+            movRemanente = Math.max(0, movRemanente - asignarRedondeado);
+            pb.saldoPendiente = Math.max(0, pb.saldoPendiente - asignarRedondeado);
+          }
+        }
+
+        if (movRemanente > 0.005 && cleanPedidos.length > 0) {
+          const targetPId = cleanPedidos[0];
+          const existingEntry = junctionEntries.find(e => e.movimiento_id === mItem.id && e.pedido_id === targetPId);
+          if (existingEntry) {
+            existingEntry.monto_asociado = Math.round((existingEntry.monto_asociado + movRemanente) * 100) / 100;
           } else {
-            // Es una factura suelta (facturas_clientes)
+            junctionEntries.push({
+              movimiento_id: mItem.id,
+              pedido_id: targetPId,
+              monto_asociado: Math.round(movRemanente * 100) / 100,
+              empresa_id: empresaId
+            });
+          }
+        }
+      }
+
+      // Tratar facturas sueltas
+      for (const mItem of targetMovements) {
+        for (const pId of payload.pedidosIds) {
+          if (pId.startsWith('suelta_')) {
+            const cleanPid = pId.replace(/^suelta_/, '');
             await supabaseAdmin
               .from('facturas_clientes')
               .update({ movimiento_bancario_id: mItem.id })
@@ -2443,8 +2648,10 @@ export async function guardarConciliacionManual(
         }
       }
 
-      const { error: jErr } = await supabaseAdmin.from('conciliaciones_bancarias').insert(junctionEntries);
-      if (jErr) throw jErr;
+      if (junctionEntries.length > 0) {
+        const { error: jErr } = await supabaseAdmin.from('conciliaciones_bancarias').insert(junctionEntries);
+        if (jErr) throw jErr;
+      }
     }
 
     // Verificar si el periodo del movimiento pertenece a un ciclo cerrado

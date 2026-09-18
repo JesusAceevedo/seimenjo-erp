@@ -737,6 +737,9 @@ export default function EgresosModule() {
                     setFormasPagoModal={setFormasPagoModal}
                     handleSaveFormaPago={() => {}}
                     handleDeleteFormaPago={() => {}}
+                    categoriasGasto={categoriasGasto}
+                    onEditGasto={setEditingGasto}
+                    onDeleteGasto={handleDeleteGasto}
                     onEditMovimiento={(mov) => setEditingMovimiento(mov)}
                     handleUpdateCategoria={handleUpdateCategoriaMovimiento}
                     onDownloadFile={handleDownloadFile}
