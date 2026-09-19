@@ -260,8 +260,14 @@ export default function AdminMonitor() {
       let query = supabase
         .from('pedidos')
         .select('*, pedido_detalles(*, producto_variantes(*, productos(*))), clientes(id, nombre_local, razon_social, telefono, rfc, email_facturacion), facturas_clientes(*)')
-        .eq('empresa_id', targetEmpresaId)
         .order('numero_pedido', { ascending: false });
+
+      if (isSeimenjoEmpresa && activeSubTab === 'sakura') {
+        const sId = sakuraEmpresaId || 'b9fec2e3-75d5-4002-9071-f79c56bda732';
+        query = query.or(`empresa_id.eq.${sId},cliente_id.eq.a9c0e309-7a2a-41c9-aa42-38b9f49b4688`);
+      } else {
+        query = query.eq('empresa_id', targetEmpresaId);
+      }
 
       if (startDateStr) {
         query = query.or(`fecha_pedido.gte.${startDateStr},creado_en.gte.${startDateStr}`);
@@ -276,7 +282,7 @@ export default function AdminMonitor() {
     } catch (err) {
       console.error('Error fetching orders:', err);
     }
-  }, [filtroRango, fechaInicio, fechaFin, getTargetEmpresaId]);
+  }, [filtroRango, fechaInicio, fechaFin, getTargetEmpresaId, isSeimenjoEmpresa, activeSubTab, sakuraEmpresaId]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -367,6 +373,30 @@ export default function AdminMonitor() {
       });
     }
 
+    // Separación estricta entre Pedidos General y Pedidos Sakura
+    if (isSeimenjoEmpresa) {
+      const sId = sakuraEmpresaId || 'b9fec2e3-75d5-4002-9071-f79c56bda732';
+      if (activeSubTab === 'general') {
+        filtrados = filtrados.filter(p => {
+          const cName = (p.clientes?.nombre_local || p.clientes?.razon_social || p.cliente_nombre || '').toLowerCase();
+          const esSakura = p.cliente_id === 'a9c0e309-7a2a-41c9-aa42-38b9f49b4688' ||
+                           p.empresa_id === sId ||
+                           cName.includes('sakura') ||
+                           cName.includes('ramen de playa');
+          return !esSakura;
+        });
+      } else if (activeSubTab === 'sakura') {
+        filtrados = filtrados.filter(p => {
+          const cName = (p.clientes?.nombre_local || p.clientes?.razon_social || p.cliente_nombre || '').toLowerCase();
+          const esSakura = p.cliente_id === 'a9c0e309-7a2a-41c9-aa42-38b9f49b4688' ||
+                           p.empresa_id === sId ||
+                           cName.includes('sakura') ||
+                           cName.includes('ramen de playa');
+          return esSakura;
+        });
+      }
+    }
+
     return filtrados.sort((a, b) => {
       const numA = Number(a.numero_pedido) || 0;
       const numB = Number(b.numero_pedido) || 0;
@@ -375,7 +405,7 @@ export default function AdminMonitor() {
       }
       return new Date(b.creado_en || '').getTime() - new Date(a.creado_en || '').getTime();
     });
-  }, [pedidos, filtroRango, fechaInicio, fechaFin, busquedaGlobal]);
+  }, [pedidos, filtroRango, fechaInicio, fechaFin, busquedaGlobal, isSeimenjoEmpresa, activeSubTab, sakuraEmpresaId]);
 
   // Paginación en memoria
   const paginatedPedidos = useMemo(() => {

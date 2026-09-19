@@ -55,6 +55,7 @@ export interface DetallePedido {
 
 export interface Pedido {
   id: string;
+  empresa_id?: string | null;
   numero_pedido?: number;
   cliente_id?: string;
   cliente_nombre?: string;

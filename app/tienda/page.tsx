@@ -407,13 +407,19 @@ export default function Tienda() {
 
     let pedidoId: string | null = null;
     try {
-      const sesionInfo = sesion as unknown as { tipo?: string; id?: string; empresa_id?: string; [key: string]: unknown };
+      const sesionInfo = sesion as unknown as { tipo?: string; id?: string; empresa_id?: string; nombre_local?: string; razon_social?: string; [key: string]: unknown };
+      let pedidoEmpresaId = sesionInfo?.empresa_id || null;
+      const cNombre = String(sesionInfo?.nombre_local || sesionInfo?.razon_social || '').toLowerCase();
+      if (sesionInfo?.id === 'a9c0e309-7a2a-41c9-aa42-38b9f49b4688' || cNombre.includes('sakura') || cNombre.includes('ramen de playa')) {
+        pedidoEmpresaId = 'b9fec2e3-75d5-4002-9071-f79c56bda732';
+      }
+
       // 1. Insertar el Pedido
       const { data: pedidoData, error: pedidoError } = await supabase
         .from('pedidos')
         .insert({
           cliente_id: sesionInfo?.tipo === 'b2b' ? sesionInfo.id : null,
-          empresa_id: sesionInfo?.empresa_id || null,
+          empresa_id: pedidoEmpresaId,
           precio_total: totalCarrito,
           comentarios: comentarios || null
         })
@@ -429,7 +435,8 @@ export default function Tienda() {
         variante_id: item.variante_id, 
         cantidad: item.cantidad,
         precio_aplicado: item.precio_unitario,
-        subtotal: item.cantidad * item.precio_unitario
+        subtotal: item.cantidad * item.precio_unitario,
+        empresa_id: pedidoEmpresaId
       }));
 
       const { error: detallesError } = await supabase
