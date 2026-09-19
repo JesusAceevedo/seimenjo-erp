@@ -103,3 +103,111 @@ export async function obtenerContenidoXmlCliente(filePath: string): Promise<{ su
   }
 }
 
+export interface DatosFiscalesClienteInput {
+  clienteId: string;
+  rfc: string;
+  razonSocial: string;
+  regimenFiscal: string;
+  codigoPostal: string;
+  usoCfdi: string;
+  emailFacturacion: string;
+  telefono?: string;
+  nombreLocal?: string;
+}
+
+export async function obtenerDatosFiscalesCliente(clienteId: string): Promise<{
+  success: boolean;
+  cliente?: any;
+  error?: string;
+}> {
+  try {
+    if (!clienteId) {
+      return { success: false, error: 'ID de cliente no proporcionado.' };
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('clientes')
+      .select('id, nombre_local, rfc, razon_social, regimen_fiscal, codigo_postal, uso_cfdi, email_facturacion, telefono, es_anonimo')
+      .eq('id', clienteId)
+      .single();
+
+    if (error) throw error;
+    return { success: true, cliente: data };
+  } catch (err: unknown) {
+    const errorMsg = err instanceof Error ? err.message : 'Error al obtener datos fiscales';
+    console.error('Error in obtenerDatosFiscalesCliente:', err);
+    return { success: false, error: errorMsg };
+  }
+}
+
+export async function actualizarDatosFiscalesCliente(data: DatosFiscalesClienteInput): Promise<{
+  success: boolean;
+  cliente?: any;
+  error?: string;
+}> {
+  try {
+    if (!data.clienteId) {
+      return { success: false, error: 'Identificador de cliente no proporcionado.' };
+    }
+
+    const rfcClean = (data.rfc || '').trim().toUpperCase().replace(/[^A-Z0-9&Ñ]/g, '');
+    if (!rfcClean) {
+      return { success: false, error: 'El RFC es obligatorio.' };
+    }
+    if (rfcClean.length < 12 || rfcClean.length > 13) {
+      return { success: false, error: 'El RFC debe contener 12 (Persona Moral) o 13 (Persona Física) caracteres.' };
+    }
+
+    const razonSocialClean = (data.razonSocial || '').trim().toUpperCase();
+    if (!razonSocialClean) {
+      return { success: false, error: 'La Razón Social o Nombre Fiscal es obligatorio.' };
+    }
+
+    const cpClean = (data.codigoPostal || '').trim();
+    if (!cpClean || cpClean.length !== 5 || !/^\d{5}$/.test(cpClean)) {
+      return { success: false, error: 'El Código Postal fiscal debe contener exactamente 5 dígitos numéricos.' };
+    }
+
+    const emailClean = (data.emailFacturacion || '').trim().toLowerCase();
+    if (!emailClean || !emailClean.includes('@') || !emailClean.includes('.')) {
+      return { success: false, error: 'Ingresa un correo electrónico de facturación válido.' };
+    }
+
+    const payload: Record<string, any> = {
+      rfc: rfcClean,
+      razon_social: razonSocialClean,
+      regimen_fiscal: data.regimenFiscal?.trim() || null,
+      codigo_postal: cpClean,
+      uso_cfdi: data.usoCfdi?.trim() || null,
+      email_facturacion: emailClean,
+      es_anonimo: false
+    };
+
+    if (data.telefono !== undefined) {
+      payload.telefono = data.telefono.trim();
+    }
+    if (data.nombreLocal !== undefined && data.nombreLocal.trim()) {
+      payload.nombre_local = data.nombreLocal.trim();
+    }
+
+    const { data: updated, error } = await supabaseAdmin
+      .from('clientes')
+      .update(payload)
+      .eq('id', data.clienteId)
+      .select('*')
+      .single();
+
+    if (error) {
+      console.error('Error al actualizar datos fiscales en base de datos:', error);
+      return { success: false, error: error.message || 'Error al guardar datos fiscales.' };
+    }
+
+    return { success: true, cliente: updated };
+  } catch (err: unknown) {
+    const errorMsg = err instanceof Error ? err.message : 'Error inesperado al actualizar datos fiscales';
+    console.error('Error in actualizarDatosFiscalesCliente:', err);
+    return { success: false, error: errorMsg };
+  }
+}
+
+

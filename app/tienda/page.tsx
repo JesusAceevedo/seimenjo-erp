@@ -8,13 +8,15 @@ import { supabase } from '../../lib/supabase';
 import {
   ShoppingCart, LogOut, Plus, Minus, Send, CheckCircle2, AlertTriangle,
   FileText, FileCode, RefreshCw, Lock, Sparkles, Sun, Moon,
-  Package, Clock, Truck, ChevronDown, ChevronUp, CheckCircle, Eye
+  Package, Clock, Truck, ChevronDown, ChevronUp, CheckCircle, Eye,
+  Building2
 } from 'lucide-react';
 import Image from 'next/image';
 import { useProtectedRoute } from '../../lib/useProtectedRoute';
 import { useThemeMode } from '../../lib/useThemeMode';
 import { obtenerSignedUrlCliente } from './actions';
 import ClienteCfdiModal from './ClienteCfdiModal';
+import DatosFiscalesModal from './DatosFiscalesModal';
 
 // Interfaces de tipado
 interface Producto { id: string; nombre: string; categoria: string; imagen_url: string; }
@@ -164,6 +166,7 @@ export default function Tienda() {
     open: false,
     xmlUrl: null
   });
+  const [modalDatosFiscalesOpen, setModalDatosFiscalesOpen] = useState(false);
 
   const cargarFacturas = async (clienteId: string) => {
     setLoadingFacturas(true);
@@ -562,6 +565,15 @@ export default function Tienda() {
                         }`}
                     >
                       📄 Facturas
+                    </button>
+                    <button
+                      onClick={() => setModalDatosFiscalesOpen(true)}
+                      className="px-3 sm:px-4 py-2 text-xs sm:text-sm font-bold rounded-lg transition-all flex items-center gap-1.5 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-900"
+                      title="Ver y actualizar datos fiscales CFDI 4.0"
+                    >
+                      <Building2 className="w-4 h-4 text-amber-500" />
+                      <span className="hidden sm:inline">Datos Fiscales</span>
+                      <span className="sm:hidden">Fiscal</span>
                     </button>
                   </>
                 )}
@@ -980,21 +992,31 @@ export default function Tienda() {
         ) : (
           /* PESTAÑA DE MIS FACTURAS */
           <div className="flex-1 p-6 overflow-y-auto max-w-7xl mx-auto w-full bg-gray-50 dark:bg-gray-900 transition-colors">
-            <div className="flex justify-between items-center mb-6">
+            <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4 mb-6">
               <div>
                 <h2 className="text-2xl font-extrabold text-gray-900 dark:text-white flex items-center">
                   <FileText className="w-6 h-6 mr-2 text-amber-500" /> Historial de Facturas
                 </h2>
                 <p className="text-sm text-gray-500 dark:text-gray-400">Consulta y descarga tus facturas fiscales en formato XML y PDF.</p>
               </div>
-              <button
-                onClick={() => sesion?.id && cargarFacturas(sesion.id)}
-                disabled={loadingFacturas}
-                className="inline-flex items-center gap-1.5 px-3 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-sm font-bold shadow-md hover:shadow-lg transition-all disabled:opacity-50"
-              >
-                <RefreshCw className={`w-4 h-4 ${loadingFacturas ? 'animate-spin' : ''}`} />
-                Actualizar
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setModalDatosFiscalesOpen(true)}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 border border-gray-200 dark:border-gray-700 rounded-lg text-sm font-bold shadow-sm transition-all"
+                  title="Ver y actualizar datos fiscales para facturación CFDI 4.0"
+                >
+                  <Building2 className="w-4 h-4 text-amber-500" />
+                  Mis Datos Fiscales
+                </button>
+                <button
+                  onClick={() => sesion?.id && cargarFacturas(sesion.id)}
+                  disabled={loadingFacturas}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-sm font-bold shadow-md hover:shadow-lg transition-all disabled:opacity-50"
+                >
+                  <RefreshCw className={`w-4 h-4 ${loadingFacturas ? 'animate-spin' : ''}`} />
+                  Actualizar
+                </button>
+              </div>
             </div>
 
             {errorFacturas && (
@@ -1162,6 +1184,31 @@ export default function Tienda() {
           xmlUrl={cfdiViewerState.xmlUrl}
           serieFolio={cfdiViewerState.serieFolio}
           onClose={() => setCfdiViewerState({ open: false, xmlUrl: null })}
+        />
+      )}
+
+      {/* Modal de Actualización de Datos Fiscales */}
+      {modalDatosFiscalesOpen && sesion?.id && (
+        <DatosFiscalesModal
+          clienteId={sesion.id}
+          onClose={() => setModalDatosFiscalesOpen(false)}
+          onSaved={(clienteActualizado) => {
+            setSesion((prev: any) => {
+              const updated = {
+                ...prev,
+                nombre_local: clienteActualizado.nombre_local || prev?.nombre_local,
+                rfc: clienteActualizado.rfc,
+                razon_social: clienteActualizado.razon_social,
+                email_facturacion: clienteActualizado.email_facturacion
+              };
+              try {
+                localStorage.setItem('seimenjo_session', JSON.stringify(updated));
+              } catch {
+                // ignore
+              }
+              return updated;
+            });
+          }}
         />
       )}
     </div>
