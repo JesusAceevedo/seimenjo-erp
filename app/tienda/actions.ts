@@ -210,4 +210,31 @@ export async function actualizarDatosFiscalesCliente(data: DatosFiscalesClienteI
   }
 }
 
+/**
+ * Notifica a Telegram cuando un cliente genera un pedido
+ */
+export async function notificarPedidoTelegramAction(pedidoId: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { notificarNuevoPedidoTelegram } = await import('../../lib/telegram');
+    return await notificarNuevoPedidoTelegram(pedidoId);
+  } catch (err: unknown) {
+    const errorMsg = err instanceof Error ? err.message : 'Error al enviar alerta a Telegram';
+    console.error('Error in notificarPedidoTelegramAction:', err);
+    return { success: false, error: errorMsg };
+  }
+}
+
+/**
+ * Prueba la conexión con el bot de Telegram
+ */
+export async function probarConexionTelegramAction(customToken?: string, customChatId?: string): Promise<{ success: boolean; botName?: string; error?: string }> {
+  try {
+    const { probarTelegram } = await import('../../lib/telegram');
+    return await probarTelegram(customToken, customChatId);
+  } catch (err: unknown) {
+    return { success: false, error: err instanceof Error ? err.message : 'Error al conectar con Telegram' };
+  }
+}
+
+
 

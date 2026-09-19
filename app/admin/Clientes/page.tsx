@@ -8,6 +8,7 @@ import { supabase } from '../../../lib/supabase';
 import { useThemeMode } from '../../../lib/useThemeMode';
 import { Plus, Search, Sun, Moon, ChevronLeft, ChevronRight, Edit3, Trash2, Key, Users, Save } from 'lucide-react';
 import { habilitarPortalClienteAdmin } from '../actions/adminAuth';
+import { notificarPedidoTelegramAction } from '../../tienda/actions';
 import { useSessionToken } from '../../../lib/hooks/useSessionToken';
 import { useEmpresaId } from '../../../lib/hooks/useEmpresaId';
 import {
@@ -209,6 +210,13 @@ export default function AdminMonitor() {
         const detalles = itemsProcesados.map(item => ({ pedido_id: pedidoId, empresa_id: empresaId, ...item }));
         const { error: detallesError } = await supabase.from('pedido_detalles').insert(detalles);
         if (detallesError) throw detallesError;
+      }
+
+      // Notificar al bot de Telegram
+      if (pedidoId) {
+        notificarPedidoTelegramAction(pedidoId).catch(err => {
+          console.warn('[Telegram] Error enviando alerta a Telegram:', err);
+        });
       }
 
       setIsModalOpen(false);

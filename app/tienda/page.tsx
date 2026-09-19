@@ -14,7 +14,7 @@ import {
 import Image from 'next/image';
 import { useProtectedRoute } from '../../lib/useProtectedRoute';
 import { useThemeMode } from '../../lib/useThemeMode';
-import { obtenerSignedUrlCliente } from './actions';
+import { obtenerSignedUrlCliente, notificarPedidoTelegramAction } from './actions';
 import ClienteCfdiModal from './ClienteCfdiModal';
 import DatosFiscalesModal from './DatosFiscalesModal';
 
@@ -409,6 +409,13 @@ export default function Tienda() {
         .insert(detallesAInsertar);
 
       if (detallesError) throw detallesError;
+
+      // 3. Notificación al Bot de Telegram (en segundo plano)
+      if (pedidoId) {
+        notificarPedidoTelegramAction(pedidoId).catch(err => {
+          console.warn('[Telegram] Error enviando alerta a Telegram:', err);
+        });
+      }
 
       // Éxito
       setPedidoExitoso(true);
