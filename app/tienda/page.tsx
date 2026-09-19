@@ -371,6 +371,34 @@ export default function Tienda() {
     });
   };
 
+  const fijarCantidadCarrito = (varianteId: string, cantidad: number) => {
+    const qty = Math.max(0, Math.floor(cantidad));
+    setCarrito(prev => {
+      const variante = variantes.find(v => v.id === varianteId);
+      const producto = productos.find(p => p.id === variante?.producto_id);
+      if (!variante || !producto) return prev;
+
+      const precioReal = preciosEspeciales[variante.id] || variante.precio_base;
+      const itemExistente = prev.find(item => item.variante_id === varianteId);
+
+      if (qty <= 0) {
+        return prev.filter(item => item.variante_id !== varianteId);
+      }
+
+      if (itemExistente) {
+        return prev.map(item => item.variante_id === varianteId ? { ...item, cantidad: qty } : item);
+      } else {
+        return [...prev, {
+          variante_id: variante.id,
+          producto_nombre: producto.nombre,
+          gramaje: variante.gramaje,
+          cantidad: qty,
+          precio_unitario: precioReal
+        }];
+      }
+    });
+  };
+
   const totalCarrito = carrito.reduce((sum, item) => sum + (item.cantidad * item.precio_unitario), 0);
 
   const enviarPedido = async () => {
@@ -632,50 +660,101 @@ export default function Tienda() {
                   const itemEnCarrito = carrito.find(item => item.variante_id === varianteSeleccionadaId);
 
                   return (
-                    <div key={producto.id} className="bg-white dark:bg-gray-950 rounded-xl shadow-md overflow-hidden border border-gray-200 dark:border-gray-800 hover:shadow-lg transition-all">
-                      <div className="h-36 bg-amber-500/10 dark:bg-amber-500/5 w-full relative flex items-center justify-center border-b border-gray-100 dark:border-gray-800/60">
-                        <span className="text-amber-600 dark:text-amber-400 font-extrabold text-xs tracking-widest uppercase">{producto.categoria}</span>
-                      </div>
+                    <div key={producto.id} className="bg-white dark:bg-gray-950 rounded-xl shadow-md overflow-hidden border border-gray-200 dark:border-gray-800 hover:shadow-lg transition-all flex flex-col justify-between">
+                      {/* Imagen si existe, o cabecera compacta si no existe */}
+                      {producto.imagen_url ? (
+                        <div className="h-36 w-full relative overflow-hidden bg-gray-100 dark:bg-gray-900 border-b border-gray-100 dark:border-gray-800">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={producto.imagen_url}
+                            alt={producto.nombre}
+                            className="w-full h-full object-cover"
+                          />
+                          <span className="absolute top-2.5 left-2.5 px-2.5 py-0.5 rounded-full text-[10px] font-black tracking-wider uppercase bg-black/60 text-amber-400 backdrop-blur-sm border border-amber-400/30 shadow-sm">
+                            {producto.categoria}
+                          </span>
+                        </div>
+                      ) : (
+                        <div className="px-5 pt-4 pb-1 flex items-center justify-between">
+                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-md text-[10px] font-black tracking-wider uppercase bg-amber-500/10 dark:bg-amber-500/20 text-amber-700 dark:text-amber-400 border border-amber-500/20">
+                            {producto.categoria}
+                          </span>
+                        </div>
+                      )}
 
-                      <div className="p-5">
-                        <h3 className="text-base font-bold text-gray-900 dark:text-white mb-4 leading-tight min-h-[2.5rem]">{producto.nombre}</h3>
+                      <div className="p-5 pt-3 flex-1 flex flex-col justify-between">
+                        <div>
+                          <h3 className="text-base font-bold text-gray-900 dark:text-white mb-3 leading-snug">
+                            {producto.nombre}
+                          </h3>
 
-                        <label className="block text-[10px] font-bold text-gray-450 dark:text-gray-500 uppercase mb-1">Presentación (Gramaje)</label>
-                        {variantesProducto.length <= 1 ? (
-                          <div className="w-full py-2 px-3 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-md text-xs mb-4 text-gray-800 dark:text-gray-200 font-medium">
-                            {variantesProducto[0]?.gramaje || 'Única'}
-                          </div>
-                        ) : (
-                          <select
-                            className="w-full border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white rounded-md shadow-sm focus:border-amber-500 focus:ring-amber-500 text-xs mb-4 outline-none"
-                            value={varianteSeleccionadaId || ''}
-                            onChange={(e) => setSeleccionGramaje({ ...seleccionGramaje, [producto.id]: e.target.value })}
-                          >
-                            {variantesProducto.map(v => (
-                              <option key={v.id} value={v.id}>{v.gramaje}</option>
-                            ))}
-                          </select>
-                        )}
+                          <label className="block text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase mb-1">
+                            Presentación (Gramaje)
+                          </label>
+                          {variantesProducto.length <= 1 ? (
+                            <div className="w-full py-2 px-3 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg text-xs mb-4 text-gray-800 dark:text-gray-200 font-medium">
+                              {variantesProducto[0]?.gramaje || 'Única'}
+                            </div>
+                          ) : (
+                            <select
+                              className="w-full py-2 px-3 border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white rounded-lg shadow-sm focus:border-amber-500 focus:ring-amber-500 text-xs mb-4 outline-none font-medium cursor-pointer"
+                              value={varianteSeleccionadaId || ''}
+                              onChange={(e) => setSeleccionGramaje({ ...seleccionGramaje, [producto.id]: e.target.value })}
+                            >
+                              {variantesProducto.map(v => (
+                                <option key={v.id} value={v.id}>{v.gramaje}</option>
+                              ))}
+                            </select>
+                          )}
+                        </div>
 
-                        <div className="flex items-end justify-between mt-4">
+                        <div className="flex items-center justify-between pt-3 border-t border-gray-100 dark:border-gray-800/80 mt-2">
                           <div>
                             {tienePrecioEspecial ? (
                               <>
                                 <p className="text-[10px] text-red-500 line-through font-semibold">${precioBase.toFixed(2)} MXN</p>
-                                <p className="text-xl font-black text-green-600 dark:text-emerald-500">${precioPactado.toFixed(2)}</p>
+                                <p className="text-xl font-black text-emerald-600 dark:text-emerald-400">${precioPactado.toFixed(2)}</p>
                               </>
                             ) : (
                               <p className="text-xl font-black text-gray-900 dark:text-white">${precioBase.toFixed(2)}</p>
                             )}
                           </div>
 
-                          <div className="flex items-center bg-gray-150 dark:bg-gray-900 rounded-lg p-1">
-                            <button onClick={() => varianteActiva && modificarCarrito(varianteActiva.id, 'restar')} className="p-1 rounded bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 shadow hover:bg-gray-50 dark:hover:bg-gray-700 transition">
-                              <Minus className="w-4 h-4" />
+                          {/* Selector de cantidad numérico con teclado directo y botones +/- */}
+                          <div className="flex items-center bg-gray-100 dark:bg-gray-900 rounded-lg p-1 border border-gray-200 dark:border-gray-800 shadow-sm">
+                            <button
+                              type="button"
+                              onClick={() => varianteActiva && modificarCarrito(varianteActiva.id, 'restar')}
+                              className="w-7 h-7 flex items-center justify-center rounded bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 active:scale-95 transition shadow-sm"
+                              title="Restar 1"
+                            >
+                              <Minus className="w-3.5 h-3.5" />
                             </button>
-                            <span className="w-10 text-center font-bold text-xs text-gray-900 dark:text-white">{itemEnCarrito ? itemEnCarrito.cantidad : 0}</span>
-                            <button onClick={() => varianteActiva && modificarCarrito(varianteActiva.id, 'sumar')} className="p-1 rounded bg-amber-600 text-white shadow hover:bg-amber-500 transition">
-                              <Plus className="w-4 h-4" />
+
+                            <input
+                              type="number"
+                              min="0"
+                              max="9999"
+                              value={itemEnCarrito?.cantidad || 0}
+                              onChange={(e) => {
+                                if (varianteActiva) {
+                                  const val = parseInt(e.target.value, 10);
+                                  fijarCantidadCarrito(varianteActiva.id, isNaN(val) ? 0 : val);
+                                }
+                              }}
+                              onFocus={(e) => e.target.select()}
+                              className="w-14 text-center font-black text-sm bg-transparent text-gray-900 dark:text-white focus:outline-none focus:bg-amber-50 dark:focus:bg-amber-950/30 focus:ring-1 focus:ring-amber-500 rounded mx-0.5 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                              placeholder="0"
+                              title="Escribe la cantidad directamente (ej. 90)"
+                            />
+
+                            <button
+                              type="button"
+                              onClick={() => varianteActiva && modificarCarrito(varianteActiva.id, 'sumar')}
+                              className="w-7 h-7 flex items-center justify-center rounded bg-amber-600 text-white hover:bg-amber-500 active:scale-95 transition shadow-sm"
+                              title="Sumar 1"
+                            >
+                              <Plus className="w-3.5 h-3.5" />
                             </button>
                           </div>
                         </div>
@@ -703,11 +782,44 @@ export default function Tienda() {
                   <div className="space-y-4">
                     {carrito.map(item => (
                       <div key={item.variante_id} className="flex justify-between items-center bg-gray-50 dark:bg-gray-900/50 p-3 rounded-lg border border-gray-100 dark:border-gray-800">
-                        <div>
-                          <p className="text-sm font-bold text-gray-900 dark:text-white">{item.producto_nombre}</p>
-                          <p className="text-xs text-gray-500 dark:text-gray-400">{item.gramaje} x {item.cantidad} uni.</p>
+                        <div className="flex-1 pr-2">
+                          <p className="text-sm font-bold text-gray-900 dark:text-white leading-tight">{item.producto_nombre}</p>
+                          <p className="text-xs text-gray-500 dark:text-gray-400">{item.gramaje} • ${(item.precio_unitario).toFixed(2)} c/u</p>
                         </div>
-                        <p className="text-sm font-bold text-gray-900 dark:text-white">${(item.cantidad * item.precio_unitario).toFixed(2)}</p>
+                        <div className="flex items-center gap-2">
+                          <div className="flex items-center bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-0.5 shadow-sm">
+                            <button
+                              type="button"
+                              onClick={() => modificarCarrito(item.variante_id, 'restar')}
+                              className="w-6 h-6 flex items-center justify-center text-gray-500 hover:text-gray-800 dark:hover:text-white rounded hover:bg-gray-100 dark:hover:bg-gray-700"
+                              title="Restar 1"
+                            >
+                              <Minus className="w-3 h-3" />
+                            </button>
+                            <input
+                              type="number"
+                              min="0"
+                              max="9999"
+                              value={item.cantidad}
+                              onChange={(e) => {
+                                const val = parseInt(e.target.value, 10);
+                                fijarCantidadCarrito(item.variante_id, isNaN(val) ? 0 : val);
+                              }}
+                              onFocus={(e) => e.target.select()}
+                              className="w-12 text-center text-xs font-black bg-transparent text-gray-900 dark:text-white focus:outline-none focus:bg-amber-50 dark:focus:bg-amber-950/30 rounded [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                              title="Escribe la cantidad directamente"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => modificarCarrito(item.variante_id, 'sumar')}
+                              className="w-6 h-6 flex items-center justify-center text-white bg-amber-600 hover:bg-amber-500 rounded"
+                              title="Sumar 1"
+                            >
+                              <Plus className="w-3 h-3" />
+                            </button>
+                          </div>
+                          <p className="text-sm font-black text-gray-900 dark:text-white w-16 text-right">${(item.cantidad * item.precio_unitario).toFixed(2)}</p>
+                        </div>
                       </div>
                     ))}
                   </div>
