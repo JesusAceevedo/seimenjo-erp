@@ -8,16 +8,29 @@ import { supabase } from '../../lib/supabase';
 import {
   ShoppingCart, LogOut, Plus, Minus, Send, CheckCircle2, AlertTriangle,
   FileText, FileCode, RefreshCw, Lock, Sparkles, Sun, Moon,
-  Package, Clock, Truck, ChevronDown, ChevronUp, CheckCircle
+  Package, Clock, Truck, ChevronDown, ChevronUp, CheckCircle, Eye
 } from 'lucide-react';
 import Image from 'next/image';
 import { useProtectedRoute } from '../../lib/useProtectedRoute';
 import { useThemeMode } from '../../lib/useThemeMode';
+import { obtenerSignedUrlCliente } from './actions';
+import ClienteCfdiModal from './ClienteCfdiModal';
 
 // Interfaces de tipado
 interface Producto { id: string; nombre: string; categoria: string; imagen_url: string; }
 interface Variante { id: string; producto_id: string; gramaje: string; precio_base: number; }
 interface ItemCarrito { variante_id: string; producto_nombre: string; gramaje: string; cantidad: number; precio_unitario: number; }
+
+export interface FacturaClienteResumen {
+  id: string;
+  uuid_fiscal?: string | null;
+  serie_folio?: string | null;
+  xml_url?: string | null;
+  pdf_url?: string | null;
+  fecha_emision?: string | null;
+  total?: number | null;
+  estatus_factura?: { nombre?: string } | null;
+}
 
 interface DetallePedido {
   id: string;
@@ -45,6 +58,7 @@ interface PedidoCliente {
   precio_total: number;
   comentarios?: string;
   pedido_detalles?: DetallePedido[];
+  facturas_clientes?: FacturaClienteResumen[];
 }
 
 export default function Tienda() {
@@ -111,6 +125,16 @@ export default function Tienda() {
               gramaje,
               productos(nombre)
             )
+          ),
+          facturas_clientes(
+            id,
+            uuid_fiscal,
+            serie_folio,
+            xml_url,
+            pdf_url,
+            fecha_emision,
+            total,
+            estatus_factura(nombre)
           )
         `)
         .eq('cliente_id', clienteId)
@@ -135,6 +159,11 @@ export default function Tienda() {
   const [facturas, setFacturas] = useState<any[]>([]);
   const [loadingFacturas, setLoadingFacturas] = useState(false);
   const [errorFacturas, setErrorFacturas] = useState('');
+  const [descargandoDoc, setDescargandoDoc] = useState<string | null>(null);
+  const [cfdiViewerState, setCfdiViewerState] = useState<{ open: boolean; xmlUrl: string | null; serieFolio?: string | null }>({
+    open: false,
+    xmlUrl: null
+  });
 
   const cargarFacturas = async (clienteId: string) => {
     setLoadingFacturas(true);
@@ -162,22 +191,43 @@ export default function Tienda() {
   };
 
   const descargarArchivo = async (path: string) => {
+    if (!path) {
+      alert("No se encontró la ruta del archivo de la factura.");
+      return;
+    }
+
+    if (path.startsWith('http://') || path.startsWith('https://')) {
+      window.open(path, '_blank');
+      return;
+    }
+
+    setDescargandoDoc(path);
     try {
-      const { data, error } = await supabase.storage.from('facturas').createSignedUrl(path, 60);
+      // 1. Obtener URL firmada vía Server Action seguro con supabaseAdmin (sin bloqueo de RLS en storage)
+      const res = await obtenerSignedUrlCliente(path);
+      if (res.success && res.url) {
+        window.open(res.url, '_blank');
+        return;
+      }
+
+      // 2. Fallback de cliente si la acción no retornó URL directa
+      const { data, error } = await supabase.storage.from('facturas').createSignedUrl(path, 120);
       if (error) throw error;
       if (data?.signedUrl) {
         window.open(data.signedUrl, '_blank');
       } else {
-        alert("No se pudo generar el enlace de descarga.");
+        alert(res?.error || "No se pudo generar el enlace de descarga.");
       }
     } catch (err: unknown) {
       if (err instanceof Error) {
-        console.error(err);
+        console.error("Error al descargar archivo:", err);
         alert('Error al descargar el archivo: ' + err.message);
       } else {
-        console.error(err);
+        console.error("Error al descargar archivo:", err);
         alert('Error al descargar el archivo');
       }
+    } finally {
+      setDescargandoDoc(null);
     }
   };
 
@@ -770,6 +820,13 @@ export default function Tienda() {
                             {pedido.estatus_pago?.toLowerCase() === 'liquidado' ? '💵 Liquidado' : '⏳ Pago Pendiente'}
                           </span>
 
+                          {pedido.facturas_clientes && pedido.facturas_clientes.length > 0 && (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-blue-50 dark:bg-blue-950/30 text-blue-700 dark:text-blue-400 border border-blue-200 dark:border-blue-800/60">
+                              <FileText className="w-3.5 h-3.5" />
+                              Facturado
+                            </span>
+                          )}
+
                           <div className="text-right ml-auto sm:ml-2">
                             <div className="text-base font-black text-gray-900 dark:text-white">
                               ${Number(pedido.precio_total).toFixed(2)} <span className="text-xs font-normal text-gray-500">MXN</span>
@@ -789,6 +846,88 @@ export default function Tienda() {
                       {/* Detalles del pedido (acordeón desplegable) */}
                       {estaAbierto && (
                         <div className="p-4 sm:p-5 bg-gray-50 dark:bg-gray-900/40">
+                          {/* Factura del pedido si existe */}
+                          {pedido.facturas_clientes && pedido.facturas_clientes.length > 0 && (
+                            <div className="mb-4 p-3.5 bg-emerald-50/80 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/60 rounded-xl">
+                              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                                <div>
+                                  <div className="flex items-center gap-2">
+                                    <FileText className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                                    <span className="text-xs font-bold text-emerald-900 dark:text-emerald-200">
+                                      Factura Fiscal: {pedido.facturas_clientes[0].serie_folio || 'CFDI Emitido'}
+                                    </span>
+                                  </div>
+                                  {pedido.facturas_clientes[0].uuid_fiscal && (
+                                    <p className="font-mono text-[10px] text-emerald-700/80 dark:text-emerald-400/80 mt-0.5">
+                                      UUID: {pedido.facturas_clientes[0].uuid_fiscal}
+                                    </p>
+                                  )}
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  {pedido.facturas_clientes[0].xml_url && (
+                                    <button
+                                      onClick={() => descargarArchivo(pedido.facturas_clientes![0].xml_url!)}
+                                      disabled={descargandoDoc === pedido.facturas_clientes[0].xml_url}
+                                      className="inline-flex items-center gap-1 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold transition shadow-sm hover:scale-105 active:scale-95 disabled:opacity-50"
+                                      title="Descargar XML"
+                                    >
+                                      {descargandoDoc === pedido.facturas_clientes[0].xml_url ? (
+                                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                                      ) : (
+                                        <FileCode className="w-3.5 h-3.5" />
+                                      )}
+                                      XML
+                                    </button>
+                                  )}
+                                  {pedido.facturas_clientes[0].pdf_url ? (
+                                    <div className="flex items-center gap-2">
+                                      <button
+                                        onClick={() => descargarArchivo(pedido.facturas_clientes![0].pdf_url!)}
+                                        disabled={descargandoDoc === pedido.facturas_clientes[0].pdf_url}
+                                        className="inline-flex items-center gap-1 px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs font-bold transition shadow-sm hover:scale-105 active:scale-95 disabled:opacity-50"
+                                        title="Descargar PDF"
+                                      >
+                                        {descargandoDoc === pedido.facturas_clientes[0].pdf_url ? (
+                                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                                        ) : (
+                                          <FileText className="w-3.5 h-3.5" />
+                                        )}
+                                        PDF
+                                      </button>
+                                      {pedido.facturas_clientes[0].xml_url && (
+                                        <button
+                                          onClick={() => setCfdiViewerState({
+                                            open: true,
+                                            xmlUrl: pedido.facturas_clientes![0].xml_url!,
+                                            serieFolio: pedido.facturas_clientes![0].serie_folio || pedido.facturas_clientes![0].uuid_fiscal
+                                          })}
+                                          className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-xs font-bold transition shadow-sm hover:scale-105 active:scale-95"
+                                          title="Ver representación impresa CFDI"
+                                        >
+                                          <Eye className="w-3.5 h-3.5" />
+                                          CFDI
+                                        </button>
+                                      )}
+                                    </div>
+                                  ) : pedido.facturas_clientes[0].xml_url ? (
+                                    <button
+                                      onClick={() => setCfdiViewerState({
+                                        open: true,
+                                        xmlUrl: pedido.facturas_clientes![0].xml_url!,
+                                        serieFolio: pedido.facturas_clientes![0].serie_folio || pedido.facturas_clientes![0].uuid_fiscal
+                                      })}
+                                      className="inline-flex items-center gap-1 px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-xs font-bold transition shadow-sm hover:scale-105 active:scale-95"
+                                      title="Ver representación impresa del XML (CFDI)"
+                                    >
+                                      <Eye className="w-3.5 h-3.5" />
+                                      Ver PDF (CFDI)
+                                    </button>
+                                  ) : null}
+                                </div>
+                              </div>
+                            </div>
+                          )}
+
                           {pedido.comentarios && (
                             <div className="mb-4 p-3 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/40 rounded-xl text-xs text-amber-900 dark:text-amber-200">
                               <span className="font-bold block mb-0.5">Instrucciones de entrega:</span>
@@ -896,14 +1035,17 @@ export default function Tienda() {
                       {facturas.map((fac) => {
                         const esEntregado = fac.pedidos?.estatus_pedido === 'Entregado';
                         const numPedido = fac.pedidos?.numero_pedido || 'N/A';
+                        const tieneXml = Boolean(fac.xml_url);
+                        const tienePdf = Boolean(fac.pdf_url);
+                        const tieneArchivos = tieneXml || tienePdf;
 
                         return (
                           <tr key={fac.id} className="hover:bg-gray-50 dark:hover:bg-gray-900/40 transition-colors">
                             <td className="p-4">
                               <div className="font-mono text-xs font-bold text-gray-900 dark:text-white" title={fac.uuid_fiscal}>
-                                {fac.serie_folio || `${fac.uuid_fiscal.substring(0, 8)}...`}
+                                {fac.serie_folio || (fac.uuid_fiscal ? `${fac.uuid_fiscal.substring(0, 8)}...` : 'Sin Folio')}
                               </div>
-                              <div className="text-[10px] text-gray-400 dark:text-gray-500 font-mono mt-0.5">{fac.uuid_fiscal}</div>
+                              <div className="text-[10px] text-gray-400 dark:text-gray-500 font-mono mt-0.5">{fac.uuid_fiscal || 'Sin UUID'}</div>
                             </td>
                             <td className="p-4">
                               <span className="font-mono font-bold text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 px-2 py-1 rounded text-xs">
@@ -911,10 +1053,10 @@ export default function Tienda() {
                               </span>
                             </td>
                             <td className="p-4 text-gray-600 dark:text-gray-450">
-                              {new Date(fac.fecha_emision).toLocaleDateString()}
+                              {fac.fecha_emision ? new Date(fac.fecha_emision).toLocaleDateString() : 'N/A'}
                             </td>
                             <td className="p-4 text-right font-bold text-gray-900 dark:text-white">
-                              ${Number(fac.total).toFixed(2)} MXN
+                              ${Number(fac.total || 0).toFixed(2)} MXN
                             </td>
                             <td className="p-4">
                               <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold ${fac.estatus_factura?.nombre === 'Facturado'
@@ -925,38 +1067,81 @@ export default function Tienda() {
                               </span>
                             </td>
                             <td className="p-4 text-center">
-                              {esEntregado ? (
-                                <div className="flex justify-center gap-2">
-                                  {fac.xml_url ? (
+                              {tieneArchivos ? (
+                                <div className="flex justify-center items-center gap-2">
+                                  {tieneXml ? (
                                     <button
                                       onClick={() => descargarArchivo(fac.xml_url)}
-                                      className="inline-flex items-center gap-1 px-3 py-1.5 bg-blue-50 dark:bg-blue-950/30 hover:bg-blue-100 dark:hover:bg-blue-900/40 text-blue-600 dark:text-blue-400 border border-blue-200 dark:border-blue-900/40 rounded-lg text-xs font-bold transition-all shadow-sm"
-                                      title="Descargar XML"
+                                      disabled={descargandoDoc === fac.xml_url}
+                                      className="inline-flex items-center gap-1 px-3 py-1.5 bg-blue-50 dark:bg-blue-950/30 hover:bg-blue-100 dark:hover:bg-blue-900/40 text-blue-600 dark:text-blue-400 border border-blue-200 dark:border-blue-900/40 rounded-lg text-xs font-bold transition-all shadow-sm hover:scale-105 active:scale-95 disabled:opacity-50"
+                                      title="Descargar archivo XML"
                                     >
-                                      <FileCode className="w-3.5 h-3.5" />
+                                      {descargandoDoc === fac.xml_url ? (
+                                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                                      ) : (
+                                        <FileCode className="w-3.5 h-3.5" />
+                                      )}
                                       XML
                                     </button>
                                   ) : (
                                     <span className="text-gray-400 text-xs">-</span>
                                   )}
-                                  {fac.pdf_url ? (
+                                  {tienePdf ? (
+                                    <div className="flex items-center gap-1.5">
+                                      <button
+                                        onClick={() => descargarArchivo(fac.pdf_url)}
+                                        disabled={descargandoDoc === fac.pdf_url}
+                                        className="inline-flex items-center gap-1 px-3 py-1.5 bg-red-50 dark:bg-red-950/30 hover:bg-red-100 dark:hover:bg-red-900/40 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-900/40 rounded-lg text-xs font-bold transition-all shadow-sm hover:scale-105 active:scale-95 disabled:opacity-50"
+                                        title="Descargar archivo PDF"
+                                      >
+                                        {descargandoDoc === fac.pdf_url ? (
+                                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                                        ) : (
+                                          <FileText className="w-3.5 h-3.5" />
+                                        )}
+                                        PDF
+                                      </button>
+                                      {tieneXml && (
+                                        <button
+                                          onClick={() => setCfdiViewerState({
+                                            open: true,
+                                            xmlUrl: fac.xml_url,
+                                            serieFolio: fac.serie_folio || fac.uuid_fiscal
+                                          })}
+                                          className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-amber-50 dark:bg-amber-950/20 hover:bg-amber-100 dark:hover:bg-amber-900/40 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-800/50 rounded-lg text-xs font-bold transition-all shadow-sm hover:scale-105 active:scale-95"
+                                          title="Ver representación impresa CFDI"
+                                        >
+                                          <Eye className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+                                          CFDI
+                                        </button>
+                                      )}
+                                    </div>
+                                  ) : tieneXml ? (
                                     <button
-                                      onClick={() => descargarArchivo(fac.pdf_url)}
-                                      className="inline-flex items-center gap-1 px-3 py-1.5 bg-red-50 dark:bg-red-950/30 hover:bg-red-100 dark:hover:bg-red-900/40 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-900/40 rounded-lg text-xs font-bold transition-all shadow-sm"
-                                      title="Descargar PDF"
+                                      onClick={() => setCfdiViewerState({
+                                        open: true,
+                                        xmlUrl: fac.xml_url,
+                                        serieFolio: fac.serie_folio || fac.uuid_fiscal
+                                      })}
+                                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-50 dark:bg-amber-950/30 hover:bg-amber-100 dark:hover:bg-amber-900/40 text-amber-700 dark:text-amber-400 border border-amber-300 dark:border-amber-800/60 rounded-lg text-xs font-bold transition-all shadow-sm hover:scale-105 active:scale-95"
+                                      title="Ver representación impresa del XML (CFDI) para consultar o imprimir a PDF"
                                     >
-                                      <FileText className="w-3.5 h-3.5" />
-                                      PDF
+                                      <Eye className="w-3.5 h-3.5" />
+                                      Ver PDF (CFDI)
                                     </button>
                                   ) : (
                                     <span className="text-gray-400 text-xs">-</span>
                                   )}
                                 </div>
-                              ) : (
+                              ) : !esEntregado && fac.pedidos ? (
                                 <div className="flex items-center justify-center gap-1.5 text-amber-600 dark:text-amber-400 text-xs bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/50 py-1.5 px-3 rounded-lg w-max mx-auto font-medium">
                                   <Lock className="w-3.5 h-3.5" />
                                   <span>Disponible al entregar</span>
                                 </div>
+                              ) : (
+                                <span className="text-gray-400 dark:text-gray-500 text-xs italic">
+                                  Sin archivos adjuntos
+                                </span>
                               )}
                             </td>
                           </tr>
@@ -970,6 +1155,15 @@ export default function Tienda() {
           </div>
         )}
       </div>
+
+      {/* Modal de Representación Impresa CFDI */}
+      {cfdiViewerState.open && cfdiViewerState.xmlUrl && (
+        <ClienteCfdiModal
+          xmlUrl={cfdiViewerState.xmlUrl}
+          serieFolio={cfdiViewerState.serieFolio}
+          onClose={() => setCfdiViewerState({ open: false, xmlUrl: null })}
+        />
+      )}
     </div>
   );
 }
