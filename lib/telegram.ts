@@ -14,6 +14,19 @@ function escapeTgHtml(text: string | number | null | undefined): string {
     .replace(/>/g, '&gt;');
 }
 
+const DEFAULT_TELEGRAM_BOT_TOKEN = '8560125574:AAG0DnhejKkfcOvi3rka0Cn-jLA9aTx0PiI';
+const DEFAULT_TELEGRAM_CHAT_ID = '-1004303384153';
+
+/**
+ * Obtiene las credenciales del bot de Telegram desde process.env o defaults configurados
+ */
+function getTelegramCredentials(customChatId?: string): { botToken?: string; chatId?: string } {
+  const botToken = (process.env.TELEGRAM_BOT_TOKEN || DEFAULT_TELEGRAM_BOT_TOKEN)?.trim();
+  const chatId = customChatId?.trim() || (process.env.TELEGRAM_CHAT_ID || DEFAULT_TELEGRAM_CHAT_ID)?.trim();
+
+  return { botToken, chatId };
+}
+
 /**
  * Envía un mensaje en formato HTML a Telegram usando el bot configurado
  */
@@ -21,11 +34,10 @@ export async function enviarMensajeTelegram(
   mensajeHtml: string,
   customChatId?: string
 ): Promise<{ success: boolean; error?: string; data?: unknown }> {
-  const botToken = process.env.TELEGRAM_BOT_TOKEN?.trim();
-  const chatId = customChatId?.trim() || process.env.TELEGRAM_CHAT_ID?.trim();
+  const { botToken, chatId } = getTelegramCredentials(customChatId);
 
   if (!botToken || !chatId) {
-    const errorMsg = 'Configuración incompleta: TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID no están definidos en variables de entorno.';
+    const errorMsg = 'Configuración incompleta: TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID no están definidos.';
     console.warn(`[Telegram] ${errorMsg}`);
     return { success: false, error: errorMsg };
   }
@@ -191,8 +203,9 @@ export async function notificarNuevoPedidoTelegram(pedidoId: string): Promise<{ 
  * Prueba de conexión para verificar que el token y chat ID sean válidos
  */
 export async function probarTelegram(customToken?: string, customChatId?: string): Promise<{ success: boolean; botName?: string; error?: string }> {
-  const token = customToken?.trim() || process.env.TELEGRAM_BOT_TOKEN?.trim();
-  const chatId = customChatId?.trim() || process.env.TELEGRAM_CHAT_ID?.trim();
+  const creds = getTelegramCredentials(customChatId);
+  const token = customToken?.trim() || creds.botToken;
+  const chatId = customChatId?.trim() || creds.chatId;
 
   if (!token) {
     return { success: false, error: 'TELEGRAM_BOT_TOKEN no configurado' };

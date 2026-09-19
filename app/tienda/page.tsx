@@ -438,11 +438,13 @@ export default function Tienda() {
 
       if (detallesError) throw detallesError;
 
-      // 3. Notificación al Bot de Telegram (en segundo plano)
+      // 3. Notificación al Bot de Telegram
       if (pedidoId) {
-        notificarPedidoTelegramAction(pedidoId).catch(err => {
-          console.warn('[Telegram] Error enviando alerta a Telegram:', err);
-        });
+        try {
+          await notificarPedidoTelegramAction(pedidoId);
+        } catch (tgErr) {
+          console.warn('[Telegram] Error enviando alerta a Telegram:', tgErr);
+        }
       }
 
       // Éxito
