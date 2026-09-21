@@ -28,21 +28,42 @@ export class ProductoRepository {
   }
 
   async listarCategorias(): Promise<CatalogItem[]> {
-    const { data, error } = await supabase
-      .from('cat_categorias_producto')
-      .select('id, nombre')
-      .order('nombre');
-    if (error) throw error;
-    return (data || []) as CatalogItem[];
+    try {
+      const { data, error } = await supabase
+        .from('cat_categories_producto')
+        .select('id, nombre')
+        .order('nombre');
+      if (error) {
+        const retry = await supabase
+          .from('cat_categorias_producto')
+          .select('id, nombre')
+          .order('nombre');
+        if (!retry.error && retry.data) return retry.data as CatalogItem[];
+        console.warn('Advertencia al consultar categorías:', error.message);
+        return [];
+      }
+      return (data || []) as CatalogItem[];
+    } catch (err) {
+      console.warn('Excepción al cargar categorías:', err);
+      return [];
+    }
   }
 
   async listarUnidadesMedida(): Promise<CatalogItem[]> {
-    const { data, error } = await supabase
-      .from('cat_unidades_medida')
-      .select('id, nombre')
-      .order('nombre');
-    if (error) throw error;
-    return (data || []) as CatalogItem[];
+    try {
+      const { data, error } = await supabase
+        .from('cat_unidades_medida')
+        .select('id, nombre')
+        .order('nombre');
+      if (error) {
+        console.warn('Advertencia al consultar unidades de medida:', error.message);
+        return [];
+      }
+      return (data || []) as CatalogItem[];
+    } catch (err) {
+      console.warn('Excepción al cargar unidades de medida:', err);
+      return [];
+    }
   }
 
   async listarVariantesPorProducto(productoId: string): Promise<Variante[]> {
@@ -176,7 +197,7 @@ export class ProductoRepository {
   }
 
   async upsertCatalogItem(type: CatalogType, nombre: string, id?: string): Promise<void> {
-    const tableName = type === 'categorias' ? 'cat_categorias_producto' : 'cat_unidades_medida';
+    const tableName = type === 'categorias' ? 'cat_categories_producto' : 'cat_unidades_medida';
     const payload: { id?: string; nombre: string } = { nombre: nombre.trim() };
     if (id) payload.id = id;
 
@@ -184,15 +205,28 @@ export class ProductoRepository {
       .from(tableName)
       .upsert(payload);
 
-    if (error) throw error;
+    if (error) {
+      if (type === 'categorias') {
+        const fallback = await supabase.from('cat_categorias_producto').upsert(payload);
+        if (!fallback.error) return;
+      }
+      throw error;
+    }
   }
 
   async eliminarCatalogItem(type: CatalogType, id: string): Promise<void> {
-    const tableName = type === 'categorias' ? 'cat_categorias_producto' : 'cat_unidades_medida';
+    const tableName = type === 'categorias' ? 'cat_categories_producto' : 'cat_unidades_medida';
     const { error } = await supabase
       .from(tableName)
       .delete()
       .eq('id', id);
-    if (error) throw error;
+
+    if (error) {
+      if (type === 'categorias') {
+        const fallback = await supabase.from('cat_categorias_producto').delete().eq('id', id);
+        if (!fallback.error) return;
+      }
+      throw error;
+    }
   }
 }

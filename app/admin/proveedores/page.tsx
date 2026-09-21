@@ -1,148 +1,27 @@
 'use client';
-/* eslint-disable @typescript-eslint/no-explicit-any */
-// app/admin/proveedores/page.tsx
-// Página independiente de gestión de proveedores.
 
-import React, { useState, useEffect, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
-import { supabase } from '../../../lib/supabase';
-import { obtenerSignedUrl } from '../gastos/actions';
+import React from 'react';
 import ProveedoresTab from '../_components/ProveedoresTab';
 import { useThemeMode } from '../../../lib/useThemeMode';
-import { useSessionToken } from '../../../lib/hooks/useSessionToken';
-
-// ── Types ─────────────────────────────────────────────────────────────────────
-
-interface ProveedorModal {
-  open: boolean;
-  proveedor: any | null;
-  loading: boolean;
-  error: string;
-}
-
-// ── Page ─────────────────────────────────────────────────────────────────────
+import { useProveedores } from '../../../lib/modules/proveedores/hooks/useProveedores';
 
 export default function ProveedoresPage() {
-  const router = useRouter();
   const { isDarkMode } = useThemeMode();
-
-  // Estado
-  const [proveedores, setProveedores] = useState<any[]>([]);
-  const [busquedaProveedor, setBusquedaProveedor] = useState('');
-  const [selectedProveedor, setSelectedProveedor] = useState<any | null>(null);
-  const [proveedorFacturas, setProveedorFacturas] = useState<any[]>([]);
-  const [cargandoFacturasProveedor, setCargandoFacturasProveedor] = useState(false);
-  const [proveedorModal, setProveedorModal] = useState<ProveedorModal>({
-    open: false, proveedor: null, loading: false, error: ''
-  });
-
-  const getSessionToken = useSessionToken();
-
-  // ── Fetch ──────────────────────────────────────────────────────────────────
-
-  const fetchProveedores = useCallback(async () => {
-    const { data } = await supabase
-      .from('proveedores')
-      .select('*')
-      .order('nombre_comercial', { ascending: true });
-    setProveedores(data || []);
-  }, []);
-
-  useEffect(() => {
-    const init = async () => {
-      const token = await getSessionToken();
-      if (!token) {
-        await new Promise(resolve => setTimeout(resolve, 500));
-        const retryToken = await getSessionToken();
-        if (!retryToken) return router.push('/admin/login');
-      }
-      await fetchProveedores();
-    };
-    init();
-  }, [router, fetchProveedores]);
-
-  // ── Handlers ──────────────────────────────────────────────────────────────
-
-  const cargarDetallesProveedor = async (proveedor: any) => {
-    setSelectedProveedor(proveedor);
-    setCargandoFacturasProveedor(true);
-    setProveedorFacturas([]);
-    try {
-      const { data } = await supabase
-        .from('gastos')
-        .select('id, fecha_gasto, concepto, monto, uuid_fiscal, gasto_padre_id, xml_url, pdf_url')
-        .eq('proveedor_id', proveedor.id)
-        .order('fecha_gasto', { ascending: false });
-      setProveedorFacturas(data || []);
-    } catch (err) {
-      console.error('Error al cargar facturas del proveedor:', err);
-    } finally {
-      setCargandoFacturasProveedor(false);
-    }
-  };
-
-  const handleSaveProveedor = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!proveedorModal.proveedor) return;
-    setProveedorModal(prev => ({ ...prev, loading: true, error: '' }));
-
-    try {
-      const { id, ...fields } = proveedorModal.proveedor;
-      // Obtener empresa_id de la sesión
-      const sesion = localStorage.getItem('seimenjo_session');
-      const empresaId = sesion ? JSON.parse(sesion).empresa_id : null;
-
-      if (id) {
-        const { error } = await supabase.from('proveedores').update(fields).eq('id', id);
-        if (error) throw error;
-        // Refrescar el proveedor seleccionado
-        const { data: updated } = await supabase.from('proveedores').select('*').eq('id', id).single();
-        if (updated) await cargarDetallesProveedor(updated);
-      } else {
-        const { data: res, error } = await supabase
-          .from('proveedores')
-          .insert({ ...fields, empresa_id: empresaId })
-          .select()
-          .single();
-        if (error) throw error;
-        if (res) await cargarDetallesProveedor(res);
-      }
-
-      setProveedorModal({ open: false, proveedor: null, loading: false, error: '' });
-      await fetchProveedores();
-    } catch (err: any) {
-      setProveedorModal(prev => ({ ...prev, loading: false, error: err.message || 'Error al guardar el proveedor' }));
-    }
-  };
-
-  const handleDeleteProveedor = async (id: string) => {
-    if (!confirm('¿Deseas eliminar este proveedor? Esta acción no se puede deshacer.')) return;
-    try {
-      const { error } = await supabase.from('proveedores').delete().eq('id', id);
-      if (error) throw error;
-      setSelectedProveedor(null);
-      setProveedorFacturas([]);
-      await fetchProveedores();
-    } catch (err: any) {
-      alert('Error al eliminar el proveedor: ' + err.message);
-    }
-  };
-
-  const handleDownloadFile = async (path: string) => {
-    try {
-      const token = await getSessionToken();
-      const res = await obtenerSignedUrl(path, token);
-      if (res.success && res.url) {
-        window.open(res.url, '_blank');
-      } else {
-        alert('No se pudo obtener el enlace: ' + res.error);
-      }
-    } catch (err: any) {
-      alert('Error al descargar: ' + err.message);
-    }
-  };
-
-  // ── Render ────────────────────────────────────────────────────────────────
+  const {
+    proveedores,
+    busquedaProveedor,
+    setBusquedaProveedor,
+    selectedProveedor,
+    proveedorFacturas,
+    cargandoFacturasProveedor,
+    proveedorModal,
+    setProveedorModal,
+    cargarDetallesProveedor,
+    handleSaveProveedor,
+    handleDeleteProveedor,
+    handleDownloadFile,
+    fetchProveedores
+  } = useProveedores();
 
   return (
     <div className={`flex flex-col h-full font-sans ${isDarkMode ? 'dark' : ''}`}>
@@ -163,7 +42,7 @@ export default function ProveedoresPage() {
           selectedProveedor={selectedProveedor}
           proveedorFacturas={proveedorFacturas}
           cargandoFacturasProveedor={cargandoFacturasProveedor}
-          proveedorModal={proveedorModal}
+          proveedorModal={proveedorModal as any}
           setProveedorModal={setProveedorModal as any}
           cargarDetallesProveedor={cargarDetallesProveedor}
           handleSaveProveedor={handleSaveProveedor}
@@ -175,3 +54,4 @@ export default function ProveedoresPage() {
     </div>
   );
 }
+

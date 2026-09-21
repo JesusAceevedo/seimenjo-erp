@@ -1,814 +1,149 @@
 'use client';
-/* eslint-disable @typescript-eslint/no-explicit-any */
-/* eslint-disable react-hooks/exhaustive-deps */
 
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { useRouter, usePathname } from 'next/navigation';
-import { supabase } from '../../../lib/supabase';
+import React from 'react';
+import { Plus, Search, Sun, Moon, Users } from 'lucide-react';
 import { useThemeMode } from '../../../lib/useThemeMode';
-import { Plus, Search, Sun, Moon, ChevronLeft, ChevronRight, Edit3, Trash2, Key, Users, Save } from 'lucide-react';
-import { habilitarPortalClienteAdmin } from '../actions/adminAuth';
-import { notificarPedidoTelegramAction } from '../../tienda/actions';
-import { useSessionToken } from '../../../lib/hooks/useSessionToken';
-import { useEmpresaId } from '../../../lib/hooks/useEmpresaId';
-import {
-  CATALOGO_REGIMEN_FISCAL,
-  CATALOGO_USO_CFDI,
-  getDescripcionRegimenFiscal,
-  getDescripcionUsoCfdi
-} from '../../../lib/sat-catalogs';
+import { useClientes } from '../../../lib/modules/clientes/hooks/useClientes';
+import { ClientesTable } from './_components/ClientesTable';
+import { ClienteFormModal } from './_components/ClienteFormModal';
+import { ClientePortalModal } from './_components/ClientePortalModal';
 
-
-
-const PEDIDO_INICIAL = {
-  cliente_id: '', cliente_nombre: '', cliente_telefono: '',
-  fecha_produccion: '', fecha_entrega: '', entregado_por: '', costo_envio: 0, comentarios_generales: '',
-  items: [{ variante_id: '', cantidad: 0, comentarios: '' }]
-};
-
-const CLIENTE_INICIAL = {
-  nombre_local: '', rfc: '', razon_social: '', regimen_fiscal: '',
-  codigo_postal: '', uso_cfdi: '', email_facturacion: '', telefono: '',
-  facturar_publico_general: false
-};
-
-export default function AdminMonitor() {
-  const router = useRouter();
-  const pathname = usePathname(); // <-- NUEVO: Leemos la ruta de Next.js
-  const getToken = useSessionToken();
-  const getEmpresaId = useEmpresaId();
-
-  // Control de Navegación Interna basado en la URL del Layout
-  // Si la ruta contiene "clientes" mostramos el módulo, si no, ventas.
-  const vistaActiva = pathname?.toLowerCase().includes('clientes') ? 'clientes' : 'ventas';
-
-  // Datos principales
-  const [pedidos, setPedidos] = useState<any[]>([]);
-  const [productos, setProductos] = useState<any[]>([]);
-  const [clientes, setClientes] = useState<any[]>([]);
-
-  // Paginación y Filtros de Órdenes
-  const [page, setPage] = useState(0);
-  const [pageSize, setPageSize] = useState(6);
-  const [filtroCliente, setFiltroCliente] = useState('');
-
-  // Paginación y Filtros de Clientes
-  const [pageClientes, setPageClientes] = useState(0);
-  const [pageSizeClientes, setPageSizeClientes] = useState(8);
-  const [busquedaCliente, setBusquedaCliente] = useState('');
-
-  // Calcular pageSizes dinámicamente según la altura del viewport para evitar scroll principal
-  useEffect(() => {
-    const calcularPageSizes = () => {
-      const vh = window.innerHeight;
-
-      // Ventas:
-      const espacioVentas = vh - 450;
-      setPageSize(Math.max(2, Math.floor(espacioVentas / 85)));
-
-      // Clientes:
-      const espacioClientes = vh - 325;
-      setPageSizeClientes(Math.max(3, Math.floor(espacioClientes / 56)));
-    };
-
-    calcularPageSizes();
-    window.addEventListener('resize', calcularPageSizes);
-    return () => window.removeEventListener('resize', calcularPageSizes);
-  }, []);
-
-  // Estados de UI y Modales
+export default function ClientesPage() {
   const { isDarkMode, toggleDarkMode } = useThemeMode();
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [isClienteModalOpen, setIsClienteModalOpen] = useState(false);
-  const [editarClienteModal, setEditarClienteModal] = useState({ open: false, cliente: null as any });
-  const [liquidarModal, setLiquidarModal] = useState({ open: false, pedido: null as any, fecha: '', costo_envio: 0, entregado_por: '' });
-  const [facturaModal, setFacturaModal] = useState({ open: false, pedido: null as any, folio: '' });
-  const [portalModal, setPortalModal] = useState({ open: false, cliente: null as any, email: '', password: '' });
-  const [habilitandoPortal, setHabilitandoPortal] = useState(false);
+  const {
+    loading,
+    clientesFiltrados,
+    paginatedClientes,
+    busquedaCliente,
+    setBusquedaCliente,
+    pageClientes,
+    setPageClientes,
+    pageSizeClientes,
 
-  // Formularios
-  const [nuevoPedido, setNuevoPedido] = useState(PEDIDO_INICIAL);
-  const [nuevoCliente, setNuevoCliente] = useState(CLIENTE_INICIAL);
-  const [isLoadingCliente, setIsLoadingCliente] = useState(false);
-  const [errorClienteModal, setErrorClienteModal] = useState('');
-  const [isLoadingEditarCliente, setIsLoadingEditarCliente] = useState(false);
-  const [errorEditarClienteModal, setErrorEditarClienteModal] = useState('');
-  const [isSavingPedido, setIsSavingPedido] = useState(false);
+    // Modal Crear
+    isClienteModalOpen,
+    setIsClienteModalOpen,
+    nuevoCliente,
+    setNuevoCliente,
+    isLoadingCliente,
+    errorClienteModal,
+    handleCrearCliente,
 
-  // --- CONSULTAS A BASE DE DATOS ---
-  const fetchPedidos = useCallback(async () => {
-    const empresaId = await getEmpresaId();
-    if (!empresaId) return;
+    // Modal Editar
+    editarClienteModal,
+    setEditarClienteModal,
+    isLoadingEditarCliente,
+    errorEditarClienteModal,
+    handleActualizarCliente,
 
-    const from = page * pageSize;
-    const to = from + pageSize - 1;
+    // Eliminar
+    handleEliminarCliente,
 
-    const { data } = await supabase
-      .from('pedidos')
-      .select('*, pedido_detalles(*, producto_variantes(gramaje, precio_base, productos(nombre))), clientes(nombre_local)')
-      .eq('empresa_id', empresaId)
-      .order('creado_en', { ascending: false })
-      .range(from, to);
-
-    setPedidos(data || []);
-  }, [page, pageSize, getEmpresaId]);
-
-  const fetchClientesCompleto = async () => {
-    const empresaId = await getEmpresaId();
-    if (!empresaId) return;
-
-    const { data } = await supabase
-      .from('clientes')
-      .select('*')
-      .eq('empresa_id', empresaId)
-      .order('nombre_local', { ascending: true });
-    setClientes(data || []);
-  };
-
-  useEffect(() => {
-    fetchPedidos();
-  }, [fetchPedidos]);
-
-  useEffect(() => {
-    const init = async () => {
-      const token = await getToken();
-      if (!token) {
-        await new Promise(resolve => setTimeout(resolve, 500));
-        const retryToken = await getToken();
-        if (!retryToken) return router.push('/admin/login');
-      }
-
-      const [prodsRes] = await Promise.all([
-        supabase.from('producto_variantes').select('id, gramaje, precio_base, productos(nombre)')
-      ]);
-
-      if (prodsRes.data) setProductos(prodsRes.data);
-      await fetchClientesCompleto();
-    };
-    init();
-  }, [router]);
-
-  // --- LÓGICA DE FILTRADO ---
-  const clientesFiltrados = useMemo(() =>
-    clientes.filter(c => c.nombre_local?.toLowerCase().includes(filtroCliente.toLowerCase())),
-    [clientes, filtroCliente]);
-
-  const clientesFiltradosCatalog = useMemo(() => {
-    if (!busquedaCliente.trim()) return clientes;
-    const term = busquedaCliente.toLowerCase().trim();
-    return clientes.filter(c =>
-      (c.nombre_local || '').toLowerCase().includes(term) ||
-      (c.razon_social || '').toLowerCase().includes(term) ||
-      (c.rfc || '').toLowerCase().includes(term)
-    );
-  }, [clientes, busquedaCliente]);
-
-  const paginatedClientes = useMemo(() => {
-    const from = pageClientes * pageSizeClientes;
-    const to = from + pageSizeClientes;
-    return clientesFiltradosCatalog.slice(from, to);
-  }, [clientesFiltradosCatalog, pageClientes, pageSizeClientes]);
-
-  // --- ACCIONES DE PEDIDOS ---
-  const capturarPedidoDetallado = async () => {
-    if (isSavingPedido) return;
-    setIsSavingPedido(true);
-    let totalCalculado = Number(nuevoPedido.costo_envio) || 0;
-
-    const itemsProcesados = nuevoPedido.items.filter(i => i.variante_id).map(item => {
-      const pDb = productos.find(p => p.id === item.variante_id);
-      const precioUnitario = pDb ? Number(pDb.precio_base) : 0;
-      const subtotalItem = precioUnitario * item.cantidad;
-      totalCalculado += subtotalItem;
-      return { variante_id: item.variante_id, cantidad: item.cantidad, comentarios: item.comentarios, precio_aplicado: precioUnitario, subtotal: subtotalItem };
-    });
-
-    let pedidoId: string | null = null;
-    try {
-      const empresaId = await getEmpresaId();
-      const { data: pedido, error } = await supabase.from('pedidos').insert([{
-        cliente_id: nuevoPedido.cliente_id || null,
-        cliente_nombre: nuevoPedido.cliente_nombre,
-        cliente_telefono: nuevoPedido.cliente_telefono,
-        estatus_pedido: 'Pendiente',
-        estatus_pago: 'Pendiente',
-        precio_total: totalCalculado,
-        fecha_pedido: new Date().toISOString().split('T')[0],
-        fecha_produccion: nuevoPedido.fecha_produccion || null,
-        fecha_entrega: nuevoPedido.fecha_entrega || null,
-        entregado_por: nuevoPedido.entregado_por,
-        costo_envio: nuevoPedido.costo_envio,
-        comentarios: nuevoPedido.comentarios_generales,
-        empresa_id: empresaId
-      }]).select().single();
-
-      if (error) throw error;
-      if (!pedido) throw new Error("No se pudo crear el pedido principal");
-      pedidoId = pedido.id;
-
-      if (itemsProcesados.length > 0) {
-        const detalles = itemsProcesados.map(item => ({ pedido_id: pedidoId, empresa_id: empresaId, ...item }));
-        const { error: detallesError } = await supabase.from('pedido_detalles').insert(detalles);
-        if (detallesError) throw detallesError;
-      }
-
-      // Notificar al bot de Telegram
-      if (pedidoId) {
-        notificarPedidoTelegramAction(pedidoId).catch(err => {
-          console.warn('[Telegram] Error enviando alerta a Telegram:', err);
-        });
-      }
-
-      setIsModalOpen(false);
-      setNuevoPedido(PEDIDO_INICIAL);
-      fetchPedidos();
-    } catch (err: any) {
-      console.error("Error al capturar pedido:", err);
-      alert("Error al procesar el pedido: " + (err.message || err));
-      
-      // Limpiar pedido huérfano si fallaron los detalles para evitar registros duplicados/incompletos
-      if (pedidoId) {
-        await supabase.from('pedidos').delete().eq('id', pedidoId);
-      }
-    } finally {
-      setIsSavingPedido(false);
-    }
-  };
-
-  // --- ACCIONES DE CLIENTES ---
-  const guardarClienteFiscal = async () => {
-    if (!nuevoCliente.nombre_local?.trim()) { setErrorClienteModal('Nombre Comercial es obligatorio'); return; }
-    if (!nuevoCliente.rfc?.trim()) { setErrorClienteModal('RFC es obligatorio'); return; }
-    if (!nuevoCliente.razon_social?.trim()) { setErrorClienteModal('Razón Social es obligatoria'); return; }
-    if (!nuevoCliente.codigo_postal?.trim()) { setErrorClienteModal('Código Postal es obligatorio'); return; }
-    if (!nuevoCliente.telefono?.trim()) { setErrorClienteModal('Teléfono es obligatorio'); return; }
-    if (!nuevoCliente.email_facturacion?.trim()) { setErrorClienteModal('Email de Facturación es obligatorio'); return; }
-    if (!nuevoCliente.regimen_fiscal?.trim()) { setErrorClienteModal('Régimen Fiscal es obligatorio'); return; }
-    if (!nuevoCliente.uso_cfdi?.trim()) { setErrorClienteModal('Uso de CFDI es obligatorio'); return; }
-
-    setIsLoadingCliente(true);
-    setErrorClienteModal('');
-
-    try {
-      const empresaId = await getEmpresaId();
-      const { error } = await supabase.from('clientes').insert([{
-        ...nuevoCliente,
-        empresa_id: empresaId
-      }]);
-      if (error) { throw error; }
-
-      setIsClienteModalOpen(false);
-      setNuevoCliente(CLIENTE_INICIAL);
-      setErrorClienteModal('');
-      fetchClientesCompleto();
-    } catch (err: any) {
-      console.error('Error inesperado:', err);
-      const errMsg = err instanceof Error ? err.message : 'Error desconocido';
-      setErrorClienteModal(`Error inesperado: ${errMsg}`);
-    } finally {
-      setIsLoadingCliente(false);
-    }
-  };
-
-  const modificarClienteFiscal = async () => {
-    const c = editarClienteModal.cliente;
-    setIsLoadingEditarCliente(true);
-    setErrorEditarClienteModal('');
-
-    try {
-      const { error } = await supabase.from('clientes').update({
-        nombre_local: c.nombre_local, rfc: c.rfc, razon_social: c.razon_social,
-        regimen_fiscal: c.regimen_fiscal, codigo_postal: c.codigo_postal,
-        uso_cfdi: c.uso_cfdi, email_facturacion: c.email_facturacion, telefono: c.telefono,
-        facturar_publico_general: !!c.facturar_publico_general
-      }).eq('id', c.id);
-
-      if (error) { throw error; }
-
-      setEditarClienteModal({ open: false, cliente: null });
-      setErrorEditarClienteModal('');
-      fetchClientesCompleto();
-    } catch (err: any) {
-      console.error('Error inesperado:', err);
-      const errMsg = err instanceof Error ? err.message : 'Error desconocido';
-      setErrorEditarClienteModal(`Error inesperado: ${errMsg}`);
-    } finally {
-      setIsLoadingEditarCliente(false);
-    }
-  };
-
-  const eliminarCliente = async (id: string) => {
-    if (confirm('¿Estás seguro de eliminar este cliente? Se borrarán sus datos fiscales.')) {
-      const { error } = await supabase.from('clientes').delete().eq('id', id);
-      if (!error) fetchClientesCompleto();
-    }
-  };
-
-  const ejecutarHabilitarPortal = async () => {
-    if (!portalModal.email.trim() || !portalModal.password.trim()) {
-      alert('Por favor ingresa un correo y una contraseña.');
-      return;
-    }
-    setHabilitandoPortal(true);
-    try {
-      const token = await getToken();
-      const res = await habilitarPortalClienteAdmin({
-        email: portalModal.email,
-        passwordTemporal: portalModal.password,
-        clienteId: portalModal.cliente.id,
-        nombreCliente: portalModal.cliente.nombre_local
-      }, token);
-
-      if (!res.success) throw new Error(res.error);
-
-      alert('Acceso al portal de auto-servicio habilitado correctamente.');
-      setPortalModal({ open: false, cliente: null, email: '', password: '' });
-      fetchClientesCompleto();
-    } catch (err: any) {
-      console.error(err);
-      const errMsg = err instanceof Error ? err.message : 'Error desconocido';
-      alert('Error al habilitar portal: ' + errMsg);
-    } finally {
-      setHabilitandoPortal(false);
-    }
-  };
+    // Modal Portal
+    portalModal,
+    setPortalModal,
+    habilitandoPortal,
+    abrirModalPortal,
+    handleHabilitarPortal
+  } = useClientes();
 
   return (
-    <div className={`${isDarkMode ? 'dark' : ''} h-full overflow-hidden flex flex-col`}>
+    <div className={`${isDarkMode ? 'dark' : ''} h-full overflow-hidden flex flex-col font-sans`}>
       <div className="bg-gray-50 dark:bg-gray-900 h-full text-gray-900 dark:text-gray-100 transition-colors flex overflow-hidden">
-
-        {/* EL ASIDE HA SIDO ELIMINADO AQUÍ PARA QUE TU LAYOUT PRINCIPAL TOME EL CONTROL */}
-
-        {/* ÁREA PRINCIPAL DINÁMICA */}
+        
+        {/* ÁREA PRINCIPAL */}
         <main className="flex-1 flex flex-col p-8 w-full max-w-[100vw] overflow-hidden h-full">
-
-          {/* HEADER GENERAL */}
+          
+          {/* HEADER */}
           <div className="mb-6 flex justify-between items-start md:items-center flex-col md:flex-row gap-4 shrink-0">
-            <h2 className="text-2xl font-bold flex items-center gap-2">
-              {vistaActiva === 'ventas' ? 'Monitor Maestro de Pedidos' : 'Catálogo de Clientes'}
-            </h2>
+            <div>
+              <h2 className="text-3xl font-extrabold flex items-center gap-3">
+                <Users className="text-amber-500 w-8 h-8" /> Catálogo de Clientes
+              </h2>
+              <p className="text-sm text-gray-500 dark:text-gray-400 mt-1 font-sans">
+                Administración de clientes B2B, datos fiscales CFDI 4.0 y credenciales de acceso al portal.
+              </p>
+            </div>
+
             <div className="flex items-center gap-3">
-              <button onClick={toggleDarkMode} className="p-2 rounded-lg bg-gray-200 dark:bg-gray-800 text-gray-600 dark:text-amber-400 hover:bg-gray-300 dark:hover:bg-gray-700 transition-colors">
+              <button
+                onClick={toggleDarkMode}
+                className="p-2 rounded-lg bg-gray-200 dark:bg-gray-800 text-gray-600 dark:text-amber-400 hover:bg-gray-300 dark:hover:bg-gray-700 transition-colors"
+                aria-label="Cambiar modo de color"
+              >
                 {isDarkMode ? <Sun size={20} /> : <Moon size={20} />}
               </button>
-              {vistaActiva === 'ventas' ? (
-                <button onClick={() => setIsModalOpen(true)} className="bg-amber-600 hover:bg-amber-500 text-white px-4 py-2 rounded-lg flex items-center gap-2 font-semibold shadow-lg transition-colors">
-                  <Plus size={18} /> Nuevo Pedido
-                </button>
-              ) : (
-                <button onClick={() => setIsClienteModalOpen(true)} className="bg-amber-600 hover:bg-amber-500 text-white px-4 py-2 rounded-lg flex items-center gap-2 font-semibold shadow-lg transition-colors">
-                  <Plus size={18} /> Registrar Cliente SAT
-                </button>
-              )}
+              <button
+                onClick={() => setIsClienteModalOpen(true)}
+                className="bg-amber-600 hover:bg-amber-500 text-white px-4 py-2 rounded-xl flex items-center gap-2 font-semibold shadow-lg transition-colors text-sm"
+              >
+                <Plus size={18} /> Registrar Cliente SAT
+              </button>
             </div>
           </div>
 
-          {/* VISTA 1: MONITOR DE VENTAS */}
-          {vistaActiva === 'ventas' && (
-            <div className="flex-1 flex flex-col overflow-hidden h-full">
-              <div className="space-y-4 flex-1 overflow-y-auto pr-1">
-                {pedidos.map(p => (
-                  <div key={p.id} className="bg-white dark:bg-gray-950 p-4 rounded-xl border border-gray-200 dark:border-gray-800 flex justify-between items-center shadow-sm">
-                    <div>
-                      <span className="font-bold text-lg">{p.clientes?.nombre_local || p.cliente_nombre || 'Cliente Ocasional'}</span>
-                      <div className="text-sm text-gray-500 dark:text-gray-400">Estatus: {p.estatus_pedido}</div>
-                    </div>
-                    <span className="font-bold text-amber-600 text-xl">${p.precio_total}</span>
-                  </div>
-                ))}
-                {pedidos.length === 0 && (
-                  <div className="text-center text-gray-500 mt-10">
-                    No hay pedidos registrados.
-                  </div>
-                )}
-              </div>
-
-              {/* CONTROLES DE PAGINACIÓN DE PEDIDOS (Ventas) */}
-              <div className="flex items-center justify-between p-4 border-t border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-950 mt-4 shrink-0 rounded-xl shadow">
-                <button disabled={page === 0} onClick={() => setPage(page - 1)} className="flex items-center gap-2 px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-900 disabled:opacity-50 text-sm font-medium transition-colors"><ChevronLeft size={16} /> Anterior</button>
-                <span className="text-sm font-medium text-gray-600 dark:text-gray-400">Página {page + 1}</span>
-                <button disabled={pedidos.length < pageSize} onClick={() => setPage(page + 1)} className="flex items-center gap-2 px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-900 disabled:opacity-50 text-sm font-medium transition-colors">Siguiente <ChevronRight size={16} /></button>
-              </div>
+          {/* BUSCADOR */}
+          <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-3.5 rounded-xl shadow-md mb-6 flex gap-4 items-center shrink-0">
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-2.5 text-gray-400" size={16} />
+              <input
+                type="text"
+                placeholder="Buscar clientes por nombre comercial, razón social o RFC..."
+                value={busquedaCliente}
+                onChange={e => {
+                  setBusquedaCliente(e.target.value);
+                  setPageClientes(0);
+                }}
+                className="w-full pl-9 pr-4 py-2 border border-gray-200 dark:border-gray-800 rounded-lg text-sm bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-white outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition-all"
+              />
             </div>
-          )}
+          </div>
 
-          {/* VISTA 2: CATÁLOGO Y EDICIÓN DE CLIENTES */}
-          {vistaActiva === 'clientes' && (
-            <div className="flex-1 flex flex-col overflow-hidden h-full">
-              {/* BUSCADOR DE CLIENTES */}
-              <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-4 rounded-xl shadow-md mb-6 flex gap-4 items-center shrink-0">
-                <div className="relative flex-1">
-                  <Search className="absolute left-3 top-2.5 text-gray-400" size={16} />
-                  <input
-                    type="text"
-                    placeholder="Buscar clientes por nombre comercial, razón social o RFC..."
-                    value={busquedaCliente}
-                    onChange={e => {
-                      setBusquedaCliente(e.target.value);
-                      setPageClientes(0);
-                    }}
-                    className="w-full pl-9 pr-4 py-2 border border-gray-200 dark:border-gray-800 rounded-lg text-sm bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-white outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition-all"
-                  />
-                </div>
-              </div>
-
-              {/* TABLA PRINCIPAL DE CLIENTES */}
-              <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-xl shadow-xl flex flex-col flex-1 overflow-hidden">
-                <div className="overflow-x-auto flex-1">
-                  <table className="w-full text-left border-collapse min-w-[900px]">
-                    <thead>
-                      <tr className="bg-gray-50 dark:bg-gray-900/50 border-b border-gray-200 dark:border-gray-800 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase">
-                        <th className="p-4">Nombre Comercial</th>
-                        <th className="p-4">Razón Social / RFC</th>
-                        <th className="p-4">Régimen Fiscal</th>
-                        <th className="p-4">Uso de CFDI</th>
-                        <th className="p-4">C.P. / Correo</th>
-                        <th className="p-4 text-center">Acciones</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100 dark:divide-gray-800/50 text-xs">
-                      {paginatedClientes.map((c) => (
-                        <tr key={c.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/20 transition-colors">
-                          <td className="p-4 font-bold text-amber-600 dark:text-amber-500">
-                            <div className="flex items-center gap-1.5 flex-wrap">
-                              <span>{c.nombre_local}</span>
-                              {c.facturar_publico_general && (
-                                <span className="px-2 py-0.5 rounded-full text-[9px] font-extrabold bg-purple-100 dark:bg-purple-955/30 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-900/40">
-                                  🌐 Público en General
-                                </span>
-                              )}
-                            </div>
-                          </td>
-                          <td className="p-4 space-y-0.5">
-                            <div className="font-semibold text-gray-900 dark:text-white">{c.razon_social || 'N/A'}</div>
-                            <div className="text-gray-400 font-mono text-[11px]">{c.rfc}</div>
-                          </td>
-                          <td className="p-4 font-medium text-gray-700 dark:text-gray-300">
-                            {c.regimen_fiscal ? `${c.regimen_fiscal} - ${getDescripcionRegimenFiscal(c.regimen_fiscal)}` : 'No definido'}
-                          </td>
-                          <td className="p-4 font-medium text-gray-700 dark:text-gray-300">
-                            {c.uso_cfdi ? `${c.uso_cfdi} - ${getDescripcionUsoCfdi(c.uso_cfdi)}` : 'No definido'}
-                          </td>
-                          <td className="p-4 space-y-0.5">
-                            <div className="font-mono text-gray-900 dark:text-white">CP: {c.codigo_postal || 'N/A'}</div>
-                            <div className="text-gray-400 text-[11px]">{c.email_facturacion || 'Sin correo'}</div>
-                          </td>
-                          <td className="p-4 text-center">
-                            <div className="flex gap-2 justify-center">
-                              <button
-                                onClick={() => setPortalModal({ open: true, cliente: c, email: c.email_facturacion || '', password: '' })}
-                                className="p-2 border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-900 hover:bg-emerald-500/20 rounded-lg text-gray-600 dark:text-gray-300 hover:text-emerald-500 transition-colors"
-                                title="Habilitar Acceso al Portal"
-                              >
-                                <Key size={15} />
-                              </button>
-                              <button
-                                onClick={() => setEditarClienteModal({ open: true, cliente: c })}
-                                className="p-2 border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-900 hover:bg-amber-500/20 rounded-lg text-gray-600 dark:text-gray-300 hover:text-amber-500 transition-colors"
-                              >
-                                <Edit3 size={15} />
-                              </button>
-                              <button
-                                onClick={() => eliminarCliente(c.id)}
-                                className="p-2 border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-900 hover:bg-red-500/20 rounded-lg text-gray-600 dark:text-red-400 hover:text-red-500 transition-colors"
-                              >
-                                <Trash2 size={15} />
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                      {clientesFiltradosCatalog.length === 0 && (
-                        <tr>
-                          <td colSpan={6} className="p-8 text-center text-gray-500 dark:text-gray-400">
-                            {clientes.length === 0 ? 'No hay clientes registrados.' : 'Ningún cliente coincide con los filtros.'}
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-
-                {/* CONTROLES DE PAGINACIÓN DE CLIENTES */}
-                <div className="flex items-center justify-between p-4 border-t border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-950 shrink-0">
-                  <button
-                    disabled={pageClientes === 0}
-                    onClick={() => setPageClientes(pageClientes - 1)}
-                    className="flex items-center gap-2 px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-900 disabled:opacity-50 text-sm font-medium transition-colors"
-                  >
-                    <ChevronLeft size={16} /> Anterior
-                  </button>
-                  <span className="text-sm font-medium text-gray-600 dark:text-gray-400">
-                    Página {pageClientes + 1} de {Math.max(1, Math.ceil(clientesFiltradosCatalog.length / pageSizeClientes))}
-                  </span>
-                  <button
-                    disabled={(pageClientes + 1) * pageSizeClientes >= clientesFiltradosCatalog.length}
-                    onClick={() => setPageClientes(pageClientes + 1)}
-                    className="flex items-center gap-2 px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-900 disabled:opacity-50 text-sm font-medium transition-colors"
-                  >
-                    Siguiente <ChevronRight size={16} />
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-
+          {/* TABLA MODULAR DE CLIENTES */}
+          <ClientesTable
+            clientes={paginatedClientes}
+            page={pageClientes}
+            pageSize={pageSizeClientes}
+            totalClientes={clientesFiltrados.length}
+            onPageChange={setPageClientes}
+            onEdit={cliente => setEditarClienteModal({ open: true, cliente })}
+            onDelete={handleEliminarCliente}
+            onOpenPortal={abrirModalPortal}
+            loading={loading}
+          />
         </main>
 
-        {/* MODAL: NUEVA ORDEN DE PRODUCCIÓN */}
-        {isModalOpen && (
-          <div className="fixed inset-0 bg-black/60 dark:bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-            <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-6 rounded-2xl w-full max-w-3xl shadow-2xl max-h-[90vh] overflow-y-auto text-gray-900 dark:text-gray-100">
-              <h3 className="text-xl font-extrabold mb-6 flex items-center gap-2"><Plus className="text-amber-500" /> Nueva Orden de Producción</h3>
-              <div className="mb-6 p-4 bg-gray-50 dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800">
-                <h4 className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase mb-3">1. Información del Cliente</h4>
-                <div className="relative mb-3">
-                  <Search className="absolute left-3 top-2.5 text-gray-400" size={16} />
-                  <input placeholder="Buscar cliente..." className="w-full bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 p-2 pl-10 rounded-lg text-sm text-gray-900 dark:text-white" onChange={(e) => setFiltroCliente(e.target.value)} />
-                </div>
-                <select className="w-full bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 p-2.5 rounded-lg text-sm text-gray-900 dark:text-white" onChange={e => setNuevoPedido({ ...nuevoPedido, cliente_id: e.target.value })}>
-                  <option value="">Seleccionar cliente registrado o dejar en blanco...</option>
-                  {clientesFiltrados.map(c => <option key={c.id} value={c.id}>{c.nombre_local}</option>)}
-                </select>
-              </div>
+        {/* MODAL: REGISTRAR CLIENTE */}
+        <ClienteFormModal
+          open={isClienteModalOpen}
+          isEditing={false}
+          formData={nuevoCliente}
+          setFormData={setNuevoCliente}
+          onSubmit={handleCrearCliente}
+          onClose={() => setIsClienteModalOpen(false)}
+          loading={isLoadingCliente}
+          error={errorClienteModal}
+        />
 
-              <div className="mb-6 p-4 bg-gray-50 dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800">
-                <h4 className="text-xs font-bold text-amber-600 dark:text-amber-500 uppercase mb-3">2. Fechas Operativas y Logística</h4>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <input type="date" className="w-full bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-sm text-gray-900 dark:text-white" style={{ colorScheme: 'dark' }} onChange={e => setNuevoPedido({ ...nuevoPedido, fecha_produccion: e.target.value })} />
-                  <input type="date" className="w-full bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-sm text-gray-900 dark:text-white" style={{ colorScheme: 'dark' }} onChange={e => setNuevoPedido({ ...nuevoPedido, fecha_entrega: e.target.value })} />
-                  <select className="w-full bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-sm text-gray-900 dark:text-white" onChange={e => setNuevoPedido({ ...nuevoPedido, entregado_por: e.target.value })}>
-                    <option value="">Sin asignar repartidor</option>
-                    <option value="SR. PEPE">SR. PEPE</option><option value="PLAYITA">PLAYITA</option><option value="FELIPE">FELIPE</option>
-                  </select>
-                  <input type="number" placeholder="Costo Envío ($)" className="w-full bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-sm text-gray-900 dark:text-white" onChange={e => setNuevoPedido({ ...nuevoPedido, costo_envio: parseFloat(e.target.value) || 0 })} />
-                </div>
-              </div>
+        {/* MODAL: EDITAR CLIENTE */}
+        <ClienteFormModal
+          open={editarClienteModal.open}
+          isEditing={true}
+          formData={(editarClienteModal.cliente as any) || {}}
+          setFormData={data => setEditarClienteModal(prev => ({ ...prev, cliente: data }))}
+          onSubmit={handleActualizarCliente}
+          onClose={() => setEditarClienteModal({ open: false, cliente: null })}
+          loading={isLoadingEditarCliente}
+          error={errorEditarClienteModal}
+        />
 
-              <div className="mb-6">
-                <h4 className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase mb-3">3. Carga de Productos</h4>
-                {nuevoPedido.items.map((item, idx) => (
-                  <div key={idx} className="mb-3 p-4 bg-gray-50 dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800">
-                    <div className="flex gap-3 mb-3">
-                      <select className="bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 p-2 flex-1 rounded-lg text-sm text-gray-900 dark:text-white" onChange={e => {
-                        const items = [...nuevoPedido.items]; items[idx].variante_id = e.target.value; setNuevoPedido({ ...nuevoPedido, items });
-                      }}>
-                        <option value="">Seleccionar producto...</option>
-                        {productos.map(p => <option key={p.id} value={p.id}>{p.productos.nombre} ({p.gramaje}) - ${p.precio_base}</option>)}
-                      </select>
-                      <input type="number" placeholder="Pz" className="bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 p-2 w-24 rounded-lg text-sm text-gray-900 dark:text-white" onChange={e => {
-                        const items = [...nuevoPedido.items]; items[idx].cantidad = parseInt(e.target.value); setNuevoPedido({ ...nuevoPedido, items });
-                      }} />
-                    </div>
-                  </div>
-                ))}
-                <button onClick={() => setNuevoPedido({ ...nuevoPedido, items: [...nuevoPedido.items, { variante_id: '', cantidad: 0, comentarios: '' }] })} className="text-amber-600 dark:text-amber-500 font-semibold text-sm hover:underline">+ Agregar otro producto</button>
-              </div>
-
-              <div className="flex gap-3 pt-6 border-t border-gray-200 dark:border-gray-800">
-                <button onClick={() => setIsModalOpen(false)} disabled={isSavingPedido} className="flex-1 py-3 font-semibold border border-gray-300 dark:border-gray-700 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300 transition-colors disabled:opacity-50">Cancelar</button>
-                <button onClick={capturarPedidoDetallado} disabled={isSavingPedido} className="flex-1 py-3 bg-amber-600 hover:bg-amber-500 disabled:bg-amber-800 text-white font-semibold rounded-xl shadow-lg transition-colors disabled:opacity-50">
-                  {isSavingPedido ? 'Procesando...' : 'Procesar Orden Completa'}
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* MODAL: ALTA FISCAL DE CLIENTE */}
-        {isClienteModalOpen && (
-          <div className="fixed inset-0 bg-black/60 dark:bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-            <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-6 rounded-2xl w-full max-w-2xl shadow-2xl max-h-[90vh] overflow-y-auto text-gray-900 dark:text-gray-100">
-              <h3 className="text-xl font-extrabold mb-6 flex items-center gap-2"><Users className="text-amber-500" /> Alta Fiscal de Cliente (CFDI 4.0)</h3>
-
-              {/* Mostrar mensaje de error si existe */}
-              {errorClienteModal && (
-                <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg text-red-700 dark:text-red-400 text-sm">
-                  {errorClienteModal}
-                </div>
-              )}
-
-              <div className="space-y-4">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="text-xs font-semibold text-gray-500 dark:text-gray-400">Nombre Comercial / Local *</label>
-                    <input type="text" placeholder="Ej. Sakura Ramen" value={nuevoCliente.nombre_local} className="w-full mt-1 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-sm text-gray-900 dark:text-white" onChange={e => setNuevoCliente({ ...nuevoCliente, nombre_local: e.target.value })} disabled={isLoadingCliente} required />
-                  </div>
-                  <div>
-                    <label className="text-xs font-semibold text-gray-500 dark:text-gray-400">RFC *</label>
-                    <input type="text" placeholder="Ej. XAXX010101000" value={nuevoCliente.rfc} className="w-full mt-1 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-sm text-gray-900 dark:text-white uppercase" onChange={e => setNuevoCliente({ ...nuevoCliente, rfc: e.target.value })} disabled={isLoadingCliente} required />
-                  </div>
-                </div>
-                <div>
-                  <label className="text-xs font-semibold text-gray-500 dark:text-gray-400">Razón Social Fiscal (Exacto como Constancia SAT) *</label>
-                  <input type="text" placeholder="Ej. PUBLICO EN GENERAL" value={nuevoCliente.razon_social} className="w-full mt-1 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-sm text-gray-900 dark:text-white uppercase" onChange={e => setNuevoCliente({ ...nuevoCliente, razon_social: e.target.value })} disabled={isLoadingCliente} required />
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="text-xs font-semibold text-gray-500 dark:text-gray-400">Código Postal Fiscal *</label>
-                    <input type="text" placeholder="Ej. 77710" value={nuevoCliente.codigo_postal} className="w-full mt-1 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-sm text-gray-900 dark:text-white" onChange={e => setNuevoCliente({ ...nuevoCliente, codigo_postal: e.target.value })} disabled={isLoadingCliente} required />
-                  </div>
-                  <div>
-                    <label className="text-xs font-semibold text-gray-500 dark:text-gray-400">Teléfono *</label>
-                    <input type="tel" placeholder="Ej. +52 9841234567" value={nuevoCliente.telefono} className="w-full mt-1 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-sm text-gray-900 dark:text-white" onChange={e => setNuevoCliente({ ...nuevoCliente, telefono: e.target.value })} disabled={isLoadingCliente} required />
-                  </div>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="text-xs font-semibold text-gray-500 dark:text-gray-400">Email Envío Facturas *</label>
-                    <input type="email" placeholder="correo@cliente.com" value={nuevoCliente.email_facturacion} className="w-full mt-1 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-sm text-gray-900 dark:text-white" onChange={e => setNuevoCliente({ ...nuevoCliente, email_facturacion: e.target.value })} disabled={isLoadingCliente} required />
-                  </div>
-                  <div></div>
-                </div>
-                <div>
-                  <label className="text-xs font-semibold text-gray-500 dark:text-gray-400">Régimen Fiscal *</label>
-                  <select value={nuevoCliente.regimen_fiscal} className="w-full mt-1 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-lg text-sm text-gray-900 dark:text-white" onChange={e => setNuevoCliente({ ...nuevoCliente, regimen_fiscal: e.target.value })} disabled={isLoadingCliente} required>
-                    <option value="">Selecciona una opción de la lista...</option>
-                    {CATALOGO_REGIMEN_FISCAL.map(r => <option key={r.clave} value={r.clave}>{r.clave} | {r.descripcion}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="text-xs font-semibold text-gray-500 dark:text-gray-400">Uso de CFDI *</label>
-                  <select value={nuevoCliente.uso_cfdi} className="w-full mt-1 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-lg text-sm text-gray-900 dark:text-white" onChange={e => setNuevoCliente({ ...nuevoCliente, uso_cfdi: e.target.value })} disabled={isLoadingCliente} required>
-                    <option value="">Selecciona uso del comprobante...</option>
-                    {CATALOGO_USO_CFDI.map(u => <option key={u.clave} value={u.clave}>{u.clave} | {u.descripcion}</option>)}
-                  </select>
-                </div>
-                <div className="p-3 bg-purple-50 dark:bg-purple-955/20 border border-purple-200 dark:border-purple-900/40 rounded-xl mt-3">
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={!!nuevoCliente.facturar_publico_general}
-                      onChange={e => setNuevoCliente({ ...nuevoCliente, facturar_publico_general: e.target.checked })}
-                      className="w-4 h-4 text-purple-600 rounded focus:ring-purple-500"
-                    />
-                    <div>
-                      <span className="text-xs font-bold text-purple-700 dark:text-purple-300 block">
-                        🌐 Facturar en Público en General (Bolsa Global Mensual)
-                      </span>
-                      <span className="text-[10px] text-gray-500 dark:text-gray-400 block">
-                        Las ventas de este cliente se agruparán automáticamente en la bolsa de Factura Global mensual.
-                      </span>
-                    </div>
-                  </label>
-                </div>
-              </div>
-              <div className="flex gap-3 pt-6 mt-6 border-t border-gray-200 dark:border-gray-800">
-                <button onClick={() => { setIsClienteModalOpen(false); setErrorClienteModal(''); }} disabled={isLoadingCliente} className="flex-1 py-2.5 border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-300 rounded-xl font-semibold hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">Cancelar</button>
-                <button onClick={guardarClienteFiscal} disabled={isLoadingCliente} className="flex-1 py-2.5 bg-amber-600 hover:bg-amber-500 text-white font-semibold rounded-xl shadow-lg transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
-                  {isLoadingCliente ? (
-                    <>
-                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                      Registrando...
-                    </>
-                  ) : (
-                    <>
-                      <Save size={16} /> Registrar Cliente
-                    </>
-                  )}
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* MODAL: MODIFICAR / EDITAR CLIENTE EXISTENTE */}
-        {editarClienteModal.open && (
-          <div className="fixed inset-0 bg-black/60 dark:bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-            <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-6 rounded-2xl w-full max-w-2xl shadow-2xl max-h-[90vh] overflow-y-auto text-gray-900 dark:text-gray-100">
-              <h3 className="text-xl font-extrabold mb-6 flex items-center gap-2"><Edit3 className="text-amber-500" /> Editar Datos Fiscales</h3>
-
-              {/* Mostrar mensaje de error si existe */}
-              {errorEditarClienteModal && (
-                <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg text-red-700 dark:text-red-400 text-sm">
-                  {errorEditarClienteModal}
-                </div>
-              )}
-
-              <div className="space-y-4">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="text-xs font-semibold text-gray-500 dark:text-gray-400">Nombre Comercial *</label>
-                    <input type="text" value={editarClienteModal.cliente?.nombre_local || ''} className="w-full mt-1 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-sm text-gray-900 dark:text-white" onChange={e => setEditarClienteModal({ open: true, cliente: { ...editarClienteModal.cliente, nombre_local: e.target.value } })} disabled={isLoadingEditarCliente} required />
-                  </div>
-                  <div>
-                    <label className="text-xs font-semibold text-gray-500 dark:text-gray-400">RFC *</label>
-                    <input type="text" value={editarClienteModal.cliente?.rfc || ''} className="w-full mt-1 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-sm text-gray-900 dark:text-white uppercase" onChange={e => setEditarClienteModal({ open: true, cliente: { ...editarClienteModal.cliente, rfc: e.target.value } })} disabled={isLoadingEditarCliente} required />
-                  </div>
-                </div>
-                <div>
-                  <label className="text-xs font-semibold text-gray-500 dark:text-gray-400">Razón Social *</label>
-                  <input type="text" value={editarClienteModal.cliente?.razon_social || ''} className="w-full mt-1 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-sm text-gray-900 dark:text-white uppercase" onChange={e => setEditarClienteModal({ open: true, cliente: { ...editarClienteModal.cliente, razon_social: e.target.value } })} disabled={isLoadingEditarCliente} required />
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="text-xs font-semibold text-gray-500 dark:text-gray-400">Código Postal Fiscal *</label>
-                    <input type="text" value={editarClienteModal.cliente?.codigo_postal || ''} className="w-full mt-1 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-sm text-gray-900 dark:text-white" onChange={e => setEditarClienteModal({ open: true, cliente: { ...editarClienteModal.cliente, codigo_postal: e.target.value } })} disabled={isLoadingEditarCliente} required />
-                  </div>
-                  <div>
-                    <label className="text-xs font-semibold text-gray-500 dark:text-gray-400">Teléfono *</label>
-                    <input type="tel" value={editarClienteModal.cliente?.telefono || ''} className="w-full mt-1 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-sm text-gray-900 dark:text-white" onChange={e => setEditarClienteModal({ open: true, cliente: { ...editarClienteModal.cliente, telefono: e.target.value } })} disabled={isLoadingEditarCliente} required />
-                  </div>
-                </div>
-                <div>
-                  <label className="text-xs font-semibold text-gray-500 dark:text-gray-400">Email Envío Facturas *</label>
-                  <input type="email" value={editarClienteModal.cliente?.email_facturacion || ''} className="w-full mt-1 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-sm text-gray-900 dark:text-white" onChange={e => setEditarClienteModal({ open: true, cliente: { ...editarClienteModal.cliente, email_facturacion: e.target.value } })} disabled={isLoadingEditarCliente} required />
-                </div>
-                <div>
-                  <label className="text-xs font-semibold text-gray-500 dark:text-gray-400">Régimen Fiscal *</label>
-                  <select value={editarClienteModal.cliente?.regimen_fiscal || ''} className="w-full mt-1 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-lg text-sm text-gray-900 dark:text-white" onChange={e => setEditarClienteModal({ open: true, cliente: { ...editarClienteModal.cliente, regimen_fiscal: e.target.value } })} disabled={isLoadingEditarCliente} required>
-                    <option value="">Selecciona una opción...</option>
-                    {CATALOGO_REGIMEN_FISCAL.map(r => <option key={r.clave} value={r.clave}>{r.clave} | {r.descripcion}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="text-xs font-semibold text-gray-500 dark:text-gray-400">Uso de CFDI *</label>
-                  <select value={editarClienteModal.cliente?.uso_cfdi || ''} className="w-full mt-1 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-lg text-sm text-gray-900 dark:text-white" onChange={e => setEditarClienteModal({ open: true, cliente: { ...editarClienteModal.cliente, uso_cfdi: e.target.value } })} disabled={isLoadingEditarCliente} required>
-                    <option value="">Selecciona uso...</option>
-                    {CATALOGO_USO_CFDI.map(u => <option key={u.clave} value={u.clave}>{u.clave} | {u.descripcion}</option>)}
-                  </select>
-                </div>
-                <div className="p-3 bg-purple-50 dark:bg-purple-955/20 border border-purple-200 dark:border-purple-900/40 rounded-xl mt-3">
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={!!editarClienteModal.cliente?.facturar_publico_general}
-                      onChange={e => setEditarClienteModal({ open: true, cliente: { ...editarClienteModal.cliente, facturar_publico_general: e.target.checked } })}
-                      className="w-4 h-4 text-purple-600 rounded focus:ring-purple-500"
-                    />
-                    <div>
-                      <span className="text-xs font-bold text-purple-700 dark:text-purple-300 block">
-                        🌐 Facturar en Público en General (Bolsa Global Mensual)
-                      </span>
-                      <span className="text-[10px] text-gray-500 dark:text-gray-400 block">
-                        Las ventas de este cliente se agruparán automáticamente en la bolsa de Factura Global mensual.
-                      </span>
-                    </div>
-                  </label>
-                </div>
-              </div>
-              <div className="flex gap-3 pt-6 mt-6 border-t border-gray-200 dark:border-gray-800">
-                <button onClick={() => { setEditarClienteModal({ open: false, cliente: null }); setErrorEditarClienteModal(''); }} disabled={isLoadingEditarCliente} className="flex-1 py-2.5 border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-300 rounded-xl font-semibold hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">Cancelar</button>
-                <button onClick={modificarClienteFiscal} disabled={isLoadingEditarCliente} className="flex-1 py-2.5 bg-amber-600 hover:bg-amber-500 text-white font-semibold rounded-xl shadow-lg transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
-                  {isLoadingEditarCliente ? (
-                    <>
-                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                      Guardando...
-                    </>
-                  ) : (
-                    <>
-                      <Save size={16} /> Guardar Cambios
-                    </>
-                  )}
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-
-        {/* MODAL: ALTA/HABILITACIÓN DE PORTAL */}
-        {portalModal.open && (
-          <div className="fixed inset-0 bg-black/60 dark:bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-            <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-6 rounded-2xl w-full max-w-md shadow-2xl text-gray-900 dark:text-gray-100">
-              <h3 className="text-xl font-extrabold mb-2 flex items-center gap-2"><Key className="text-amber-500" /> Alta de Portal de Clientes</h3>
-              <p className="text-xs text-gray-500 dark:text-gray-400 mb-6">
-                Crea un usuario para que el cliente <span className="font-bold">{portalModal.cliente?.nombre_local}</span> acceda al portal de auto-servicio.
-              </p>
-              <div className="space-y-4 mb-6">
-                <div>
-                  <label className="text-xs font-semibold text-gray-500 dark:text-gray-400">Correo Electrónico (Usuario) *</label>
-                  <input
-                    type="email"
-                    placeholder="correo@cliente.com"
-                    value={portalModal.email}
-                    className="w-full mt-1 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-sm text-gray-900 dark:text-white"
-                    onChange={e => setPortalModal({ ...portalModal, email: e.target.value })}
-                    disabled={habilitandoPortal}
-                  />
-                </div>
-                <div>
-                  <label className="text-xs font-semibold text-gray-500 dark:text-gray-400">Contraseña Temporal *</label>
-                  <input
-                    type="password"
-                    placeholder="Mínimo 6 caracteres"
-                    value={portalModal.password}
-                    className="w-full mt-1 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-sm text-gray-900 dark:text-white"
-                    onChange={e => setPortalModal({ ...portalModal, password: e.target.value })}
-                    disabled={habilitandoPortal}
-                  />
-                </div>
-              </div>
-              <div className="flex gap-3">
-                <button onClick={() => setPortalModal({ open: false, cliente: null, email: '', password: '' })} disabled={habilitandoPortal} className="flex-1 py-2.5 border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-300 rounded-xl font-semibold hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors disabled:opacity-50">Cancelar</button>
-                <button onClick={ejecutarHabilitarPortal} disabled={habilitandoPortal} className="flex-1 py-2.5 bg-amber-600 hover:bg-amber-500 text-white font-semibold rounded-xl shadow-lg transition-colors flex items-center justify-center gap-1">
-                  {habilitandoPortal ? 'Registrando...' : 'Habilitar Portal'}
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
+        {/* MODAL: HABILITAR PORTAL B2B */}
+        <ClientePortalModal
+          portalModal={portalModal}
+          setPortalModal={setPortalModal}
+          onSubmit={handleHabilitarPortal}
+          loading={habilitandoPortal}
+        />
       </div>
     </div>
   );
