@@ -151,7 +151,7 @@ export const TicketsPosTab: React.FC<TicketsPosTabProps> = ({
             {paginatedTickets.map(c => {
               const efec = Number(c.monto_efectivo || 0);
               const parrot = Number(c.monto_parrotpay || 0);
-              const bbva = Number(c.monto_debito || 0) + Number(c.monto_credito || 0) + Number(c.monto_amex || 0);
+              const bbva = Number(c.monto_debito || 0) + Number(c.monto_credito || 0) + Number(c.monto_amex || 0) || (c.tipo === 'corte_bbva' ? Number(c.monto || 0) : 0);
               const propinaTotal = Number(c.propina_efectivo || 0) + Number(c.propina_parrotpay || 0) +
                                    Number(c.propina_debito || 0) + Number(c.propina_credito || 0) + Number(c.propina_amex || 0);
               const isTercero = !!facturadosTerceros[c.id];
@@ -162,7 +162,14 @@ export const TicketsPosTab: React.FC<TicketsPosTabProps> = ({
                     {c.fecha ? new Date(c.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : ''}
                   </td>
                   <td className="p-3 font-bold text-gray-800 dark:text-gray-200">
-                    {c.descripcion || `Corte POS ${c.fecha}`}
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span>{c.descripcion || `Corte POS ${c.fecha}`}</span>
+                      {c._isPendienteDeposito && (
+                        <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-300">
+                          Pendiente Depósito
+                        </span>
+                      )}
+                    </div>
                   </td>
                   <td className="p-3 text-right font-mono font-black text-emerald-600 dark:text-emerald-400">
                     {formatCurrency(efec)}
@@ -193,6 +200,10 @@ export const TicketsPosTab: React.FC<TicketsPosTabProps> = ({
                     {isTercero ? (
                       <span className="px-2.5 py-1 rounded-full text-[10px] font-black bg-purple-100 text-purple-700 dark:bg-purple-955/50 dark:text-purple-300">
                         👤 Factura Tercero
+                      </span>
+                    ) : c._isPendienteDeposito ? (
+                      <span className="px-2.5 py-1 rounded-full text-[10px] font-black bg-sky-100 text-sky-800 dark:bg-sky-955/50 dark:text-sky-300">
+                        ⏳ Pendiente Depósito
                       </span>
                     ) : (
                       <span className="px-2.5 py-1 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 dark:bg-emerald-955/50 dark:text-emerald-300">

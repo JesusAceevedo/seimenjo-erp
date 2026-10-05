@@ -126,6 +126,8 @@ export default function FacturaPublicoGeneralPage() {
     togglePendienteDeposito,
     ticketsPendientesDeposito,
     montoTicketsPendientesDeposito,
+    ticketsBbvaSinDeposito,
+    guardarAjustesPeriodo,
   } = useFacturaPublicoGeneralData();
   const esSeimenjo = isSeimenjo;
 
@@ -235,7 +237,7 @@ export default function FacturaPublicoGeneralPage() {
             selectedMonth={selectedMonth}
             onOpenWizard={() => setIsWizardOpen(true)}
             diasLaborablesSinTicket={auditoriaDiasMes.diasLaborablesSinTicket}
-            totalLabel={isSeimenjo ? 'Total cobrado con IVA incluido para Factura Global:' : 'Base calculada lista para Factura Global:'}
+            totalLabel="Total cobrado con IVA incluido para Factura Global:"
           />}
 
           {/* NAVEGACIÓN ENTRE PESTAÑAS PRINCIPALES */}
@@ -411,6 +413,10 @@ export default function FacturaPublicoGeneralPage() {
               ticketsFinDeMesPendientes={ticketsFinDeMesPendientes}
               montoTicketsFinDeMesPendientes={montoTicketsFinDeMesPendientes}
               ticketsMes={ticketsMes}
+              togglePendienteDeposito={togglePendienteDeposito}
+              ticketsPendientesDeposito={ticketsPendientesDeposito}
+              montoTicketsPendientesDeposito={montoTicketsPendientesDeposito}
+              ticketsBbvaSinDeposito={ticketsBbvaSinDeposito}
             />
           ) : (
             <DepositosBancariosTab
@@ -481,6 +487,8 @@ export default function FacturaPublicoGeneralPage() {
         isSeimenjo={isSeimenjo}
         exportFacturaPublicoExcel={exportFacturaPublicoExcel}
         refreshPeriodStatus={refreshPeriodStatus}
+        guardarAjustesPeriodo={guardarAjustesPeriodo}
+        ticketsBbvaSinDeposito={ticketsBbvaSinDeposito}
       />
     </div>
   );

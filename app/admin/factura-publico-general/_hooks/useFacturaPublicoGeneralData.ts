@@ -245,7 +245,7 @@ export function useFacturaPublicoGeneralData() {
   }, [diasNoLaborablesMap, selectedMonth]);
 
   // Función auxiliar para persistir ajustes mensuales en Supabase
-  const saveAjustesToSupabase = async (
+  const saveAjustesToSupabase = useCallback(async (
     monthKey: string,
     overrides?: {
       montoManual?: number;
@@ -262,7 +262,7 @@ export function useFacturaPublicoGeneralData() {
   ) => {
     try {
       const empresaId = await getEmpresaId();
-      if (!empresaId) return;
+      if (!empresaId) return { success: false, error: 'Sin empresa' };
 
       const rawNoEsVenta = overrides?.noEsVenta ?? Object.entries(noEsVentaMovementsMap[monthKey] || {}).map(([id, razon]) => ({ id, razon }));
 
@@ -287,26 +287,32 @@ export function useFacturaPublicoGeneralData() {
         .upsert(payload, { onConflict: 'empresa_id,mes' });
 
       if (upsertErr) {
-        if (upsertErr.message?.includes('no_es_venta_movimientos') || upsertErr.code === '42703') {
-          delete payload.no_es_venta_movimientos;
-        }
-        if (upsertErr.message?.includes('pendiente_deposito_comprobantes') || upsertErr.code === '42703') {
-          delete payload.pendiente_deposito_comprobantes;
-        }
-        if (upsertErr.message?.includes('depositos_efectivo_periodo') || upsertErr.code === '42703') {
-          delete payload.depositos_efectivo_periodo;
-        }
-        if (upsertErr.message?.includes('dias_no_laborables') || upsertErr.code === '42703') {
-          delete payload.dias_no_laborables;
-        }
-        await supabase
-          .from('factura_global_ajustes')
-          .upsert(payload, { onConflict: 'empresa_id,mes' });
+        console.error('Error al guardar ajustes en Supabase:', upsertErr);
+        return { success: false, error: upsertErr.message };
       }
-    } catch (err) {
+      return { success: true };
+    } catch (err: any) {
       console.warn('Ajuste guardado localmente (sincronización con BD pendiente):', err);
+      return { success: false, error: err?.message || String(err) };
     }
-  };
+  }, [
+    getEmpresaId,
+    noEsVentaMovementsMap,
+    montoManualTercerosMap,
+    excludedMovementIds,
+    excludedComprobanteIds,
+    manualOtherMonthIds,
+    manualProximoMesCompIds,
+    manualStayMesCompIds,
+    diasNoLaborablesMap,
+    pendienteDepositoMap,
+    cashDepositPeriodsMap
+  ]);
+
+  const guardarAjustesPeriodo = useCallback(async () => {
+    if (!selectedMonth) return { success: false, error: 'No hay período seleccionado' };
+    return await saveAjustesToSupabase(selectedMonth);
+  }, [selectedMonth, saveAjustesToSupabase]);
 
   const toggleNoEsVentaMovement = (movId: string, razon: string = 'Reembolso') => {
     const monthKey = selectedMonth || 'GLOBAL';
@@ -1688,6 +1694,20 @@ export function useFacturaPublicoGeneralData() {
     return { ticketsPendientesDeposito: list, montoTicketsPendientesDeposito: monto };
   }, [ticketsMes]);
 
+  // Identificador y detección de tickets BBVA
+  const isTicketBbva = useCallback((c: any) => {
+    return (
+      c.tipo === 'corte_bbva' ||
+      (c.descripcion && c.descripcion.toUpperCase().includes('BBVA')) ||
+      (c.cuenta_bancaria_id && cuentasBancarias?.find(cb => cb.id === c.cuenta_bancaria_id)?.nombre?.toUpperCase().includes('BBVA') && c.tipo !== 'corte_parrot')
+    );
+  }, [cuentasBancarias]);
+
+  // Tickets de BBVA que no tienen depósito al 100% en el estado de cuenta
+  const ticketsBbvaSinDeposito = useMemo(() => {
+    return ticketsMes.filter(t => isTicketBbva(t) && !t._isCuadrado100);
+  }, [ticketsMes, isTicketBbva]);
+
   // FACTURA AL PÚBLICO EN GENERAL:
   // Efectivo Parrot + ParrotPay + todas las Tarjetas BBVA − Terceros − Propinas.
   // La marca de pendiente solo afecta la conciliación; no excluye tickets del subtotal.
@@ -2312,15 +2332,10 @@ export function useFacturaPublicoGeneralData() {
     };
   }, [selectedMonth, currentDiasNoLaborables, comprobantes, extractDateOnly]);
 
-  const subtotalFacturaGlobal = isSeimenjo
-    ? Number((Math.max(0, totalFacturaPublicoGeneral) / 1.16).toFixed(2))
-    : Math.max(0, totalFacturaPublicoGeneral);
-  const ivaFacturaGlobal = isSeimenjo
-    ? Number((Math.max(0, totalFacturaPublicoGeneral) - subtotalFacturaGlobal).toFixed(2))
-    : Number((subtotalFacturaGlobal * 0.16).toFixed(2));
-  const totalConIvaFacturaGlobal = isSeimenjo
-    ? Math.max(0, totalFacturaPublicoGeneral)
-    : Number((subtotalFacturaGlobal + ivaFacturaGlobal).toFixed(2));
+  // Todas las ventas (tickets POS, terminales bancarias BBVA, depósitos) ya incluyen el 16% de IVA
+  const totalConIvaFacturaGlobal = Math.max(0, totalFacturaPublicoGeneral);
+  const subtotalFacturaGlobal = Number((totalConIvaFacturaGlobal / 1.16).toFixed(2));
+  const ivaFacturaGlobal = Number((totalConIvaFacturaGlobal - subtotalFacturaGlobal).toFixed(2));
   const totalIvaTrasladadoPeriodo = Number((ivaFacturaGlobal + ivaFacturasTerceros).toFixed(2));
 
   // BOLSA DE VENTAS DEL MES Y CONCILIACIÓN DE DESFASE TEMPORAL
@@ -2481,5 +2496,8 @@ export function useFacturaPublicoGeneralData() {
     togglePendienteDeposito,
     ticketsPendientesDeposito,
     montoTicketsPendientesDeposito,
+    ticketsBbvaSinDeposito,
+    isTicketBbva,
+    guardarAjustesPeriodo,
   };
 }

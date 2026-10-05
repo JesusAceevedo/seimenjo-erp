@@ -34,7 +34,8 @@ import {
   Ban,
   ShieldAlert,
   ListFilter,
-  Check
+  Check,
+  Loader2
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 
@@ -107,6 +108,8 @@ interface WizardConfiguracionGlobalModalProps {
   isSeimenjo: boolean;
   exportFacturaPublicoExcel: () => void;
   refreshPeriodStatus: () => void;
+  guardarAjustesPeriodo?: () => Promise<{ success: boolean; error?: any }>;
+  ticketsBbvaSinDeposito?: any[];
 }
 
 export const WizardConfiguracionGlobalModal: React.FC<WizardConfiguracionGlobalModalProps> = ({
@@ -158,10 +161,13 @@ export const WizardConfiguracionGlobalModal: React.FC<WizardConfiguracionGlobalM
   totalIvaTrasladadoPeriodo,
   isSeimenjo,
   exportFacturaPublicoExcel,
-  refreshPeriodStatus
+  refreshPeriodStatus,
+  guardarAjustesPeriodo,
+  ticketsBbvaSinDeposito = []
 }) => {
   const router = useRouter();
   const [currentStep, setCurrentStep] = useState<number>(1);
+  const [isSavingFinal, setIsSavingFinal] = useState(false);
   const totalSteps = 7;
 
   // Estados locales para la conciliación de la Bolsa y Desfase en Paso 3
@@ -840,13 +846,26 @@ export const WizardConfiguracionGlobalModal: React.FC<WizardConfiguracionGlobalM
                         <Receipt size={13} className="text-purple-600" />
                         Detectados {ticketsFinDeMesPendientes.length} tickets de venta emitidos en el cierre aún no depositados en el banco
                       </span>
-                      <button
-                        type="button"
-                        onClick={() => setMostrarDetalleTicketsFinDeMes(prev => !prev)}
-                        className="text-[10px] font-bold text-purple-700 dark:text-purple-300 hover:underline cursor-pointer"
-                      >
-                        {mostrarDetalleTicketsFinDeMes ? 'Ocultar desglose ▲' : 'Ver tickets ▼'}
-                      </button>
+                      <div className="flex items-center gap-2">
+                        {togglePendienteDeposito && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              ticketsFinDeMesPendientes.forEach(t => togglePendienteDeposito(t.id));
+                            }}
+                            className="px-2 py-0.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-[10px] font-bold cursor-pointer"
+                          >
+                            Marcar todos como Pendientes
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => setMostrarDetalleTicketsFinDeMes(prev => !prev)}
+                          className="text-[10px] font-bold text-purple-700 dark:text-purple-300 hover:underline cursor-pointer"
+                        >
+                          {mostrarDetalleTicketsFinDeMes ? 'Ocultar ▲' : 'Ver tickets ▼'}
+                        </button>
+                      </div>
                     </div>
                     {mostrarDetalleTicketsFinDeMes && (
                       <div className="mt-2 space-y-1 max-h-36 overflow-y-auto pt-2 border-t border-purple-200/40 font-mono text-[11px]">
@@ -856,11 +875,81 @@ export const WizardConfiguracionGlobalModal: React.FC<WizardConfiguracionGlobalM
                               <span className="font-bold text-gray-800 dark:text-gray-200">{t.fecha ? String(t.fecha).substring(0, 10) : ''}</span>
                               <span className="ml-2 text-gray-500 font-sans">{t.descripcion || 'Ticket POS'}</span>
                             </div>
-                            <span className="font-black text-purple-700 dark:text-purple-300">{formatCurrency(t.monto)}</span>
+                            <div className="flex items-center gap-2">
+                              <span className="font-black text-purple-700 dark:text-purple-300">{formatCurrency(t.monto)}</span>
+                              {togglePendienteDeposito && (
+                                <button
+                                  type="button"
+                                  onClick={() => togglePendienteDeposito(t.id)}
+                                  className="px-2 py-0.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-bold text-[10px] cursor-pointer"
+                                >
+                                  Marcar Pendiente
+                                </button>
+                              )}
+                            </div>
                           </div>
                         ))}
                       </div>
                     )}
+                  </div>
+                )}
+
+                {/* Banner específico para Tickets de Tarjeta BBVA sin depósito al cierre */}
+                {ticketsBbvaSinDeposito.length > 0 && (
+                  <div className="p-3 rounded-2xl bg-sky-50/80 dark:bg-sky-950/30 border border-sky-200 dark:border-sky-800 text-xs">
+                    <div className="flex justify-between items-center flex-wrap gap-2">
+                      <div className="flex items-center gap-2">
+                        <CreditCard size={15} className="text-sky-600 dark:text-sky-400" />
+                        <span className="font-bold text-sky-900 dark:text-sky-200">
+                          Tickets de Tarjeta BBVA sin depósito en banco ({ticketsBbvaSinDeposito.length}):
+                        </span>
+                        <strong className="font-mono text-sky-700 dark:text-sky-300">
+                          {formatCurrency(ticketsBbvaSinDeposito.reduce((acc, t) => acc + Number(t.monto || 0), 0))}
+                        </strong>
+                      </div>
+                      {togglePendienteDeposito && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            ticketsBbvaSinDeposito.forEach(t => {
+                              if (!t._isPendienteDeposito) togglePendienteDeposito(t.id);
+                            });
+                          }}
+                          className="px-3 py-1 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-bold text-xs cursor-pointer shadow-xs"
+                        >
+                          ✓ Marcar cortes BBVA como Pendientes por Depositar
+                        </button>
+                      )}
+                    </div>
+                    <div className="mt-2 space-y-1 font-mono text-[11px]">
+                      {ticketsBbvaSinDeposito.map(t => {
+                        const isPend = !!t._isPendienteDeposito;
+                        return (
+                          <div key={t.id} className="flex justify-between items-center py-1 px-2.5 rounded-lg bg-white/80 dark:bg-gray-800/80 border border-sky-100 dark:border-sky-900/40">
+                            <div>
+                              <span className="font-bold text-gray-800 dark:text-gray-200">{t.fecha ? String(t.fecha).substring(0, 10) : ''}</span>
+                              <span className="ml-2 text-gray-600 dark:text-gray-300 font-sans">{t.descripcion || 'Corte BBVA'}</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="font-black text-sky-700 dark:text-sky-300">{formatCurrency(t.monto)}</span>
+                              {togglePendienteDeposito && (
+                                <button
+                                  type="button"
+                                  onClick={() => togglePendienteDeposito(t.id)}
+                                  className={`px-2 py-0.5 rounded-lg text-[10px] font-bold cursor-pointer transition ${
+                                    isPend
+                                      ? 'bg-sky-700 text-white'
+                                      : 'bg-white dark:bg-gray-700 border border-sky-300 text-sky-700 dark:text-sky-200 hover:bg-sky-50'
+                                  }`}
+                                >
+                                  {isPend ? '✓ Pendiente por Depositar' : 'Marcar Pendiente'}
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
                 )}
 
@@ -1908,6 +1997,34 @@ export const WizardConfiguracionGlobalModal: React.FC<WizardConfiguracionGlobalM
                     {formatCurrency(comparativoTarjetas.totalTarjetasBbva)}
                   </span>
                   <span className="text-[10px] text-gray-400 mt-0.5 block">Ventas por TDD/TDC según terminal bancaria</span>
+                  {montoTicketsPendientesDeposito > 0 && (
+                    <div className="mt-2 pt-2 border-t border-sky-100 dark:border-sky-900/40 text-[11px] font-mono text-sky-600 dark:text-sky-300 space-y-0.5">
+                      <div className="flex justify-between">
+                        <span className="font-sans text-gray-500">Depositadas en banco:</span>
+                        <span>{formatCurrency(comparativoTarjetas.totalTarjetasBbva - montoTicketsPendientesDeposito)}</span>
+                      </div>
+                      <div className="flex justify-between font-bold">
+                        <span className="font-sans text-sky-600 dark:text-sky-400">↳ Pendientes por depositar ({ticketsPendientesDeposito.length}):</span>
+                        <span>+{formatCurrency(montoTicketsPendientesDeposito)}</span>
+                      </div>
+                    </div>
+                  )}
+                  {montoTicketsPendientesDeposito === 0 && ticketsBbvaSinDeposito.length > 0 && (
+                    <div className="mt-2 pt-2 border-t border-sky-100 dark:border-sky-900/40 flex items-center justify-between text-[11px] gap-1">
+                      <span className="text-sky-600 dark:text-sky-400 font-bold text-[10px]">
+                        {ticketsBbvaSinDeposito.length} corte(s) BBVA sin depósito ({formatCurrency(ticketsBbvaSinDeposito.reduce((acc, t) => acc + Number(t.monto || 0), 0))})
+                      </span>
+                      {togglePendienteDeposito && (
+                        <button
+                          type="button"
+                          onClick={() => ticketsBbvaSinDeposito.forEach((t: any) => togglePendienteDeposito(t.id))}
+                          className="px-2 py-0.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-bold text-[10px] cursor-pointer whitespace-nowrap"
+                        >
+                          Marcar Pendientes
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -2209,11 +2326,36 @@ export const WizardConfiguracionGlobalModal: React.FC<WizardConfiguracionGlobalM
                       <span className="font-sans text-gray-500">💳 (+) Tarjetas BBVA Oficiales:</span>
                       <span className="font-bold text-sky-600">+{formatCurrency(comparativoTarjetas.totalTarjetasBbva)}</span>
                     </div>
-                    {montoTicketsPendientesDeposito > 0 && (
-                      <div className="flex justify-between pt-1 pl-4 text-[11px]">
-                        <span className="font-sans text-gray-400">↳ incluye pendientes por depositar ({ticketsPendientesDeposito.length}):</span>
-                        <span className="text-sky-500">{formatCurrency(montoTicketsPendientesDeposito)}</span>
+                    {ticketsPendientesDeposito.length > 0 ? (
+                      <div className="pt-1 pl-4 space-y-1 text-[11px]">
+                        <div className="flex justify-between">
+                          <span className="font-sans text-sky-400">↳ incluye tickets BBVA pendientes por depositar ({ticketsPendientesDeposito.length}):</span>
+                          <span className="text-sky-300 font-bold font-mono">+{formatCurrency(montoTicketsPendientesDeposito)}</span>
+                        </div>
+                        {ticketsPendientesDeposito.map((tp: any) => (
+                          <div key={tp.id} className="flex justify-between pl-2 text-[10px] text-gray-400">
+                            <span>• {tp.fecha ? String(tp.fecha).substring(0, 10) : ''} ({tp.descripcion || 'Corte BBVA'}):</span>
+                            <span className="font-mono text-sky-300">{formatCurrency(tp._difPendiente ?? tp.monto)}</span>
+                          </div>
+                        ))}
                       </div>
+                    ) : (
+                      ticketsBbvaSinDeposito.length > 0 && (
+                        <div className="mt-1 pl-4 p-2 rounded-xl bg-sky-950/40 border border-sky-800/40 text-[11px] flex items-center justify-between gap-2">
+                          <span className="text-sky-300">
+                            ⚠️ Hay {ticketsBbvaSinDeposito.length} ticket(s) BBVA sin depósito ({formatCurrency(ticketsBbvaSinDeposito.reduce((acc, t) => acc + Number(t.monto || 0), 0))})
+                          </span>
+                          {togglePendienteDeposito && (
+                            <button
+                              type="button"
+                              onClick={() => ticketsBbvaSinDeposito.forEach((t: any) => togglePendienteDeposito(t.id))}
+                              className="px-2 py-0.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-bold text-[10px] whitespace-nowrap cursor-pointer"
+                            >
+                              Marcar como Pendiente
+                            </button>
+                          )}
+                        </div>
+                      )
                     )}
                     <div className="flex justify-between pt-1">
                       <span className="font-sans text-gray-500">👥 (-) Facturas de Terceros (RFC):</span>
@@ -2254,7 +2396,7 @@ export const WizardConfiguracionGlobalModal: React.FC<WizardConfiguracionGlobalM
                           {formatCurrency(totalConIvaFacturaGlobal)}
                         </span>
                       </div>
-                      {isSeimenjo && <div className="pt-3 border-t border-gray-800/70 space-y-2 font-sans">
+                      <div className="pt-3 border-t border-gray-800/70 space-y-2 font-sans">
                         <span className="text-[10px] font-black uppercase tracking-wide text-emerald-300">IVA trasladado del período</span>
                         <div className="flex justify-between gap-3 text-xs text-gray-400">
                           <span>Factura Global</span>
@@ -2268,7 +2410,7 @@ export const WizardConfiguracionGlobalModal: React.FC<WizardConfiguracionGlobalM
                           <span>Total IVA trasladado</span>
                           <strong className="font-mono text-emerald-300">{formatCurrency(totalIvaTrasladadoPeriodo)}</strong>
                         </div>
-                      </div>}
+                      </div>
                     </div>
                   </div>
 
@@ -2282,13 +2424,34 @@ export const WizardConfiguracionGlobalModal: React.FC<WizardConfiguracionGlobalM
                     </button>
                     <button
                       type="button"
-                      onClick={() => {
-                        alert(`Configuración y cierre del período ${selectedMonth} guardado exitosamente.`);
-                        onClose();
+                      disabled={isSavingFinal}
+                      onClick={async () => {
+                        setIsSavingFinal(true);
+                        try {
+                          if (guardarAjustesPeriodo) {
+                            const res = await guardarAjustesPeriodo();
+                            if (res && res.error) {
+                              throw new Error(typeof res.error === 'string' ? res.error : res.error.message || 'Error al guardar');
+                            }
+                          }
+                          refreshPeriodStatus();
+                          alert(`✓ Configuración, días inhábiles y cierre del período ${selectedMonth} guardados exitosamente.`);
+                          onClose();
+                        } catch (e: any) {
+                          alert(`Error al guardar configuración: ${e?.message || 'Error desconocido'}`);
+                        } finally {
+                          setIsSavingFinal(false);
+                        }
                       }}
-                      className="px-4 py-2 bg-white hover:bg-gray-100 text-gray-900 rounded-xl text-xs font-black shadow-md transition-all cursor-pointer"
+                      className="px-4 py-2 bg-white hover:bg-gray-100 disabled:opacity-50 text-gray-900 rounded-xl text-xs font-black shadow-md transition-all cursor-pointer flex items-center gap-1.5"
                     >
-                      Guardar y Finalizar
+                      {isSavingFinal ? (
+                        <>
+                          <Loader2 size={14} className="animate-spin" /> Guardando...
+                        </>
+                      ) : (
+                        'Guardar y Finalizar'
+                      )}
                     </button>
                   </div>
                 </div>

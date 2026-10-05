@@ -19,7 +19,8 @@ import {
   DollarSign,
   Layers,
   ArrowRight,
-  X
+  X,
+  CreditCard
 } from 'lucide-react';
 
 interface DesfaseMesSubTabProps {
@@ -51,6 +52,10 @@ interface DesfaseMesSubTabProps {
   ticketsFinDeMesPendientes?: any[];
   montoTicketsFinDeMesPendientes?: number;
   ticketsMes?: any[];
+  togglePendienteDeposito?: (compId: string) => void;
+  ticketsPendientesDeposito?: any[];
+  montoTicketsPendientesDeposito?: number;
+  ticketsBbvaSinDeposito?: any[];
 }
 
 export const DesfaseMesSubTab: React.FC<DesfaseMesSubTabProps> = ({
@@ -82,6 +87,10 @@ export const DesfaseMesSubTab: React.FC<DesfaseMesSubTabProps> = ({
   ticketsFinDeMesPendientes = [],
   montoTicketsFinDeMesPendientes = 0,
   ticketsMes = [],
+  togglePendienteDeposito,
+  ticketsPendientesDeposito = [],
+  montoTicketsPendientesDeposito = 0,
+  ticketsBbvaSinDeposito = [],
 }) => {
   const router = useRouter();
   const [inputDiaSig, setInputDiaSig] = useState<string>(
@@ -275,18 +284,73 @@ export const DesfaseMesSubTab: React.FC<DesfaseMesSubTabProps> = ({
                   </span>
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setInputDiaSig(String(montoTicketsFinDeMesPendientes));
-                  if (setVentasDiaSiguienteMonto) {
-                    setVentasDiaSiguienteMonto(montoTicketsFinDeMesPendientes);
-                  }
-                }}
-                className="px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-bold font-sans cursor-pointer whitespace-nowrap shadow-xs text-xs self-end sm:self-center"
-              >
-                Aplicar {formatCurrency(montoTicketsFinDeMesPendientes)} al Cierre
-              </button>
+              <div className="flex items-center gap-2 self-end sm:self-center flex-wrap">
+                {togglePendienteDeposito && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      ticketsFinDeMesPendientes.forEach(t => togglePendienteDeposito(t.id));
+                    }}
+                    className="px-3 py-1.5 bg-sky-600 hover:bg-sky-500 text-white rounded-lg font-bold font-sans cursor-pointer whitespace-nowrap shadow-xs text-xs"
+                  >
+                    Marcar como Pendientes
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setInputDiaSig(String(montoTicketsFinDeMesPendientes));
+                    if (setVentasDiaSiguienteMonto) {
+                      setVentasDiaSiguienteMonto(montoTicketsFinDeMesPendientes);
+                    }
+                  }}
+                  className="px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-bold font-sans cursor-pointer whitespace-nowrap shadow-xs text-xs"
+                >
+                  Aplicar {formatCurrency(montoTicketsFinDeMesPendientes)} al Cierre
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Banner de tickets BBVA pendientes de depositar */}
+          {ticketsBbvaSinDeposito.length > 0 && (
+            <div className="p-3 bg-sky-50 dark:bg-sky-950/40 border border-sky-200 dark:border-sky-800 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
+              <div className="flex items-start gap-2.5">
+                <CreditCard className="text-sky-600 dark:text-sky-400 shrink-0 mt-0.5" size={18} />
+                <div>
+                  <span className="font-sans font-bold text-sky-900 dark:text-sky-200 block">
+                    Detectados {ticketsBbvaSinDeposito.length} tickets de terminal BBVA sin depósito en banco al cierre ({formatCurrency(ticketsBbvaSinDeposito.reduce((acc, t) => acc + Number(t.monto || 0), 0))})
+                  </span>
+                  <span className="text-[11px] text-sky-700 dark:text-sky-300 font-sans block mt-0.5">
+                    {ticketsBbvaSinDeposito.map(t => `${t.fecha ? String(t.fecha).substring(0, 10) : ''}: ${formatCurrency(t.monto)}`).join(' · ')}
+                  </span>
+                </div>
+              </div>
+              {togglePendienteDeposito && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    ticketsBbvaSinDeposito.forEach(t => {
+                      if (!t._isPendienteDeposito) togglePendienteDeposito(t.id);
+                    });
+                  }}
+                  className="px-3 py-1.5 bg-sky-600 hover:bg-sky-500 text-white rounded-lg font-bold font-sans cursor-pointer whitespace-nowrap shadow-xs text-xs self-end sm:self-center"
+                >
+                  ✓ Marcar cortes BBVA como Pendientes
+                </button>
+              )}
+            </div>
+          )}
+
+          {ticketsPendientesDeposito.length > 0 && (
+            <div className="p-2.5 bg-sky-500/10 border border-sky-500/30 rounded-xl flex items-center justify-between gap-2 text-xs">
+              <span className="text-sky-800 dark:text-sky-200 font-bold flex items-center gap-1.5 font-sans">
+                <CheckCircle2 size={15} className="text-sky-600" />
+                {ticketsPendientesDeposito.length} ticket(s) reconocidos como Pendientes por Depositar en el banco
+              </span>
+              <strong className="font-mono text-sky-700 dark:text-sky-300">
+                +{formatCurrency(montoTicketsPendientesDeposito)}
+              </strong>
             </div>
           )}
 

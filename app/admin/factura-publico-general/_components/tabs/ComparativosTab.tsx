@@ -50,6 +50,10 @@ interface ComparativosTabProps {
   ticketsFinDeMesPendientes?: any[];
   montoTicketsFinDeMesPendientes?: number;
   ticketsMes?: any[];
+  togglePendienteDeposito?: (compId: string) => void;
+  ticketsPendientesDeposito?: any[];
+  montoTicketsPendientesDeposito?: number;
+  ticketsBbvaSinDeposito?: any[];
 }
 
 export const ComparativosTab: React.FC<ComparativosTabProps> = ({
@@ -90,6 +94,10 @@ export const ComparativosTab: React.FC<ComparativosTabProps> = ({
   ticketsFinDeMesPendientes = [],
   montoTicketsFinDeMesPendientes = 0,
   ticketsMes = [],
+  togglePendienteDeposito,
+  ticketsPendientesDeposito = [],
+  montoTicketsPendientesDeposito = 0,
+  ticketsBbvaSinDeposito = [],
 }) => {
   return (
     <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl overflow-hidden shadow-sm flex-1 min-h-0 flex flex-col">
@@ -221,6 +229,10 @@ export const ComparativosTab: React.FC<ComparativosTabProps> = ({
           ticketsFinDeMesPendientes={ticketsFinDeMesPendientes}
           montoTicketsFinDeMesPendientes={montoTicketsFinDeMesPendientes}
           ticketsMes={ticketsMes}
+          togglePendienteDeposito={togglePendienteDeposito}
+          ticketsPendientesDeposito={ticketsPendientesDeposito}
+          montoTicketsPendientesDeposito={montoTicketsPendientesDeposito}
+          ticketsBbvaSinDeposito={ticketsBbvaSinDeposito}
         />
       )}
 
