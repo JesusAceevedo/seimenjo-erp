@@ -20,6 +20,7 @@ interface EgresosTabProps {
   categorias: CategoriaGasto[];
   formasPago?: any[];
   empresaRfc?: string | null;
+  selectedMonth?: string;
   onOpenComprobacionAcumulada: () => void;
   onDownloadFile: (url: string) => void;
   onViewCfdi?: (xmlUrl: string) => void;
@@ -63,6 +64,7 @@ export default function EgresosTab({
   categorias,
   formasPago = [],
   empresaRfc,
+  selectedMonth,
   onOpenComprobacionAcumulada,
   onDownloadFile,
   onViewCfdi,
@@ -77,13 +79,14 @@ export default function EgresosTab({
   const { openCfdi } = useCfdiViewer();
   const handleViewCfdi = onViewCfdi || openCfdi;
 
-  // Paginación
+  // Paginación y Modales
   const [showXmlModal, setShowXmlModal] = useState(false);
   const [manualModal, setManualModal] = useState<{isOpen: boolean, id?: string}>({isOpen: false});
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(PAGE_SIZE_OPTIONS[0]);
   const [sincronizando, setSincronizando] = useState(false);
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
+  const [filtroPeriodo, setFiltroPeriodo] = useState<'mes' | 'todos'>('mes');
 
   // Expansión de parcialidades (hijos)
   const [expandedParents, setExpandedParents] = useState<Record<string, boolean>>({});
@@ -303,6 +306,12 @@ export default function EgresosTab({
   const filtrados = useMemo(() => {
     const q = search.toLowerCase();
     const result = gastosFacturados.filter((g) => {
+      // 0. Filtro por Periodo (Mes seleccionado vs Todo el año / Histórico)
+      if (filtroPeriodo === 'mes' && selectedMonth) {
+        const fechaRef = g.mes_conciliacion || (g.fecha_gasto ? g.fecha_gasto.substring(0, 7) : (g.fecha_timbrado ? g.fecha_timbrado.substring(0, 7) : ''));
+        if (fechaRef && fechaRef !== selectedMonth) return false;
+      }
+
       // Ocultar de la lista de filas principales si es un gasto hijo (parcialidad) y su padre existe en el listado
       if (g.gasto_padre_id) {
         const pId = getCleanId(g.gasto_padre_id);
@@ -363,7 +372,7 @@ export default function EgresosTab({
     });
 
     return result;
-  }, [gastosFacturados, search, filtroMetodo, categoriasSelected, filtrosEstatus, sortDirection]);
+  }, [gastosFacturados, search, filtroMetodo, categoriasSelected, filtrosEstatus, sortDirection, filtroPeriodo, selectedMonth]);
 
   // Paginado
   const totalPages = Math.max(1, Math.ceil(filtrados.length / pageSize));
@@ -469,6 +478,37 @@ export default function EgresosTab({
               )}
             </select>
           </div>
+
+          {/* Switch Periodo vs Todo el año */}
+          <div className="flex items-center bg-gray-100 dark:bg-gray-900 p-0.5 rounded-xl border border-gray-200 dark:border-gray-800 text-xs shrink-0">
+            <button
+              onClick={() => {
+                setFiltroPeriodo('mes');
+                resetPage();
+              }}
+              className={`px-2.5 py-1 rounded-lg font-bold transition-all cursor-pointer ${
+                filtroPeriodo === 'mes'
+                  ? 'bg-white dark:bg-gray-800 text-blue-600 dark:text-blue-400 shadow-xs'
+                  : 'text-gray-500 hover:text-gray-800 dark:hover:text-gray-300'
+              }`}
+            >
+              {selectedMonth || 'Mes actual'}
+            </button>
+            <button
+              onClick={() => {
+                setFiltroPeriodo('todos');
+                resetPage();
+              }}
+              className={`px-2.5 py-1 rounded-lg font-bold transition-all cursor-pointer ${
+                filtroPeriodo === 'todos'
+                  ? 'bg-white dark:bg-gray-800 text-blue-600 dark:text-blue-400 shadow-xs'
+                  : 'text-gray-500 hover:text-gray-800 dark:hover:text-gray-300'
+              }`}
+            >
+              Todo el año / Histórico
+            </button>
+          </div>
+
           <button
             onClick={() => {
               setSearch('');
@@ -1205,6 +1245,7 @@ export default function EgresosTab({
           onClose={() => setManualModal({isOpen: false})}
           onSuccess={() => {
             setManualModal({isOpen: false});
+            setFiltroPeriodo('todos');
             if (onRefresh) onRefresh();
             else window.location.reload();
           }}
@@ -1220,6 +1261,7 @@ export default function EgresosTab({
             else window.location.reload();
           }}
           onSuccess={() => {
+            setFiltroPeriodo('todos');
             if (onRefresh) onRefresh();
           }}
         />

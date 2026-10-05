@@ -2,6 +2,7 @@
 import React, { useState, useRef } from 'react';
 import { UploadCloud, X, FileText, CheckCircle, AlertTriangle, FileCode } from 'lucide-react';
 import { supabase } from '../../../../lib/supabase';
+import { useEmpresaId } from '../../../../lib/hooks/useEmpresaId';
 import { consultarSatYActualizarCfdi } from '../actions';
 
 interface CargaXmlMasivaModalProps {
@@ -18,6 +19,7 @@ function getFileBaseName(fileName: string): string {
 }
 
 export default function CargaXmlMasivaModal({ onClose, onSuccess, tipo, empresaRfc }: CargaXmlMasivaModalProps) {
+  const getEmpresaId = useEmpresaId();
   const [dragActive, setDragActive] = useState(false);
   const [archivos, setArchivos] = useState<File[]>([]);
   const [procesando, setProcesando] = useState(false);
@@ -119,15 +121,17 @@ export default function CargaXmlMasivaModal({ onClose, onSuccess, tipo, empresaR
       }
 
       // Obtener empresaId activo
-      let empresaId = '';
-      try {
-        const sesionGuardada = localStorage.getItem('seimenjo_session');
-        if (sesionGuardada) {
-          const datosSesion = JSON.parse(sesionGuardada);
-          empresaId = datosSesion.empresa_id;
+      let empresaId = await getEmpresaId();
+      if (!empresaId) {
+        try {
+          const sesionGuardada = localStorage.getItem('seimenjo_session');
+          if (sesionGuardada) {
+            const datosSesion = JSON.parse(sesionGuardada);
+            empresaId = datosSesion.empresa_id;
+          }
+        } catch (e) {
+          console.error('Error reading active company from localStorage:', e);
         }
-      } catch (e) {
-        console.error('Error reading active company from localStorage:', e);
       }
 
       if (!empresaId) {

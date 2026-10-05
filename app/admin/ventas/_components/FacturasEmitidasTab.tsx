@@ -947,6 +947,7 @@ export default function FacturasEmitidasTab({
           onClose={() => setShowXmlModal(false)}
           onSuccess={() => {
             setShowXmlModal(false);
+            setFiltroPeriodo('todos');
             onRefresh();
           }}
           tipo="venta"
@@ -962,6 +963,7 @@ export default function FacturasEmitidasTab({
           onClose={() => setShowManualModal(false)}
           onSuccess={() => {
             setShowManualModal(false);
+            setFiltroPeriodo('todos');
             onRefresh();
           }}
         />

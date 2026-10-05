@@ -5,6 +5,7 @@ import { supabase } from '../../../../lib/supabase';
 import { conciliarGastoEfectivoAutomatico } from '../reconciliationActions';
 import { SAT_FORMAS_PAGO } from '../../../../lib/constants/sat';
 import { useSessionToken } from '../../../../lib/hooks/useSessionToken';
+import { useEmpresaId } from '../../../../lib/hooks/useEmpresaId';
 import { enviarFacturaPorCorreo } from '../actions';
 
 interface CargaManualModalProps {
@@ -17,6 +18,7 @@ interface CargaManualModalProps {
 
 export default function CargaManualModal({ onClose, onSuccess, tipo, registroId, empresaRfc }: CargaManualModalProps) {
   const getSessionToken = useSessionToken();
+  const getEmpresaId = useEmpresaId();
   const [procesando, setProcesando] = useState(false);
   const [errorGlobal, setErrorGlobal] = useState('');
   const [verTodos, setVerTodos] = useState(false);
@@ -577,6 +579,44 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId,
       if (registroId) {
         // ACTUALIZAR (Adjuntar documentos faltantes o reemplazar existentes)
         if (tipo === 'venta') {
+          let empresaId = await getEmpresaId();
+          if (!empresaId && registroId) {
+            const { data: pData } = await supabase.from('pedidos').select('empresa_id').eq('id', registroId).maybeSingle();
+            if (pData?.empresa_id) empresaId = pData.empresa_id;
+          }
+
+          let clienteId: string | null = null;
+          const targetRfc = manualFields.rfc.trim();
+          if (targetRfc && empresaId) {
+            const { data: cli } = await supabase
+              .from('clientes')
+              .select('id')
+              .eq('rfc', targetRfc.toUpperCase())
+              .eq('empresa_id', empresaId)
+              .maybeSingle();
+
+            if (cli) {
+              clienteId = cli.id;
+            } else {
+              const { data: newCli } = await supabase
+                .from('clientes')
+                .insert({
+                  rfc: targetRfc.toUpperCase(),
+                  nombre_local: manualFields.nombre.trim() || 'CLIENTE DESCONOCIDO',
+                  telefono: '0000000000',
+                  es_anonimo: false,
+                  empresa_id: empresaId
+                })
+                .select('id')
+                .single();
+              if (newCli) clienteId = newCli.id;
+            }
+          }
+
+          let formaPagoId: string | null = null;
+          const selectedFp = formasPago.find(f => f.id === manualFields.metodoPagoId);
+          if (selectedFp) formaPagoId = selectedFp.id;
+
           const { data: existingFc } = await supabase
             .from('facturas_clientes')
             .select('id, pedido_id')
@@ -590,12 +630,20 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId,
             if (ticketChanged) updateData.ticket_url = finalTicketUrl;
             if (finalSoporteUrl !== null) updateData.soporte_reembolso_url = finalSoporteUrl;
 
-            if (uuidFiscal) updateData.uuid_fiscal = uuidFiscal.toUpperCase();
+            if (uuidFiscal) {
+              updateData.uuid_fiscal = uuidFiscal.toUpperCase();
+              const { data: estFac } = await supabase.from('estatus_factura').select('id').ilike('nombre', 'Facturado').maybeSingle();
+              if (estFac) updateData.estatus_factura_id = estFac.id;
+            }
             if (manualFields.folio) updateData.serie_folio = manualFields.folio;
             if (manualFields.total) updateData.total = parseFloat(manualFields.total);
             if (manualFields.subtotal) updateData.subtotal = parseFloat(manualFields.subtotal);
             if (manualFields.iva) updateData.iva_trasladado = parseFloat(manualFields.iva);
             if (manualFields.fecha) updateData.fecha_emision = manualFields.fecha;
+            if (clienteId) updateData.cliente_id = clienteId;
+            if (formaPagoId) updateData.forma_pago_id = formaPagoId;
+            if (usoCfdi) updateData.uso_cfdi_clave = usoCfdi;
+            if (fechaTimbrado) updateData.fecha_timbrado = fechaTimbrado;
 
             if (Object.keys(updateData).length > 0) {
               const { error } = await supabase.from('facturas_clientes').update(updateData).eq('id', existingFc.id);
@@ -604,57 +652,16 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId,
 
             const pedId = existingFc.pedido_id || registroId;
             if (pedId) {
-              await supabase
-                .from('pedidos')
-                .update({
-                  folio_factura: manualFields.folio || (uuidFiscal ? `UUID-${uuidFiscal.substring(0, 6)}` : 'FACTURADO'),
-                  estatus_pago: 'Liquidado'
-                })
-                .eq('id', pedId);
+              const pedUpdate: any = {
+                folio_factura: manualFields.folio || (uuidFiscal ? `UUID-${uuidFiscal.substring(0, 6)}` : 'FACTURADO'),
+                estatus_pago: 'Liquidado'
+              };
+              if (finalXmlUrl) pedUpdate.xml_url = finalXmlUrl;
+              if (finalPdfUrl) pedUpdate.pdf_url = finalPdfUrl;
+              await supabase.from('pedidos').update(pedUpdate).eq('id', pedId);
             }
           } else {
             // No existía factura cliente aún para este pedido -> Insertar registro en facturas_clientes y actualizar pedido
-            let empresaId = '';
-            try {
-              const sesionGuardada = localStorage.getItem('seimenjo_session');
-              if (sesionGuardada) {
-                empresaId = JSON.parse(sesionGuardada).empresa_id;
-              }
-            } catch (e) {}
-            if (!empresaId) empresaId = user.user_metadata?.empresa_id;
-
-            let clienteId = null;
-            const targetRfc = manualFields.rfc.trim();
-            if (targetRfc && empresaId) {
-              const { data: cli } = await supabase
-                .from('clientes')
-                .select('id')
-                .eq('rfc', targetRfc.toUpperCase())
-                .eq('empresa_id', empresaId)
-                .maybeSingle();
-
-              if (cli) {
-                clienteId = cli.id;
-              } else {
-                const { data: newCli } = await supabase
-                  .from('clientes')
-                  .insert({
-                    rfc: targetRfc.toUpperCase(),
-                    nombre_local: manualFields.nombre.trim() || 'CLIENTE DESCONOCIDO',
-                    telefono: '0000000000',
-                    es_anonimo: false,
-                    empresa_id: empresaId
-                  })
-                  .select('id')
-                  .single();
-                if (newCli) clienteId = newCli.id;
-              }
-            }
-
-            let formaPagoId: string | null = null;
-            const selectedFp = formasPago.find(f => f.id === manualFields.metodoPagoId);
-            if (selectedFp) formaPagoId = selectedFp.id;
-
             const insertPayload: any = {
               pedido_id: registroId,
               cliente_id: clienteId,
@@ -688,13 +695,13 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId,
             const { error: insErr } = await supabase.from('facturas_clientes').insert([insertPayload]);
             if (insErr) throw insErr;
 
-            await supabase
-              .from('pedidos')
-              .update({
-                folio_factura: manualFields.folio || (uuidFiscal ? `UUID-${uuidFiscal.substring(0, 6)}` : 'FACTURADO'),
-                estatus_pago: 'Liquidado'
-              })
-              .eq('id', registroId);
+            const pedUpdate: any = {
+              folio_factura: manualFields.folio || (uuidFiscal ? `UUID-${uuidFiscal.substring(0, 6)}` : 'FACTURADO'),
+              estatus_pago: 'Liquidado'
+            };
+            if (finalXmlUrl) pedUpdate.xml_url = finalXmlUrl;
+            if (finalPdfUrl) pedUpdate.pdf_url = finalPdfUrl;
+            await supabase.from('pedidos').update(pedUpdate).eq('id', registroId);
           }
 
           // Enviar factura por correo si está seleccionado
@@ -707,27 +714,99 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId,
               console.warn('Error al enviar factura por correo tras carga:', mailErr);
             }
           }
-        } else {
-          const updateData: any = {};
-          if (tipo === 'movimiento') {
-            if (finalXmlUrl !== null) updateData.xml_url = finalXmlUrl;
-            if (finalPdfUrl !== null) updateData.pdf_factura_url = finalPdfUrl;
-            if (ticketChanged) updateData.pdf_ticket_url = finalTicketUrl;
-            if (finalSoporteUrl !== null) updateData.soporte_reembolso_url = finalSoporteUrl;
+        } else if (tipo === 'gasto') {
+          let empresaId = await getEmpresaId();
+          if (!empresaId && registroId) {
+            const { data: gData } = await supabase.from('gastos').select('empresa_id').eq('id', registroId).maybeSingle();
+            if (gData?.empresa_id) empresaId = gData.empresa_id;
+          }
 
-            updateData.concepto = manualFields.concepto;
-            if (manualFields.categoria_id) {
-              updateData.categoria_movimiento_id = manualFields.categoria_id;
+          let proveedorId: string | null = null;
+          const targetRfc = manualFields.rfc.trim();
+          if (targetRfc && empresaId) {
+            const { data: prov } = await supabase
+              .from('proveedores')
+              .select('id')
+              .eq('rfc', targetRfc.toUpperCase())
+              .eq('empresa_id', empresaId)
+              .maybeSingle();
+
+            if (prov) {
+              proveedorId = prov.id;
+            } else {
+              const { data: newProv, error: errP } = await supabase
+                .from('proveedores')
+                .insert({
+                  rfc: targetRfc.toUpperCase(),
+                  nombre_comercial: manualFields.nombre.trim() || targetRfc,
+                  razon_social: manualFields.nombre.trim() || targetRfc,
+                  empresa_id: empresaId
+                })
+                .select('id')
+                .single();
+              if (!errP && newProv) proveedorId = newProv.id;
             }
-          } else {
-            if (finalXmlUrl !== null) updateData.xml_url = finalXmlUrl;
-            if (finalPdfUrl !== null) updateData.pdf_url = finalPdfUrl;
-            if (ticketChanged) updateData.ticket_url = finalTicketUrl;
-            if (finalSoporteUrl !== null) updateData.soporte_reembolso_url = finalSoporteUrl;
+          }
+
+          let formaPagoId: string | null = null;
+          let metodoPagoCode = '99';
+          const selectedFp = formasPago.find(f => f.id === manualFields.metodoPagoId);
+          if (selectedFp) {
+            formaPagoId = selectedFp.id;
+            metodoPagoCode = selectedFp.codigo || selectedFp.nombre.substring(0, 2) || '99';
+          } else if (manualFields.metodoPagoId) {
+            metodoPagoCode = manualFields.metodoPagoId;
+            const fallbackFp = formasPago.find(f => f.codigo === '99' || f.nombre.toLowerCase().includes('definir'));
+            formaPagoId = fallbackFp ? fallbackFp.id : null;
+          }
+
+          const updateData: any = {};
+          if (finalXmlUrl !== null) updateData.xml_url = finalXmlUrl;
+          if (finalPdfUrl !== null) updateData.pdf_url = finalPdfUrl;
+          if (ticketChanged) updateData.ticket_url = finalTicketUrl;
+          if (finalSoporteUrl !== null) updateData.soporte_reembolso_url = finalSoporteUrl;
+
+          if (uuidFiscal) {
+            updateData.uuid_fiscal = uuidFiscal.toUpperCase();
+            updateData.estatus_facturado = true;
+            const { data: estFac } = await supabase.from('estatus_factura').select('id').ilike('nombre', 'Facturado').maybeSingle();
+            if (estFac) updateData.estatus_factura_id = estFac.id;
+          }
+          if (manualFields.folio) updateData.folio_factura = manualFields.folio;
+          if (manualFields.total) updateData.monto = parseFloat(manualFields.total);
+          if (manualFields.subtotal) updateData.subtotal = parseFloat(manualFields.subtotal);
+          if (manualFields.iva) updateData.iva_acreditable = parseFloat(manualFields.iva);
+          if (manualFields.fecha) updateData.fecha_gasto = manualFields.fecha;
+          if (fechaTimbrado) updateData.fecha_timbrado = fechaTimbrado;
+          if (manualFields.concepto) updateData.concepto = manualFields.concepto;
+          if (manualFields.categoria_id) updateData.categoria_id = manualFields.categoria_id;
+          if (proveedorId) updateData.proveedor_id = proveedorId;
+          if (formaPagoId) updateData.forma_pago_id = formaPagoId;
+          if (metodoPagoCode) updateData.metodo_pago = metodoPagoCode;
+          updateData.es_deducible = esDeducible;
+
+          if (Object.keys(updateData).length > 0) {
+            const { error } = await supabase.from('gastos').update(updateData).eq('id', registroId);
+            if (error) throw error;
+          }
+        } else {
+          // tipo === 'movimiento'
+          const updateData: any = {};
+          if (finalXmlUrl !== null) updateData.xml_url = finalXmlUrl;
+          if (finalPdfUrl !== null) updateData.pdf_factura_url = finalPdfUrl;
+          if (ticketChanged) updateData.pdf_ticket_url = finalTicketUrl;
+          if (finalSoporteUrl !== null) updateData.soporte_reembolso_url = finalSoporteUrl;
+
+          updateData.concepto = manualFields.concepto;
+          if (manualFields.categoria_id) {
+            updateData.categoria_movimiento_id = manualFields.categoria_id;
+          }
+          if (manualFields.rfc.trim()) {
+            updateData.rfc_proveedor = manualFields.rfc.trim().toUpperCase();
           }
 
           if (Object.keys(updateData).length > 0) {
-            const { error } = await supabase.from(tableStr).update(updateData).eq('id', registroId);
+            const { error } = await supabase.from('movimientos_bancarios').update(updateData).eq('id', registroId);
             if (error) throw error;
           }
         }
@@ -750,15 +829,17 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId,
           formaPagoId = fallbackFp ? fallbackFp.id : null;
         }
 
-        let empresaId = '';
-        try {
-          const sesionGuardada = localStorage.getItem('seimenjo_session');
-          if (sesionGuardada) {
-            const datosSesion = JSON.parse(sesionGuardada);
-            empresaId = datosSesion.empresa_id;
+        let empresaId = await getEmpresaId();
+        if (!empresaId) {
+          try {
+            const sesionGuardada = localStorage.getItem('seimenjo_session');
+            if (sesionGuardada) {
+              const datosSesion = JSON.parse(sesionGuardada);
+              empresaId = datosSesion.empresa_id;
+            }
+          } catch (e) {
+            console.error('Error reading active company from localStorage:', e);
           }
-        } catch (e) {
-          console.error('Error reading active company from localStorage:', e);
         }
 
         if (!empresaId) {

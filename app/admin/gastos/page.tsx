@@ -59,6 +59,7 @@ export default function EgresosModule() {
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
   const [cfdiViewerUrl, setCfdiViewerUrl] = useState<string | null>(null);
+  const [empresaRfc, setEmpresaRfc] = useState<string | null>(null);
 
   // Subtabs en Gastos y Egresos
   const [activeTab, setActiveTab] = useState<'egresos' | 'banco' | 'no_deducibles'>(() => cashDepositId ? 'banco' : 'egresos');
@@ -127,12 +128,14 @@ export default function EgresosModule() {
       const empresaId = await getEmpresaId();
       if (!empresaId) return;
 
+      const { data: empData } = await supabase.from('empresas').select('rfc').eq('id', empresaId).maybeSingle();
+      if (empData?.rfc) setEmpresaRfc(empData.rfc);
+
       // 1. Gastos facturados y no deducibles
       const { data: gFac } = await supabase
         .from('gastos')
         .select('*, proveedores(nombre_comercial, rfc), categorias_gasto(nombre), padre:gastos!gasto_padre_id(concepto), movimientos_bancarios(*, estatus_conciliacion_bancaria(*), cuentas_bancarias(*))')
         .eq('empresa_id', empresaId)
-        .or('uuid_fiscal.not.is.null,es_deducible.eq.false')
         .order('fecha_gasto', { ascending: false });
 
       const { data: cGasto } = await supabase.from('categorias_gasto').select('*').or(`empresa_id.is.null,empresa_id.eq.${empresaId}`).order('nombre');
@@ -709,7 +712,9 @@ export default function EgresosModule() {
                 {/* VISTA 1: FACTURAS Y GASTOS ASIGNADOS */}
                 {activeTab === 'egresos' && (
                   <EgresosTab
-                    gastosFacturados={gastosForSelectedMonth}
+                    gastosFacturados={gastosFacturados}
+                    selectedMonth={selectedMonth}
+                    empresaRfc={empresaRfc}
                     categorias={categoriasGasto}
                     formasPago={formasPago}
                     onUpdateCategoria={handleUpdateCategoriaGasto}

@@ -157,12 +157,15 @@ export interface GastoFacturado {
   id: string;
   fecha_timbrado?: string;
   fecha_gasto?: string;
+  mes_conciliacion?: string | null;
   uuid_fiscal?: string;
+  folio_factura?: string | null;
   concepto: string;
   monto: number;
   subtotal?: number;
   iva_acreditable?: number;
   metodo_pago?: string;
+  forma_pago_id?: string | null;
   es_deducible?: boolean;
   categoria_id?: string | null;
   proveedores?: { id?: string; nombre_comercial: string; rfc: string };
