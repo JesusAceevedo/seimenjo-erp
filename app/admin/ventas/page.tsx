@@ -10,12 +10,14 @@ import { useThemeMode } from '../../../lib/useThemeMode';
 import { useSessionToken } from '../../../lib/hooks/useSessionToken';
 import { useEmpresaId } from '../../../lib/hooks/useEmpresaId';
 import { usePeriod } from '../../../lib/hooks/usePeriod';
+import { fetchCuentasBancarias } from '../../../lib/cuentasBancarias';
 import {
   obtenerSignedUrl,
   enviarFacturaPorCorreo,
   eliminarPedidoSano,
   eliminarFacturaCliente,
-  sincronizarFacturasEmitidasDesdeDepositos
+  sincronizarFacturasEmitidasDesdeDepositos,
+  getCuentasBancariasAction
 } from '../gastos/actions';
 import {
   autoConciliarMovimientos,
@@ -204,8 +206,11 @@ export default function VentasFacturadasModule() {
         .order('fecha', { ascending: false });
       setMovimientosBancarios(movs || []);
 
-      // 4. Cuentas Bancarias
-      const { data: cBanc } = await supabase.from('cuentas_bancarias').select('*').eq('empresa_id', empresaId);
+      // 4. Cuentas Bancarias (Carga robusta con fallback global y auto-inicialización)
+      let cBanc = await fetchCuentasBancarias(empresaId);
+      if (!cBanc || cBanc.length === 0) {
+        cBanc = (await getCuentasBancariasAction(empresaId)) as any;
+      }
       setCuentasBancarias(cBanc || []);
 
       // 5. Estatus y Categorías

@@ -5,7 +5,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../../lib/supabase';
-import { Plus, Filter, Soup, ShoppingCart, Truck, FileCheck, Search, Sun, Moon, FileText, ChevronLeft, ChevronRight, Users, LayoutDashboard, Printer, Mail, FileCode, Edit3, Trash2, DollarSign, AlertTriangle, UploadCloud, Loader2 } from 'lucide-react';
+import { Plus, Filter, Soup, ShoppingCart, Truck, FileCheck, Search, Sun, Moon, FileText, ChevronLeft, ChevronRight, Users, LayoutDashboard, Printer, Mail, FileCode, Edit3, Trash2, DollarSign, AlertTriangle, UploadCloud, Loader2, RefreshCw } from 'lucide-react';
 import { useThemeMode } from '../../../lib/useThemeMode';
 import { enviarFacturaPorCorreo, obtenerSignedUrl } from '../gastos/actions';
 import { eliminarDetallesPedido } from './actions';
@@ -1144,14 +1144,24 @@ export default function AdminMonitor() {
                               </button>
                             </div>
 
-                            <button
-                              onClick={() => handleResendInvoice(p.id)}
-                              disabled={isSendingEmail || !!cargandoDocPedidoId}
-                              className="w-full px-2 py-1 bg-blue-600 hover:bg-blue-500 text-white font-medium rounded shadow transition-colors text-[10px] flex items-center justify-center gap-1 uppercase font-sans font-semibold disabled:opacity-50 cursor-pointer"
-                              title="Reenviar factura por correo al cliente"
-                            >
-                              <Mail size={11} /> Reenviar
-                            </button>
+                            <div className="grid grid-cols-2 gap-1">
+                              <button
+                                onClick={() => handleResendInvoice(p.id)}
+                                disabled={isSendingEmail || !!cargandoDocPedidoId}
+                                className="w-full px-1 py-1 bg-blue-600 hover:bg-blue-500 text-white font-medium rounded shadow transition-colors text-[10px] flex items-center justify-center gap-1 font-sans font-semibold disabled:opacity-50 cursor-pointer"
+                                title="Reenviar factura por correo al cliente"
+                              >
+                                <Mail size={11} /> Reenviar
+                              </button>
+                              <button
+                                onClick={() => setSubirFacturaModal({ open: true, pedido: p })}
+                                disabled={isSendingEmail || !!cargandoDocPedidoId}
+                                className="w-full px-1 py-1 bg-amber-500 hover:bg-amber-600 text-white font-medium rounded shadow transition-colors text-[10px] flex items-center justify-center gap-1 font-sans font-semibold disabled:opacity-50 cursor-pointer"
+                                title="Corregir o reemplazar la factura de este pedido"
+                              >
+                                <RefreshCw size={11} /> Corregir
+                              </button>
+                            </div>
                           </div>
                         ) : (
                           <button
@@ -1569,7 +1579,7 @@ export default function AdminMonitor() {
             onSuccess={(emailDetails) => {
               setSubirFacturaModal({ open: false, pedido: null });
               fetchPedidos();
-              if (emailDetails) {
+              if (emailDetails && !emailDetails.desvinculado && emailDetails.email) {
                 setEmailModal({ open: true, details: emailDetails });
               }
             }}

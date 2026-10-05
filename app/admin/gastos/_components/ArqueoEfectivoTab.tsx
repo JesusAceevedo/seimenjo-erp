@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   Banknote,
   Landmark,
@@ -21,17 +21,77 @@ import {
   Layers,
   Check,
   RefreshCw,
-  Sparkles
+  Sparkles,
+  Link2,
+  Unlink,
+  X
 } from 'lucide-react';
+
+type CashDepositPeriod = 'anterior' | 'actual' | 'siguiente';
+
+const getCashMonthOffset = (monthKey: string, offset: number) => {
+  if (!/^\d{4}-\d{2}$/.test(monthKey)) return monthKey;
+  const [year, month] = monthKey.split('-').map(Number);
+  return new Date(Date.UTC(year, month - 1 + offset, 1)).toISOString().slice(0, 7);
+};
+
+interface CashTicketLink {
+  movimiento_id: string;
+  monto_asociado?: number | string | null;
+}
+
+interface CashTicketRow {
+  id: string;
+  fecha?: string;
+  descripcion?: string;
+  monto_efectivo?: number | string | null;
+  propina_efectivo?: number | string | null;
+  comprobantes_deposito_movimientos?: CashTicketLink[];
+  _cashBase: number;
+  _cashTip: number;
+  _cashTotal: number;
+  _cashLinks: CashTicketLink[];
+  _cashLinked: number;
+  _cashPending: number;
+  _cashSalesPeriod: 'actual' | 'anterior';
+}
+
+interface CashCarryForwardRecord {
+  id: string;
+  fecha?: string;
+  descripcion?: string;
+  montoEfectivo?: number;
+  propinaEfectivo?: number;
+  montoPendiente: number;
+}
+
+interface CashDepositMovement {
+  id: string;
+  fecha?: string;
+  concepto?: string;
+  referencia?: string;
+  deposito?: number | string | null;
+  monto?: number | string | null;
+  _cashPeriod: CashDepositPeriod;
+  _cashAmount: number;
+  _cashLinked: number;
+  _cashAvailable: number;
+  _isArrastre?: boolean;
+  _razonArrastre?: string;
+}
 
 interface ArqueoEfectivoTabProps {
   comprobantes?: any[];
   movimientos?: any[];
   cuentasBancarias?: any[];
   selectedMonth?: string;
+  cashDepositId?: string;
+  cashTicketId?: string;
   gastos?: any[];
   token?: string;
   onReloadMovimientos?: () => void;
+  onVincularComprobante?: (comprobanteId: string, movimientoId: string, montoAsociado?: number) => Promise<{ success: boolean; error?: string }>;
+  onDesvincularComprobante?: (comprobanteId: string, movimientoId?: string | null) => Promise<{ success: boolean; error?: string }>;
 }
 
 export function ArqueoEfectivoTab({
@@ -39,64 +99,76 @@ export function ArqueoEfectivoTab({
   movimientos = [],
   cuentasBancarias = [],
   selectedMonth = '',
+  cashDepositId,
+  cashTicketId,
   gastos = [],
-  token,
-  onReloadMovimientos
+  onReloadMovimientos,
+  onVincularComprobante,
+  onDesvincularComprobante
 }: ArqueoEfectivoTabProps) {
-  const [activeSubView, setActiveSubView] = useState<'resumen' | 'diario' | 'movimientos'>('resumen');
-  
-  // Guardado local de IDs de movimientos bancarios marcados manualmente como "pertenecientes a otro mes (arrastre)"
-  const storageKey = `seimenjo_arrastre_efectivo_${selectedMonth || 'global'}`;
-  const [manualArrastreIds, setManualArrastreIds] = useState<Set<string>>(() => {
-    if (typeof window === 'undefined') return new Set();
+  const cashNavigationTarget = cashDepositId
+    ? { depositId: cashDepositId, ticketId: cashTicketId || '' }
+    : null;
+  const [activeSubView, setActiveSubView] = useState<'resumen' | 'diario' | 'movimientos' | 'tickets'>(() =>
+    cashNavigationTarget ? 'movimientos' : 'resumen'
+  );
+  const [activeCashDeposit, setActiveCashDeposit] = useState<CashDepositMovement | null>(null);
+  const [dismissedNavigationDepositId, setDismissedNavigationDepositId] = useState('');
+  const [selectedCashTicketIds, setSelectedCashTicketIds] = useState<Set<string>>(new Set());
+  const [savingCashAssignments, setSavingCashAssignments] = useState(false);
+  const [cashCarryForwardByMonth, setCashCarryForwardByMonth] = useState<Record<string, CashCarryForwardRecord[]>>(() => {
+    if (typeof window === 'undefined') return {};
     try {
-      const saved = localStorage.getItem(storageKey);
-      return saved ? new Set(JSON.parse(saved)) : new Set();
+      return JSON.parse(localStorage.getItem('seimenjo_efectivo_pendiente_siguiente_mes') || '{}');
     } catch {
-      return new Set();
+      return {};
     }
   });
 
-  const toggleManualArrastre = (id: string) => {
-    setManualArrastreIds(prev => {
-      const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
-      try {
-        localStorage.setItem(storageKey, JSON.stringify(Array.from(next)));
-      } catch (e) {
-        console.error('Error guardando en localStorage:', e);
-      }
+  const allPeriodsStorageKey = 'seimenjo_periodo_depositos_efectivo';
+  const storageKey = `seimenjo_arrastre_efectivo_${selectedMonth || 'global'}`;
+  const [cashDepositPeriodsByMonth, setCashDepositPeriodsByMonth] = useState<Record<string, Record<string, CashDepositPeriod>>>(() => {
+    if (typeof window === 'undefined') return {};
+    try {
+      const saved = localStorage.getItem(allPeriodsStorageKey);
+      const parsed = saved ? JSON.parse(saved) : {};
+      const legacyIds: string[] = JSON.parse(localStorage.getItem(storageKey) || '[]');
+      const monthKey = selectedMonth || 'global';
+      const legacyMap = Object.fromEntries(legacyIds.map(id => [id, 'anterior' as CashDepositPeriod]));
+      return { ...parsed, [monthKey]: { ...legacyMap, ...(parsed[monthKey] || {}) } };
+    } catch {
+      return {};
+    }
+  });
+
+  const currentMonthKey = selectedMonth || 'global';
+  const currentCashDepositPeriods = cashDepositPeriodsByMonth[currentMonthKey] || {};
+  const legacyArrastreIds = useMemo(() => {
+    if (typeof window === 'undefined') return new Set<string>();
+    try {
+      return new Set<string>(JSON.parse(localStorage.getItem(storageKey) || '[]'));
+    } catch {
+      return new Set<string>();
+    }
+  }, [storageKey]);
+
+  const setCashDepositPeriod = (id: string, period: CashDepositPeriod) => {
+    setCashDepositPeriodsByMonth(previous => {
+      const next = { ...previous, [currentMonthKey]: { ...(previous[currentMonthKey] || {}), [id]: period } };
+      localStorage.setItem(allPeriodsStorageKey, JSON.stringify(next));
       return next;
     });
   };
 
   const formatCurrency = (val: number | string | null | undefined) => {
     const num = Number(val) || 0;
-    return new Intl.NumberFormat('es-MX', {
-      style: 'currency',
-      currency: 'MXN',
-      minimumFractionDigits: 2
-    }).format(num);
+    return new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN', minimumFractionDigits: 2 }).format(num);
   };
 
-  // Helper de detección de conceptos en efectivo
   const esMovimientoEfectivo = (concepto: string = ''): boolean => {
     const c = concepto.toUpperCase();
-    return (
-      c.includes('EFECTIVO') ||
-      c.includes('CAJERO') ||
-      c.includes('RETIRO CAJERO') ||
-      c.includes('DEPOSITO CAJERO') ||
-      c.includes('PRACTICAJA') ||
-      c.includes('DISP.') ||
-      c.includes('DISPOSICIÓN') ||
-      c.includes('DISPOSICION') ||
-      c.includes('VENTANILLA')
-    );
+    if (['RETIRO', 'CARGO', 'DISP.', 'DISPOSICIÓN', 'DISPOSICION'].some(term => c.includes(term))) return false;
+    return c.includes('EFECTIVO') || c.includes('CAJERO') || c.includes('DEPOSITO CAJERO') || c.includes('PRACTICAJA') || c.includes('VENTANILLA');
   };
 
   // Helper de detección automática de desfase de mes
@@ -171,24 +243,43 @@ export function ArqueoEfectivoTab({
   }, [ticketsEfectivoMes]);
 
   // 2. Filtrar depósitos bancarios de efectivo en BBVA del mes seleccionado
-  const depositosEfectivoBanco = useMemo(() => {
+  const depositosEfectivoBanco = useMemo<CashDepositMovement[]>(() => {
     return movimientos.filter(m => {
       const isDep = m.tipo_movimiento === 'Deposito' || Number(m.deposito || 0) > 0 || Number(m.monto || 0) > 0;
       if (!isDep) return false;
       const mes = m.mes_conciliacion || (m.fecha ? m.fecha.substring(0, 7) : '');
       if (selectedMonth && mes !== selectedMonth) return false;
+      const accountName = (m.cuentas_bancarias?.nombre || cuentasBancarias.find(account => account.id === m.cuenta_bancaria_id)?.nombre || '').toUpperCase();
+      if (accountName && !accountName.includes('BBVA') && !accountName.includes('BANCOMER')) return false;
       return esMovimientoEfectivo(m.concepto || '');
     }).map(m => {
       const autoCheck = checkIsOtherMonthAuto(m);
-      const isArrastreManual = manualArrastreIds.has(m.id);
-      const isArrastre = isArrastreManual || autoCheck.isOtherMonth;
+      const period = currentCashDepositPeriods[m.id] || (legacyArrastreIds.has(m.id) || autoCheck.isOtherMonth ? 'anterior' : 'actual');
+      const cashAmount = Math.abs(Number(m.deposito || m.monto || 0));
+      const linkedAmount = comprobantes.reduce((sum, comprobante) => {
+        const relation = (comprobante.comprobantes_deposito_movimientos || []).find((item: CashTicketLink) => item.movimiento_id === m.id);
+        if (!relation) return sum;
+        const ticketCashAmount = Number(comprobante.monto_efectivo || 0) + Number(comprobante.propina_efectivo || 0);
+        return sum + Math.min(ticketCashAmount, Number(relation.monto_asociado || 0));
+      }, 0);
       return {
         ...m,
-        _isArrastre: isArrastre,
-        _razonArrastre: autoCheck.razon || (isArrastreManual ? 'Marcado manualmente como arrastre' : '')
+        _cashAmount: cashAmount,
+        _cashLinked: linkedAmount,
+        _cashAvailable: Math.max(0, cashAmount - linkedAmount),
+        _cashPeriod: period,
+        _isArrastre: period === 'anterior',
+        _razonArrastre: autoCheck.razon || (legacyArrastreIds.has(m.id) ? 'Marcado manualmente como arrastre' : '')
       };
     });
-  }, [movimientos, selectedMonth, manualArrastreIds]);
+  }, [movimientos, comprobantes, selectedMonth, currentCashDepositPeriods, legacyArrastreIds, cuentasBancarias]);
+
+  const navigationCashDeposit = cashNavigationTarget
+    ? depositosEfectivoBanco.find(item => item.id === cashNavigationTarget.depositId) || null
+    : null;
+  const activeCashDepositForModal = activeCashDeposit || (
+    navigationCashDeposit?.id !== dismissedNavigationDepositId ? navigationCashDeposit : null
+  );
 
   const totalDepositosEfectivoBanco = useMemo(() => {
     return depositosEfectivoBanco.reduce((acc, m) => acc + Math.abs(Number(m.deposito || m.monto || 0)), 0);
@@ -197,14 +288,144 @@ export function ArqueoEfectivoTab({
   // Depósitos catalogados como arrastre del mes anterior
   const depositosArrastreMesAnterior = useMemo(() => {
     return depositosEfectivoBanco
-      .filter(m => m._isArrastre)
+      .filter(m => m._cashPeriod === 'anterior')
+      .reduce((acc, m) => acc + Math.abs(Number(m.deposito || m.monto || 0)), 0);
+  }, [depositosEfectivoBanco]);
+
+  const depositosMesSiguiente = useMemo(() => {
+    return depositosEfectivoBanco
+      .filter(m => m._cashPeriod === 'siguiente')
       .reduce((acc, m) => acc + Math.abs(Number(m.deposito || m.monto || 0)), 0);
   }, [depositosEfectivoBanco]);
 
   // Depósitos acreditados correspondientes a las ventas de este mes
   const depositosEfectivoAcreditadosEsteMes = useMemo(() => {
-    return Math.max(0, totalDepositosEfectivoBanco - depositosArrastreMesAnterior);
-  }, [totalDepositosEfectivoBanco, depositosArrastreMesAnterior]);
+    return depositosEfectivoBanco
+      .filter(m => m._cashPeriod === 'actual')
+      .reduce((acc, m) => acc + Math.abs(Number(m.deposito || m.monto || 0)), 0);
+  }, [depositosEfectivoBanco]);
+
+  const cashTicketRows = useMemo<CashTicketRow[]>(() => {
+    const cashDepositIds = new Set(depositosEfectivoBanco.filter(m => m._cashPeriod === 'actual').map(m => m.id));
+    return ticketsEfectivoMes.map(ticket => {
+      const efectivo = Number(ticket.monto_efectivo || 0);
+      const propina = Number(ticket.propina_efectivo || 0);
+      const total = efectivo + propina;
+      const cashLinks = (ticket.comprobantes_deposito_movimientos || []).filter((relation: CashTicketLink) => cashDepositIds.has(relation.movimiento_id));
+      const linked = Math.min(total, cashLinks.reduce((sum: number, relation: CashTicketLink) => sum + Number(relation.monto_asociado || 0), 0));
+      return {
+        ...ticket,
+        _cashBase: efectivo,
+        _cashTip: propina,
+        _cashTotal: total,
+        _cashLinks: cashLinks,
+        _cashLinked: linked,
+        _cashPending: Math.max(0, total - linked),
+        _cashSalesPeriod: 'actual' as const
+      };
+    });
+  }, [ticketsEfectivoMes, depositosEfectivoBanco]);
+
+  const previousSalesMonth = getCashMonthOffset(selectedMonth, -1);
+  const previousCashTicketRecords = cashCarryForwardByMonth[previousSalesMonth] || [];
+  const carryForwardCashRows = useMemo<CashTicketRow[]>(() => {
+    const previousDepositIds = new Set(depositosEfectivoBanco.filter(deposit => deposit._cashPeriod === 'anterior').map(deposit => deposit.id));
+    return previousCashTicketRecords.map(record => {
+      const ticket = comprobantes.find(item => item.id === record.id);
+      const cashLinks = ((ticket?.comprobantes_deposito_movimientos || []) as CashTicketLink[])
+        .filter(relation => previousDepositIds.has(relation.movimiento_id));
+      const linked = cashLinks.reduce((sum, relation) => sum + Number(relation.monto_asociado || 0), 0);
+      return {
+        id: record.id,
+        fecha: record.fecha || ticket?.fecha,
+        descripcion: record.descripcion || ticket?.descripcion,
+        _cashBase: Number(record.montoEfectivo || record.montoPendiente),
+        _cashTip: Number(record.propinaEfectivo || 0),
+        _cashTotal: Number(record.montoPendiente),
+        _cashLinks: cashLinks,
+        _cashLinked: Math.min(Number(record.montoPendiente), linked),
+        _cashPending: Math.max(0, Number(record.montoPendiente) - linked),
+        _cashSalesPeriod: 'anterior' as const
+      };
+    }).filter(ticket => ticket._cashPending > 0.005);
+  }, [previousCashTicketRecords, comprobantes, depositosEfectivoBanco]);
+
+  const visibleCashTicketRows = [...carryForwardCashRows, ...cashTicketRows];
+  const eligibleCashTicketRows = activeCashDepositForModal?._cashPeriod === 'anterior'
+    ? carryForwardCashRows
+    : activeCashDepositForModal?._cashPeriod === 'actual'
+      ? cashTicketRows
+      : [];
+  const selectedCashTicketRows = eligibleCashTicketRows.filter(ticket => selectedCashTicketIds.has(ticket.id));
+  const selectedCashTicketTotal = selectedCashTicketRows.reduce((sum, ticket) => sum + ticket._cashPending, 0);
+  const refreshedActiveCashDeposit = activeCashDepositForModal
+    ? depositosEfectivoBanco.find(deposit => deposit.id === activeCashDepositForModal.id) || activeCashDepositForModal
+    : null;
+  const activeDepositPending = refreshedActiveCashDeposit
+    ? Math.max(0, refreshedActiveCashDeposit._cashAmount - refreshedActiveCashDeposit._cashLinked)
+    : 0;
+  const cashAssignmentDifference = activeDepositPending - selectedCashTicketTotal;
+  const activeCashLinkedTickets = eligibleCashTicketRows.filter(ticket =>
+    activeCashDepositForModal && ticket._cashLinks.some(link => link.movimiento_id === activeCashDepositForModal.id)
+  );
+
+  const openCashDeposit = (deposit: CashDepositMovement) => {
+    setActiveCashDeposit(deposit);
+    setSelectedCashTicketIds(new Set());
+  };
+
+  const unlinkCashTicket = async (ticket: CashTicketRow) => {
+    if (!activeCashDepositForModal || !onDesvincularComprobante) return;
+    if (!window.confirm(`¿Quitar el vínculo de "${ticket.descripcion || 'este corte'}" con este depósito?`)) return;
+
+    const result = await onDesvincularComprobante(ticket.id, activeCashDepositForModal.id);
+    if (!result?.success) {
+      alert(result?.error || 'No se pudo quitar el vínculo.');
+      return;
+    }
+    await onReloadMovimientos?.();
+  };
+
+  const saveCashAssignments = async () => {
+    if (!activeCashDepositForModal || !onVincularComprobante || Math.abs(cashAssignmentDifference) > 0.05 || selectedCashTicketRows.length === 0) return;
+    setSavingCashAssignments(true);
+    try {
+      for (const ticket of selectedCashTicketRows) {
+        const result = await onVincularComprobante(ticket.id, activeCashDepositForModal.id, Number(ticket._cashPending.toFixed(2)));
+        if (result && !result.success) throw new Error(result.error || 'No se pudo vincular el ticket.');
+      }
+      setActiveCashDeposit(null);
+      setDismissedNavigationDepositId(cashNavigationTarget?.depositId || '');
+      setSelectedCashTicketIds(new Set());
+      onReloadMovimientos?.();
+    } catch (error: unknown) {
+      alert(error instanceof Error ? error.message : 'No se pudieron guardar las asignaciones.');
+    } finally {
+      setSavingCashAssignments(false);
+    }
+  };
+
+  const closeCashDepositModal = () => {
+    setActiveCashDeposit(null);
+    setDismissedNavigationDepositId(cashNavigationTarget?.depositId || '');
+  };
+
+  const saveUnassignedCashTicketsForNextMonth = () => {
+    const records = visibleCashTicketRows
+      .filter(ticket => ticket._cashPending > 0.005)
+      .map(ticket => ({
+        id: ticket.id,
+        fecha: ticket.fecha,
+        descripcion: ticket.descripcion,
+        montoEfectivo: ticket._cashBase,
+        propinaEfectivo: ticket._cashTip,
+        montoPendiente: Number(ticket._cashPending.toFixed(2))
+      }));
+    const next = { ...cashCarryForwardByMonth, [currentMonthKey]: records };
+    setCashCarryForwardByMonth(next);
+    localStorage.setItem('seimenjo_efectivo_pendiente_siguiente_mes', JSON.stringify(next));
+    alert(`${records.length} ticket(s) pendientes quedaron listos para conciliarse contra depósitos del mes siguiente.`);
+  };
 
   // 3. Gastos menores pagados en efectivo (Caja Chica)
   const gastosEfectivoMes = useMemo(() => {
@@ -255,7 +476,7 @@ export function ArqueoEfectivoTab({
     });
 
     depositosEfectivoBanco.forEach(m => {
-      if (m._isArrastre) return; // Excluir del flujo diario de este mes si es arrastre
+      if (m._cashPeriod !== 'actual') return;
       const f = m.fecha ? m.fecha.split('T')[0] : '';
       if (!f) return;
       if (!dailyMap[f]) {
@@ -305,7 +526,7 @@ export function ArqueoEfectivoTab({
               </h3>
             </div>
             <p className="text-xs text-gray-500 dark:text-gray-400">
-              Seguimiento del efectivo cobrado en restaurante, compras pagadas con caja chica y depósitos en practicaja/ventanilla bancaria con control de desfases.
+              Efectivo y propinas de cada corte Parrot conciliados únicamente contra depósitos de efectivo en BBVA.
             </p>
           </div>
 
@@ -329,6 +550,16 @@ export function ArqueoEfectivoTab({
               }`}
             >
               <Calendar size={13} className="inline mr-1" /> Flujo Diario ({dailyCashRows.length} días)
+            </button>
+            <button
+              onClick={() => setActiveSubView('tickets')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                activeSubView === 'tickets'
+                  ? 'bg-white dark:bg-gray-800 text-emerald-600 dark:text-emerald-400 shadow-sm'
+                  : 'text-gray-500 hover:text-gray-900 dark:hover:text-white'
+              }`}
+            >
+              <Receipt size={13} className="inline mr-1" /> Tickets efectivo ({visibleCashTicketRows.length})
             </button>
             <button
               onClick={() => setActiveSubView('movimientos')}
@@ -371,12 +602,13 @@ export function ArqueoEfectivoTab({
               {formatCurrency(depositosEfectivoAcreditadosEsteMes)}
             </div>
             <div className="text-[10px] text-gray-500 dark:text-gray-400 mt-1 flex justify-between">
-              <span>{depositosEfectivoBanco.filter(m => !m._isArrastre).length} abonos de este mes</span>
+              <span>{depositosEfectivoBanco.filter(m => m._cashPeriod === 'actual').length} abonos de este mes</span>
               {depositosArrastreMesAnterior > 0 && (
                 <span className="text-purple-600 dark:text-purple-400 font-bold" title="Arrastre del mes anterior excluido">
                   Arrastre: -{formatCurrency(depositosArrastreMesAnterior)}
                 </span>
               )}
+              {depositosMesSiguiente > 0 && <span className="text-sky-600 dark:text-sky-400 font-bold">Mes siguiente: {formatCurrency(depositosMesSiguiente)}</span>}
             </div>
           </div>
 
@@ -538,6 +770,151 @@ export function ArqueoEfectivoTab({
         </div>
       )}
 
+      {activeSubView === 'tickets' && (
+        <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-2xl overflow-hidden shadow-sm">
+          <div className="p-4 bg-gray-50/70 dark:bg-gray-900/50 border-b border-gray-200 dark:border-gray-800">
+            <h4 className="text-xs font-black uppercase tracking-wider text-gray-800 dark:text-gray-200 flex items-center gap-2">
+              <Receipt size={14} className="text-emerald-600" /> Cortes Parrot · solo efectivo
+            </h4>
+            <p className="text-[11px] text-gray-500 mt-0.5">Se muestran únicamente monto_efectivo y propina_efectivo; no se usan importes de tarjeta ni el total completo del POS.</p>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[940px] text-left text-xs border-collapse font-sans">
+              <thead>
+                <tr className="bg-gray-50 dark:bg-gray-800/60 uppercase font-bold text-[10px] text-gray-500 dark:text-gray-400 border-b border-gray-200 dark:border-gray-800">
+                  <th className="p-3">Fecha</th>
+                  <th className="p-3">Corte</th>
+                  <th className="p-3 text-right">Efectivo</th>
+                  <th className="p-3 text-right">Propina efectivo</th>
+                  <th className="p-3 text-right">Total efectivo</th>
+                  <th className="p-3 text-right">Vinculado BBVA</th>
+                  <th className="p-3 text-right">Pendiente</th>
+                  <th className="p-3 text-center">Estado</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+                {visibleCashTicketRows.length === 0 ? (
+                  <tr><td colSpan={8} className="p-8 text-center text-gray-400 italic">No hay ventas en efectivo pendientes o registradas en este período.</td></tr>
+                ) : visibleCashTicketRows.map(ticket => (
+                  <tr key={ticket.id} className="hover:bg-gray-50/80 dark:hover:bg-gray-800/40">
+                    <td className="p-3 whitespace-nowrap font-mono">{ticket.fecha ? String(ticket.fecha).slice(0, 10) : 'S/F'}</td>
+                    <td className="p-3">
+                      <span className="block font-bold text-emerald-700 dark:text-emerald-300">Corte de efectivo Parrot</span>
+                      <span className="block text-[10px] text-gray-500 max-w-sm truncate" title={ticket.descripcion}>{ticket.descripcion || 'Desglose efectivo del ticket'}</span>
+                    </td>
+                    <td className="p-3 text-right font-mono">{formatCurrency(ticket._cashBase)}</td>
+                    <td className="p-3 text-right font-mono">{formatCurrency(ticket._cashTip)}</td>
+                    <td className="p-3 text-right font-mono font-bold">{formatCurrency(ticket._cashTotal)}</td>
+                    <td className="p-3 text-right font-mono text-emerald-600">{formatCurrency(ticket._cashLinked)}</td>
+                    <td className="p-3 text-right font-mono font-bold text-amber-600">{formatCurrency(ticket._cashPending)}</td>
+                    <td className="p-3 text-center">
+                      <span className={`text-[10px] font-bold ${ticket._cashPending > 0.005 ? 'text-amber-600' : 'text-emerald-600'}`}>
+                        {ticket._cashPending > 0.005 ? ticket._cashSalesPeriod === 'actual' ? 'Pasa al siguiente mes' : 'Arrastre pendiente' : 'Asignado'}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {activeSubView === 'tickets' && visibleCashTicketRows.some(ticket => ticket._cashPending > 0.005) && (
+        <div className="p-3 rounded-xl border border-amber-200 dark:border-amber-900/50 bg-amber-50/70 dark:bg-amber-950/20 flex items-center justify-between gap-3 flex-wrap">
+          <span className="text-xs text-amber-900 dark:text-amber-200">
+            {visibleCashTicketRows.filter(ticket => ticket._cashPending > 0.005).length} ticket(s) sin depósito · {formatCurrency(visibleCashTicketRows.reduce((sum, ticket) => sum + ticket._cashPending, 0))} quedarán como arrastre para el mes siguiente.
+          </span>
+          <button type="button" onClick={saveUnassignedCashTicketsForNextMonth} className="px-3 py-2 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold">
+            Pasar pendientes al siguiente mes
+          </button>
+        </div>
+      )}
+
+      {activeCashDepositForModal && (
+        <div className="fixed inset-0 z-[80] bg-black/60 backdrop-blur-sm flex items-center justify-center p-3" role="dialog" aria-modal="true" aria-label="Asignar tickets a depósito de efectivo">
+          <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-2xl w-full max-w-3xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden">
+            <div className="p-4 border-b border-gray-200 dark:border-gray-800 flex items-start justify-between gap-3">
+              <div>
+                <h4 className="text-sm font-black flex items-center gap-2"><Link2 size={16} className="text-blue-600" /> Asignar tickets a depósito de efectivo</h4>
+                <p className="text-xs text-gray-500 mt-1">{String(activeCashDepositForModal.fecha || '').slice(0, 10)} · {activeCashDepositForModal.concepto || 'Depósito BBVA'} · Total depósito: <strong>{formatCurrency(activeCashDepositForModal._cashAmount)}</strong></p>
+              </div>
+              <button type="button" onClick={closeCashDepositModal} className="p-1.5 rounded-lg text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800" aria-label="Cerrar"><X size={17} /></button>
+            </div>
+            <div className="p-4 overflow-auto space-y-4">
+              {activeCashLinkedTickets.length > 0 && (
+                <section>
+                  <h5 className="text-[10px] font-black uppercase text-gray-500 mb-2">Tickets ya vinculados a este depósito</h5>
+                  <div className="divide-y divide-gray-100 dark:divide-gray-800 border border-gray-200 dark:border-gray-800 rounded-lg">
+                    {activeCashLinkedTickets.map(ticket => {
+                      const linkedAmount = ticket._cashLinks
+                        .filter(link => link.movimiento_id === activeCashDepositForModal.id)
+                        .reduce((sum, link) => sum + Number(link.monto_asociado || 0), 0);
+                      const isFocused = ticket.id === cashNavigationTarget?.ticketId;
+                      return (
+                        <div key={ticket.id} className={`p-3 flex items-center gap-3 ${isFocused ? 'bg-amber-50 dark:bg-amber-950/30' : ''}`}>
+                          <span className="min-w-0 flex-1">
+                            <span className="block text-xs font-bold truncate">{ticket.descripcion || 'Corte de efectivo Parrot'}</span>
+                            <span className="block text-[10px] text-gray-500">
+                              Efectivo del corte: {formatCurrency(ticket._cashTotal)} · De este depósito: {formatCurrency(linkedAmount)} · Pendiente del corte: {formatCurrency(ticket._cashPending)}
+                            </span>
+                          </span>
+                          {isFocused && <span className="text-[9px] font-black uppercase text-amber-700 dark:text-amber-300">Ticket seleccionado</span>}
+                          {onDesvincularComprobante && (
+                            <button type="button" onClick={() => unlinkCashTicket(ticket)} className="shrink-0 px-2 py-1 rounded border border-rose-200 text-[10px] font-bold text-rose-700 hover:bg-rose-50 dark:border-rose-900 dark:text-rose-300">
+                              Quitar vínculo
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </section>
+              )}
+              <section>
+                <div className="flex justify-between gap-3 mb-2">
+                  <h5 className="text-[10px] font-black uppercase text-gray-500">Tickets disponibles · {activeCashDepositForModal._cashPeriod === 'anterior' ? 'arrastre mes anterior' : 'ventas de este mes'}</h5>
+                  <span className="text-xs font-mono text-blue-700 dark:text-blue-300">Saldo del depósito: {formatCurrency(activeDepositPending)}</span>
+                </div>
+                <div className="max-h-[45vh] overflow-auto divide-y divide-gray-100 dark:divide-gray-800 border border-gray-200 dark:border-gray-800 rounded-lg">
+                  {eligibleCashTicketRows.filter(ticket => ticket._cashPending > 0.005 && !ticket._cashLinks.some(link => link.movimiento_id === activeCashDepositForModal.id)).map(ticket => {
+                    const isSelected = selectedCashTicketIds.has(ticket.id);
+                    return (
+                      <label key={ticket.id} className={`p-3 flex items-center gap-3 cursor-pointer ${isSelected ? 'bg-emerald-50 dark:bg-emerald-950/30' : 'hover:bg-gray-50 dark:hover:bg-gray-800/50'}`}>
+                        <input type="checkbox" checked={isSelected} onChange={() => setSelectedCashTicketIds(previous => {
+                          const next = new Set(previous);
+                          if (next.has(ticket.id)) next.delete(ticket.id); else next.add(ticket.id);
+                          return next;
+                        })} />
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-xs font-bold truncate">{ticket.descripcion || 'Corte de efectivo Parrot'}</span>
+                          <span className="block text-[10px] text-gray-500">{String(ticket.fecha || '').slice(0, 10)} · {ticket._cashSalesPeriod === 'anterior' ? 'Arrastre' : 'Este mes'}</span>
+                        </span>
+                        <span className="text-right font-mono text-xs font-black">{formatCurrency(ticket._cashPending)}</span>
+                      </label>
+                    );
+                  })}
+                  {eligibleCashTicketRows.filter(ticket => ticket._cashPending > 0.005 && !ticket._cashLinks.some(link => link.movimiento_id === activeCashDepositForModal.id)).length === 0 && <p className="p-5 text-center text-xs text-gray-400">No hay tickets de efectivo pendientes para este depósito.</p>}
+                </div>
+              </section>
+              <div className={`p-3 rounded-xl border flex items-center justify-between gap-3 ${Math.abs(cashAssignmentDifference) <= 0.05 ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-amber-50 border-amber-200 text-amber-800'}`}>
+                <div><span className="text-xs font-black block">Diferencia de esta asignación de efectivo</span><span className="text-[10px]">Saldo por asignar del depósito menos efectivo de tickets seleccionados; no compara la venta total del corte.</span></div>
+                <strong className="font-mono text-right">Depósito pendiente {formatCurrency(activeDepositPending)} − tickets nuevos {formatCurrency(selectedCashTicketTotal)} = {formatCurrency(cashAssignmentDifference)}</strong>
+              </div>
+            </div>
+            <div className="p-3 border-t border-gray-200 dark:border-gray-800 flex items-center justify-between gap-3">
+              <span className="text-[10px] text-gray-500">Tickets pendientes sin depósito se pueden pasar al siguiente mes desde la pestaña de tickets.</span>
+              <div className="flex gap-2 shrink-0">
+                <button type="button" onClick={closeCashDepositModal} className="px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 text-xs font-bold">Cerrar</button>
+                <button type="button" onClick={saveCashAssignments} disabled={savingCashAssignments || selectedCashTicketRows.length === 0 || Math.abs(cashAssignmentDifference) > 0.05} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-xs font-bold disabled:opacity-50">
+                  {savingCashAssignments ? 'Guardando...' : 'Confirmar suma exacta'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* VISTA 2: ARQUEO DÍA POR DÍA (FLUJO CRONOLÓGICO) */}
       {activeSubView === 'diario' && (
         <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-2xl overflow-hidden shadow-sm">
@@ -648,7 +1025,7 @@ export function ArqueoEfectivoTab({
                   <th className="p-3">Referencia</th>
                   <th className="p-3 text-right font-mono">Monto ($)</th>
                   <th className="p-3 text-center">Clasificación de Período</th>
-                  <th className="p-3 text-center">Acción</th>
+                  <th className="p-3 text-center">Asignación de tickets</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
@@ -674,15 +1051,15 @@ export function ArqueoEfectivoTab({
                         {formatCurrency(Math.abs(Number(m.deposito || m.monto || 0)))}
                       </td>
                       <td className="p-3 text-center whitespace-nowrap">
-                        {m._isArrastre ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-purple-100 dark:bg-purple-955/60 text-purple-800 dark:text-purple-300 border border-purple-200 dark:border-purple-800">
-                            <Clock size={11} /> Arrastre Mes Anterior
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-100 dark:bg-emerald-955/60 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
-                            <CheckCircle2 size={11} /> Ventas de Este Mes
-                          </span>
-                        )}
+                        <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold border ${
+                          m._cashPeriod === 'anterior'
+                            ? 'bg-purple-100 dark:bg-purple-955/60 text-purple-800 dark:text-purple-300 border-purple-200 dark:border-purple-800'
+                            : m._cashPeriod === 'siguiente'
+                              ? 'bg-sky-100 dark:bg-sky-955/60 text-sky-800 dark:text-sky-300 border-sky-200 dark:border-sky-800'
+                              : 'bg-emerald-100 dark:bg-emerald-955/60 text-emerald-800 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800'
+                        }`}>
+                          {m._cashPeriod === 'anterior' ? 'Mes anterior' : m._cashPeriod === 'siguiente' ? 'Mes siguiente' : 'Este mes'}
+                        </span>
                         {m._razonArrastre && (
                           <span className="block text-[9px] text-gray-400 font-mono mt-0.5">
                             {m._razonArrastre}
@@ -690,16 +1067,26 @@ export function ArqueoEfectivoTab({
                         )}
                       </td>
                       <td className="p-3 text-center">
-                        <button
-                          onClick={() => toggleManualArrastre(m.id)}
-                          className={`px-3 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
-                            m._isArrastre
-                              ? 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700 dark:bg-emerald-955/40 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700'
-                              : 'bg-purple-50 hover:bg-purple-100 text-purple-700 dark:bg-purple-955/40 dark:text-purple-300 border border-purple-300 dark:border-purple-700'
-                          }`}
-                        >
-                          {m._isArrastre ? 'Cambiar a Este Mes' : 'Marcar como Arrastre'}
-                        </button>
+                        <div className="flex items-center justify-center gap-2 flex-wrap">
+                          <select
+                            value={m._cashPeriod}
+                            onChange={event => setCashDepositPeriod(m.id, event.target.value as CashDepositPeriod)}
+                            className="max-w-full rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-2 py-1 text-[10px] font-bold"
+                            aria-label={`Mes de venta al que corresponde el depósito ${m.concepto || m.id}`}
+                          >
+                            <option value="anterior">Mes anterior</option>
+                            <option value="actual">Este mes</option>
+                            <option value="siguiente">Mes siguiente</option>
+                          </select>
+                          <button
+                            type="button"
+                            onClick={() => openCashDeposit(m)}
+                            disabled={m._cashPeriod === 'siguiente'}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-[10px] font-bold disabled:opacity-40"
+                          >
+                            <Link2 size={11} /> Asignar tickets · {formatCurrency(m._cashLinked)}
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))

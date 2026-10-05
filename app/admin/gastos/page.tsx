@@ -4,12 +4,13 @@
 /* eslint-disable react/no-unescaped-entities */
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { supabase } from '../../../lib/supabase';
 import { useThemeMode } from '../../../lib/useThemeMode';
 import { useSessionToken } from '../../../lib/hooks/useSessionToken';
 import { useEmpresaId } from '../../../lib/hooks/useEmpresaId';
 import { usePeriod } from '../../../lib/hooks/usePeriod';
+import { fetchCuentasBancarias } from '../../../lib/cuentasBancarias';
 import {
   obtenerSignedUrl,
   sincronizarMetodosPagoXml,
@@ -46,6 +47,9 @@ export const dynamic = 'force-dynamic';
 
 export default function EgresosModule() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const cashDepositId = searchParams.get('cashDepositId') || undefined;
+  const cashTicketId = searchParams.get('cashTicketId') || undefined;
   const { isDarkMode, toggleDarkMode } = useThemeMode();
 
   const getSessionToken = useSessionToken();
@@ -57,8 +61,8 @@ export default function EgresosModule() {
   const [cfdiViewerUrl, setCfdiViewerUrl] = useState<string | null>(null);
 
   // Subtabs en Gastos y Egresos
-  const [activeTab, setActiveTab] = useState<'egresos' | 'banco' | 'no_deducibles'>('egresos');
-  const [bancoSubTab, setBancoSubTab] = useState<'movimientos' | 'ingresos_comprobantes' | 'cargas' | 'global' | 'comprobantes' | 'no_deducibles'>('movimientos');
+  const [activeTab, setActiveTab] = useState<'egresos' | 'banco' | 'no_deducibles'>(() => cashDepositId ? 'banco' : 'egresos');
+  const [bancoSubTab, setBancoSubTab] = useState<'movimientos' | 'ingresos_comprobantes' | 'cargas' | 'global' | 'comprobantes' | 'no_deducibles'>(() => cashDepositId ? 'ingresos_comprobantes' : 'movimientos');
 
   // Estados de datos
   const [gastosFacturados, setGastosFacturados] = useState<any[]>([]);
@@ -130,7 +134,6 @@ export default function EgresosModule() {
         .eq('empresa_id', empresaId)
         .or('uuid_fiscal.not.is.null,es_deducible.eq.false')
         .order('fecha_gasto', { ascending: false });
-      setGastosFacturados(gFac || []);
 
       const { data: cGasto } = await supabase.from('categorias_gasto').select('*').or(`empresa_id.is.null,empresa_id.eq.${empresaId}`).order('nombre');
       setCategoriasGasto(cGasto || []);
@@ -145,10 +148,70 @@ export default function EgresosModule() {
         .select('*, estatus_conciliacion_bancaria(*), cuentas_bancarias(*), categorias_movimiento_bancario(*)')
         .eq('empresa_id', empresaId)
         .order('fecha', { ascending: false });
-      setMovimientosBancarios(movs || []);
 
-      // 4. Cuentas Bancarias
-      const { data: cBanc } = await supabase.from('cuentas_bancarias').select('*').eq('empresa_id', empresaId);
+      // 3.1 Consultar relaciones de conciliaciones bancarias para vincular movimientos y gastos en memoria
+      const { data: concsData } = await supabase
+        .from('conciliaciones_bancarias')
+        .select(`
+          id,
+          movimiento_id,
+          gasto_id,
+          pedido_id,
+          monto_asociado,
+          gasto:gastos(id, concepto, monto, subtotal, iva_acreditable, es_deducible, uuid_fiscal, xml_url, pdf_url, ticket_url, proveedores(nombre_comercial, rfc), metodo_pago, fecha_gasto),
+          pedido:pedidos(id, numero_pedido, precio_total, clientes(nombre_local, rfc), fecha_pedido)
+        `)
+        .eq('empresa_id', empresaId);
+
+      const allConcs = concsData || [];
+
+      // Enriquecer movimientos con sus conciliaciones bancarias
+      const enrichedMovs = (movs || []).map(m => {
+        const mConcs = allConcs.filter(c => c.movimiento_id === m.id);
+        return {
+          ...m,
+          conciliaciones_bancarias: mConcs
+        };
+      });
+      setMovimientosBancarios(enrichedMovs);
+
+      // Enriquecer gastos con sus conciliaciones bancarias y movimientos asociados
+      const enrichedGastos = (gFac || []).map(g => {
+        const gConcs = allConcs.filter(c => c.gasto_id === g.id).map(c => {
+          const movItem = (movs || []).find(m => m.id === c.movimiento_id);
+          return {
+            ...c,
+            movimiento: movItem,
+            movimiento_bancario: movItem,
+            movimientos_bancarios: movItem
+          };
+        });
+
+        // Soporte para relación legacy 1:1 vía movimiento_bancario_id si no está en conciliaciones_bancarias
+        if (g.movimiento_bancario_id && !gConcs.some(c => c.movimiento_id === g.movimiento_bancario_id)) {
+          const legacyMov = (movs || []).find(m => m.id === g.movimiento_bancario_id) || g.movimientos_bancarios;
+          if (legacyMov) {
+            gConcs.push({
+              id: 'legacy-' + g.id,
+              movimiento_id: g.movimiento_bancario_id,
+              gasto_id: g.id,
+              monto_asociado: Number(g.monto || 0),
+              movimiento: legacyMov,
+              movimiento_bancario: legacyMov,
+              movimientos_bancarios: legacyMov
+            } as any);
+          }
+        }
+
+        return {
+          ...g,
+          conciliaciones_bancarias: gConcs
+        };
+      });
+      setGastosFacturados(enrichedGastos);
+
+      // 4. Cuentas Bancarias (Carga robusta con fallback global y auto-inicialización)
+      const cBanc = await fetchCuentasBancarias(empresaId);
       setCuentasBancarias(cBanc || []);
 
       // 5. Estatus y Categorías
@@ -506,8 +569,23 @@ export default function EgresosModule() {
 
   const comprobantesForSelectedMonth = useMemo(() => {
     return comprobantes.filter(c => {
-      if (!c.fecha) return true;
-      return !selectedMonth || c.fecha.substring(0, 7) === selectedMonth;
+      if (!selectedMonth) return true;
+      const compMonth = c.fecha ? c.fecha.substring(0, 7) : '';
+      if (compMonth === selectedMonth) return true;
+
+      // Si tiene movimientos bancarios vinculados que cayeron en este mes seleccionado
+      const hasMovInSelectedMonth = c.comprobantes_deposito_movimientos?.some((rel: any) => {
+        const mov = rel.movimientos_bancarios;
+        if (!mov) return false;
+        const movMes = mov.mes_conciliacion || (mov.fecha ? mov.fecha.substring(0, 7) : '');
+        return movMes === selectedMonth;
+      });
+      if (hasMovInSelectedMonth) return true;
+
+      // Si está explícitamente asignado al mes de venta o tiene etiqueta de mes
+      if (c.mes_venta === selectedMonth) return true;
+
+      return false;
     });
   }, [comprobantes, selectedMonth]);
 
@@ -690,7 +768,9 @@ export default function EgresosModule() {
                     selectedCuentaId={selectedCuentaId}
                     setSelectedCuentaId={setSelectedCuentaId}
                     comprobantes={comprobantesForSelectedMonth}
+                    allComprobantes={comprobantes}
                     movimientos={movimientosForSelectedMonth}
+                    allMovimientos={movimientosBancarios}
                     cuentasBancarias={cuentasBancarias}
                     estatusCatalog={estatusCatalog}
                     categoriasMovimiento={categoriasMovimiento}
@@ -700,6 +780,8 @@ export default function EgresosModule() {
                     pedidosPendientes={pedidosPendientes}
                     gastosReconciliables={gastosReconciliables}
                     selectedMonth={selectedMonth}
+                    cashDepositId={cashDepositId}
+                    cashTicketId={cashTicketId}
                     busquedaBanco={busquedaBanco}
                     setBusquedaBanco={setBusquedaBanco}
                     filtroBancoTipo="Retiro"

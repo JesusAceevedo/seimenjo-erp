@@ -347,7 +347,7 @@ export default function FacturasEmitidasTab({
               onClick={() => setShowXmlModal(true)}
               className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white transition-colors shadow-sm cursor-pointer"
             >
-              <UploadCloud size={14} /> Subir XML Masivo
+              <UploadCloud size={14} /> Subir Masivo (XML / PDF)
             </button>
 
             <button

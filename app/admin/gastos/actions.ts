@@ -317,6 +317,16 @@ export async function enviarFacturaPorCorreo(
       throw new Error('No se encontró factura emitida para este pedido.');
     }
 
+    // Validar coincidencia de montos entre factura y pedido
+    if (factura.total != null && pedido.precio_total != null) {
+      const diff = Math.abs(Number(factura.total) - Number(pedido.precio_total));
+      if (diff > 0.05) {
+        throw new Error(
+          `El monto de la factura ($${Number(factura.total).toFixed(2)}) no coincide con el total del pedido ($${Number(pedido.precio_total).toFixed(2)}). Por favor corrige la factura con el monto exacto antes de enviarla.`
+        );
+      }
+    }
+
     // 3. Generate signed links for the mail
     const [xmlUrl, pdfUrl] = await Promise.all([
       factura.xml_url
@@ -410,6 +420,60 @@ export async function enviarFacturaPorCorreo(
     console.error('Error sending invoice email:', err);
     const message = err?.message || (typeof err === 'string' ? err : JSON.stringify(err));
     return { success: false, error: message || 'Error al enviar el correo' };
+  }
+}
+
+// Desvincular factura errónea de un pedido por ID del pedido
+export async function desvincularFacturaDePedidoId(
+  pedidoId: string,
+  token: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { empresaId } = await getUserEmpresaId(token);
+
+    // 1. Obtener datos del pedido
+    let pedQuery = supabaseAdmin
+      .from('pedidos')
+      .select('id, folio_factura, empresa_id')
+      .eq('id', pedidoId);
+
+    if (empresaId) {
+      pedQuery = pedQuery.eq('empresa_id', empresaId);
+    }
+
+    const { data: pedido, error: pedErr } = await pedQuery.maybeSingle();
+    if (pedErr || !pedido) throw new Error('Pedido no encontrado o sin permisos');
+
+    // 2. Desvincular/Eliminar registros de facturas_clientes asociados al pedido
+    await supabaseAdmin
+      .from('facturas_clientes')
+      .delete()
+      .eq('pedido_id', pedidoId);
+
+    if (pedido.folio_factura) {
+      let facDelQuery = supabaseAdmin
+        .from('facturas_clientes')
+        .delete()
+        .or(`serie_folio.eq.${pedido.folio_factura},uuid_fiscal.eq.${pedido.folio_factura}`);
+
+      if (pedido.empresa_id) {
+        facDelQuery = facDelQuery.eq('empresa_id', pedido.empresa_id);
+      }
+      await facDelQuery;
+    }
+
+    // 3. Limpiar folio_factura en el pedido
+    const { error: updErr } = await supabaseAdmin
+      .from('pedidos')
+      .update({ folio_factura: null })
+      .eq('id', pedidoId);
+
+    if (updErr) throw updErr;
+
+    return { success: true };
+  } catch (err: any) {
+    console.error('Error al desvincular factura del pedido:', err);
+    return { success: false, error: err.message || 'Error al desvincular la factura' };
   }
 }
 
@@ -2202,5 +2266,16 @@ export async function sincronizarFacturasEmitidasDesdeDepositos(
     return { success: false, insertadasCount: 0, error: err.message || 'Error al sincronizar facturas emitidas.' };
   }
 }
+
+import { getCuentasBancariasServerAction } from '../../../lib/actions/cuentas';
+
+/**
+ * Obtiene las cuentas bancarias de la empresa (o globales) usando supabaseAdmin
+ * para evitar restricciones de RLS o anon grants en el cliente.
+ */
+export async function getCuentasBancariasAction(empresaId?: string | null) {
+  return getCuentasBancariasServerAction(empresaId);
+}
+
 
 

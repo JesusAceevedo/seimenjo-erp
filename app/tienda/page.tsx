@@ -408,11 +408,8 @@ export default function Tienda() {
     let pedidoId: string | null = null;
     try {
       const sesionInfo = sesion as unknown as { tipo?: string; id?: string; empresa_id?: string; nombre_local?: string; razon_social?: string; [key: string]: unknown };
-      let pedidoEmpresaId = sesionInfo?.empresa_id || null;
-      const cNombre = String(sesionInfo?.nombre_local || sesionInfo?.razon_social || '').toLowerCase();
-      if (sesionInfo?.id === 'a9c0e309-7a2a-41c9-aa42-38b9f49b4688' || cNombre.includes('sakura') || cNombre.includes('ramen de playa')) {
-        pedidoEmpresaId = 'b9fec2e3-75d5-4002-9071-f79c56bda732';
-      }
+      // El pedido pertenece a la empresa que vende (Playa Seimenjo)
+      const pedidoEmpresaId = sesionInfo?.empresa_id || '57360007-11ae-4da7-a08c-2aa11f691930';
 
       // 1. Insertar el Pedido
       const { data: pedidoData, error: pedidoError } = await supabase

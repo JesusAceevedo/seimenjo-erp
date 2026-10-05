@@ -4,9 +4,16 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import { supabase } from '../../../../lib/supabase';
 import { useEmpresaId } from '../../../../lib/hooks/useEmpresaId';
 import { usePeriod } from '../../../../lib/hooks/usePeriod';
+import { useSessionToken } from '../../../../lib/hooks/useSessionToken';
+import {
+  vincularComprobanteAMovimiento,
+  desvincularComprobanteDeMovimiento
+} from '@/app/admin/gastos/reconciliationActions';
+import { fetchCuentasBancarias } from '@/lib/cuentasBancarias';
 
 export function useFacturaPublicoGeneralData() {
   const getEmpresaId = useEmpresaId();
+  const getSessionToken = useSessionToken();
   const { selectedMonth, refreshPeriodStatus } = usePeriod();
 
   const [loading, setLoading] = useState(true);
@@ -19,7 +26,7 @@ export function useFacturaPublicoGeneralData() {
   const [cargasEstadosCuenta, setCargasEstadosCuenta] = useState<any[]>([]);
 
   // Pestaña principal activa: 'facturas', 'tickets', 'comparativos' o 'depositos'
-  const [tabActiva, setTabActiva] = useState<'facturas' | 'tickets' | 'comparativos' | 'depositos'>('facturas');
+  const [tabActiva, setTabActiva] = useState<'cierre' | 'facturas' | 'tickets' | 'comparativos' | 'depositos'>('facturas');
 
   // Subpestaña para la sección de comparativos: 'efectivo', 'tarjetas', 'bbva_banco' o 'desfase_mes'
   const [subTabComparativo, setSubTabComparativo] = useState<'efectivo' | 'tarjetas' | 'bbva_banco' | 'desfase_mes'>('efectivo');
@@ -123,6 +130,96 @@ export function useFacturaPublicoGeneralData() {
     return {};
   });
 
+  // Días no laborables / descansos del mes (Persistencia multi-usuario)
+  const [diasNoLaborablesMap, setDiasNoLaborablesMap] = useState<Record<string, string[]>>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem('factura_pg_dias_no_laborables');
+        return saved ? JSON.parse(saved) : {};
+      } catch (e) {
+        return {};
+      }
+    }
+    return {};
+  });
+
+  // Ventas de fin de mes acreditadas al día siguiente (Desfase de Cierre bancario)
+  const [ventasDiaSiguienteMap, setVentasDiaSiguienteMap] = useState<Record<string, number>>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem('factura_pg_ventas_dia_siguiente');
+        return saved ? JSON.parse(saved) : {};
+      } catch (e) {
+        return {};
+      }
+    }
+    return {};
+  });
+
+  // Depósitos bancarios marcados como "No es Venta" (reembolsos, traspasos, etc.)
+  const [noEsVentaMovementsMap, setNoEsVentaMovementsMap] = useState<Record<string, Record<string, string>>>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem('factura_pg_no_es_venta');
+        return saved ? JSON.parse(saved) : {};
+      } catch (e) {
+        return {};
+      }
+    }
+    return {};
+  });
+
+  const [cashDepositPeriodsMap, setCashDepositPeriodsMap] = useState<Record<string, Record<string, 'anterior' | 'actual' | 'siguiente'>>>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem('seimenjo_periodo_depositos_efectivo') || localStorage.getItem('factura_pg_depositos_efectivo_periodo');
+        return saved ? JSON.parse(saved) : {};
+      } catch (e) {
+        return {};
+      }
+    }
+    return {};
+  });
+
+  const [cashCarryForwardMap] = useState<Record<string, Array<{
+    id: string;
+    fecha?: string;
+    descripcion?: string;
+    montoEfectivo?: number;
+    propinaEfectivo?: number;
+    montoPendiente: number;
+  }>>>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        return JSON.parse(localStorage.getItem('seimenjo_efectivo_pendiente_siguiente_mes') || '{}');
+      } catch {
+        return {};
+      }
+    }
+    return {};
+  });
+
+  const currentNoEsVentaMap = useMemo(() => {
+    return noEsVentaMovementsMap[selectedMonth || 'GLOBAL'] || {};
+  }, [noEsVentaMovementsMap, selectedMonth]);
+
+  // Tickets marcados como "Pendiente por depositar" (aún sin depósito en banco, pero cuentan para la Factura Global)
+  const [pendienteDepositoMap, setPendienteDepositoMap] = useState<Record<string, string[]>>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem('factura_pg_pendiente_deposito');
+        return saved ? JSON.parse(saved) : {};
+      } catch (e) {
+        return {};
+      }
+    }
+    return {};
+  });
+
+  const currentPendienteDepositoIds = useMemo(() => {
+    return new Set(pendienteDepositoMap[selectedMonth || 'GLOBAL'] || []);
+  }, [pendienteDepositoMap, selectedMonth]);
+
   const currentExcludedMbIds = useMemo(() => {
     return new Set(excludedMovementIds[selectedMonth] || []);
   }, [excludedMovementIds, selectedMonth]);
@@ -143,6 +240,10 @@ export function useFacturaPublicoGeneralData() {
     return new Set(manualStayMesCompIds[selectedMonth] || []);
   }, [manualStayMesCompIds, selectedMonth]);
 
+  const currentDiasNoLaborables = useMemo(() => {
+    return diasNoLaborablesMap[selectedMonth] || [];
+  }, [diasNoLaborablesMap, selectedMonth]);
+
   // Función auxiliar para persistir ajustes mensuales en Supabase
   const saveAjustesToSupabase = async (
     monthKey: string,
@@ -153,13 +254,19 @@ export function useFacturaPublicoGeneralData() {
       manualOther?: string[];
       proximoMes?: string[];
       stayMes?: string[];
+      diasNoLaborables?: string[];
+      noEsVenta?: Array<{ id: string; razon: string }>;
+      pendienteDeposito?: string[];
+      cashDepositPeriods?: Record<string, 'anterior' | 'actual' | 'siguiente'>;
     }
   ) => {
     try {
       const empresaId = await getEmpresaId();
       if (!empresaId) return;
 
-      const payload = {
+      const rawNoEsVenta = overrides?.noEsVenta ?? Object.entries(noEsVentaMovementsMap[monthKey] || {}).map(([id, razon]) => ({ id, razon }));
+
+      const payload: any = {
         empresa_id: empresaId,
         mes: monthKey,
         monto_manual_terceros: overrides?.montoManual ?? (montoManualTercerosMap[monthKey] || 0),
@@ -168,15 +275,85 @@ export function useFacturaPublicoGeneralData() {
         manual_otro_mes: overrides?.manualOther ?? (manualOtherMonthIds[monthKey] || []),
         proximo_mes_comprobantes: overrides?.proximoMes ?? (manualProximoMesCompIds[monthKey] || []),
         stay_mes_comprobantes: overrides?.stayMes ?? (manualStayMesCompIds[monthKey] || []),
+        dias_no_laborables: overrides?.diasNoLaborables ?? (diasNoLaborablesMap[monthKey] || []),
+        no_es_venta_movimientos: rawNoEsVenta,
+        pendiente_deposito_comprobantes: overrides?.pendienteDeposito ?? (pendienteDepositoMap[monthKey] || []),
+        depositos_efectivo_periodo: overrides?.cashDepositPeriods ?? (cashDepositPeriodsMap[monthKey] || {}),
         updated_at: new Date().toISOString()
       };
 
-      await supabase
+      const { error: upsertErr } = await supabase
         .from('factura_global_ajustes')
         .upsert(payload, { onConflict: 'empresa_id,mes' });
+
+      if (upsertErr) {
+        if (upsertErr.message?.includes('no_es_venta_movimientos') || upsertErr.code === '42703') {
+          delete payload.no_es_venta_movimientos;
+        }
+        if (upsertErr.message?.includes('pendiente_deposito_comprobantes') || upsertErr.code === '42703') {
+          delete payload.pendiente_deposito_comprobantes;
+        }
+        if (upsertErr.message?.includes('depositos_efectivo_periodo') || upsertErr.code === '42703') {
+          delete payload.depositos_efectivo_periodo;
+        }
+        if (upsertErr.message?.includes('dias_no_laborables') || upsertErr.code === '42703') {
+          delete payload.dias_no_laborables;
+        }
+        await supabase
+          .from('factura_global_ajustes')
+          .upsert(payload, { onConflict: 'empresa_id,mes' });
+      }
     } catch (err) {
       console.warn('Ajuste guardado localmente (sincronización con BD pendiente):', err);
     }
+  };
+
+  const toggleNoEsVentaMovement = (movId: string, razon: string = 'Reembolso') => {
+    const monthKey = selectedMonth || 'GLOBAL';
+    setNoEsVentaMovementsMap(prev => {
+      const current = { ...(prev[monthKey] || {}) };
+      if (current[movId]) {
+        delete current[movId];
+      } else {
+        current[movId] = razon;
+      }
+      const next = { ...prev, [monthKey]: current };
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('factura_pg_no_es_venta', JSON.stringify(next));
+      }
+      const rawList = Object.entries(current).map(([id, r]) => ({ id, razon: r }));
+      saveAjustesToSupabase(monthKey, { noEsVenta: rawList });
+      return next;
+    });
+  };
+
+  const setCashDepositPeriod = (movementId: string, period: 'anterior' | 'actual' | 'siguiente') => {
+    const monthKey = selectedMonth || 'GLOBAL';
+    setCashDepositPeriodsMap(prev => {
+      const monthPeriods = { ...(prev[monthKey] || {}), [movementId]: period };
+      const next = { ...prev, [monthKey]: monthPeriods };
+      if (typeof window !== 'undefined') {
+        const shared = JSON.parse(localStorage.getItem('seimenjo_periodo_depositos_efectivo') || '{}');
+        localStorage.setItem('seimenjo_periodo_depositos_efectivo', JSON.stringify({ ...shared, [monthKey]: monthPeriods }));
+        localStorage.setItem('factura_pg_depositos_efectivo_periodo', JSON.stringify(next));
+      }
+      saveAjustesToSupabase(monthKey, { cashDepositPeriods: monthPeriods });
+      return next;
+    });
+  };
+
+  const togglePendienteDeposito = (compId: string) => {
+    const monthKey = selectedMonth || 'GLOBAL';
+    setPendienteDepositoMap(prev => {
+      const list = prev[monthKey] || [];
+      const updated = list.includes(compId) ? list.filter(id => id !== compId) : [...list, compId];
+      const next = { ...prev, [monthKey]: updated };
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('factura_pg_pendiente_deposito', JSON.stringify(next));
+      }
+      saveAjustesToSupabase(monthKey, { pendienteDeposito: updated });
+      return next;
+    });
   };
 
   const toggleExcludeMovement = (movId: string) => {
@@ -274,6 +451,32 @@ export function useFacturaPublicoGeneralData() {
     });
   };
 
+  const toggleDiaNoLaborable = (dateStr: string) => {
+    if (!selectedMonth) return;
+    setDiasNoLaborablesMap(prev => {
+      const list = prev[selectedMonth] || [];
+      const updated = list.includes(dateStr) ? list.filter(d => d !== dateStr) : [...list, dateStr].sort();
+      const next = { ...prev, [selectedMonth]: updated };
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('factura_pg_dias_no_laborables', JSON.stringify(next));
+      }
+      saveAjustesToSupabase(selectedMonth, { diasNoLaborables: updated });
+      return next;
+    });
+  };
+
+  const setDiasNoLaborablesBulk = (dates: string[]) => {
+    if (!selectedMonth) return;
+    setDiasNoLaborablesMap(prev => {
+      const next = { ...prev, [selectedMonth]: dates.sort() };
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('factura_pg_dias_no_laborables', JSON.stringify(next));
+      }
+      saveAjustesToSupabase(selectedMonth, { diasNoLaborables: dates.sort() });
+      return next;
+    });
+  };
+
   const toggleFacturadoTercero = async (id: string) => {
     const current = !!facturadosTerceros[id];
     const nextVal = !current;
@@ -305,6 +508,18 @@ export function useFacturaPublicoGeneralData() {
       return updated;
     });
     saveAjustesToSupabase(mesKey, { montoManual: safeMonto });
+  };
+
+  const setVentasDiaSiguienteMonto = (monto: number) => {
+    if (!selectedMonth) return;
+    const safeMonto = Math.max(0, isNaN(monto) ? 0 : monto);
+    setVentasDiaSiguienteMap(prev => {
+      const next = { ...prev, [selectedMonth]: safeMonto };
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('factura_pg_ventas_dia_siguiente', JSON.stringify(next));
+      }
+      return next;
+    });
   };
 
   const formatCurrency = useCallback((val: number | string | null | undefined) => {
@@ -419,9 +634,40 @@ export function useFacturaPublicoGeneralData() {
     return c.nombre_archivo || 'Carga de Estado de Cuenta';
   }, []);
 
-  const checkIsOtherMonth = useCallback((item: { fecha?: string; descripcion?: string; concepto?: string }, targetMonth: string) => {
+  const checkIsOtherMonth = useCallback((item: { fecha?: string; descripcion?: string; concepto?: string; es_venta_mes_anterior?: boolean; mes_venta?: string | null }, targetMonth: string) => {
     if (!targetMonth) return { isOtherMonth: false, razon: '', mesDetectado: '' };
     const desc = ((item.descripcion || '') + ' ' + (item.concepto || '')).toLowerCase();
+
+    // 0. Marca explícita o tag de venta de mes anterior
+    if ((item as any).es_venta_mes_anterior === true || (item as any).es_venta_mes_anterior === 'true') {
+      return {
+        isOtherMonth: true,
+        razon: 'Marcado explícitamente como Venta de Mes Anterior',
+        mesDetectado: (item as any).mes_venta || 'Mes anterior'
+      };
+    }
+
+    if (desc.includes('[venta_mes_anterior]') || desc.includes('[venta_mes:') || desc.includes('mes anterior') || desc.includes('mes previo')) {
+      const matchMes = (item.descripcion || '').match(/\[VENTA_MES:([^\]]+)\]/i);
+      return {
+        isOtherMonth: true,
+        razon: 'Marcado como venta diferida de mes anterior',
+        mesDetectado: matchMes ? matchMes[1] : (item as any).mes_venta || 'Mes anterior'
+      };
+    }
+
+    // 0.1 Detectar "ventas del día DD/MM/YYYY" donde el mes difiere del mes seleccionado
+    const matchVentaDia = desc.match(/ventas del d[ií]a\s+(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/i);
+    if (matchVentaDia) {
+      const saleMonth = `${matchVentaDia[3]}-${matchVentaDia[2].padStart(2, '0')}`;
+      if (saleMonth !== targetMonth) {
+        return {
+          isOtherMonth: true,
+          razon: `Venta del día ${matchVentaDia[1]}/${matchVentaDia[2]}/${matchVentaDia[3]} corresponde al período ${saleMonth}`,
+          mesDetectado: saleMonth
+        };
+      }
+    }
 
     const meses = [
       { name: 'enero', num: '01' },
@@ -502,14 +748,8 @@ export function useFacturaPublicoGeneralData() {
         .maybeSingle();
       setEmpresaNombre(empData?.nombre || '');
 
-      // 1. Cuentas Bancarias
-      const { data: cbData, error: cbErr } = await supabase
-        .from('cuentas_bancarias')
-        .select('*')
-        .eq('empresa_id', empresaId)
-        .order('nombre', { ascending: true });
-
-      if (cbErr) console.warn('Error al cargar cuentas bancarias:', cbErr.message || cbErr);
+      // 1. Cuentas Bancarias (Carga robusta con fallback global y auto-inicialización)
+      const cbData = await fetchCuentasBancarias(empresaId);
       setCuentasBancarias(cbData || []);
 
       // 2. Cargas de Estados de Cuenta
@@ -569,7 +809,7 @@ export function useFacturaPublicoGeneralData() {
       // 5. Pedidos (con rango de fechas acotado)
       let pQuery = supabase
         .from('pedidos')
-        .select('id, numero_pedido, cliente_nombre, precio_total, subtotal, iva, fecha_pedido, folio_factura, uuid_fiscal, factura_url, xml_url, pdf_url, metodo_pago, clientes(id, nombre_local, razon_social, rfc, facturar_publico_general, es_anonimo), facturas_clientes(*)')
+        .select('id, numero_pedido, cliente_id, cliente_nombre, precio_total, fecha_pedido, folio_factura, metodo_pago, clientes(id, nombre_local, razon_social, rfc, facturar_publico_general, es_anonimo), facturas_clientes(*)')
         .eq('empresa_id', empresaId)
         .order('fecha_pedido', { ascending: false });
 
@@ -640,6 +880,26 @@ export function useFacturaPublicoGeneralData() {
           if (ajData.monto_manual_terceros !== undefined && ajData.monto_manual_terceros !== null) {
             setMontoManualTercerosMap(prev => ({ ...prev, [monthKey]: Number(ajData.monto_manual_terceros) }));
           }
+          if (ajData.dias_no_laborables && Array.isArray(ajData.dias_no_laborables)) {
+            setDiasNoLaborablesMap(prev => ({ ...prev, [monthKey]: ajData.dias_no_laborables }));
+          }
+          if (ajData.no_es_venta_movimientos && Array.isArray(ajData.no_es_venta_movimientos)) {
+            const mapped: Record<string, string> = {};
+            ajData.no_es_venta_movimientos.forEach((item: any) => {
+              if (typeof item === 'string') mapped[item] = 'Reembolso';
+              else if (item && item.id) mapped[item.id] = item.razon || 'Reembolso';
+            });
+            setNoEsVentaMovementsMap(prev => ({ ...prev, [monthKey]: mapped }));
+          }
+          if (ajData.depositos_efectivo_periodo && typeof ajData.depositos_efectivo_periodo === 'object') {
+            setCashDepositPeriodsMap(prev => ({
+              ...prev,
+              [monthKey]: { ...ajData.depositos_efectivo_periodo, ...(prev[monthKey] || {}) }
+            }));
+          }
+          if (ajData.pendiente_deposito_comprobantes && Array.isArray(ajData.pendiente_deposito_comprobantes)) {
+            setPendienteDepositoMap(prev => ({ ...prev, [monthKey]: ajData.pendiente_deposito_comprobantes }));
+          }
         }
 
         // Incorporar facturado_tercero de comprobantes en BD
@@ -686,6 +946,177 @@ export function useFacturaPublicoGeneralData() {
     return new Set(userCargasMes.map(c => c.id));
   }, [userCargasMes]);
 
+  // Acciones de vinculación/desvinculación con persistencia y refresco
+  const vincularComprobante = async (comprobanteId: string, movimientoBancarioId: string, montoAsociado?: number) => {
+    try {
+      const token = await getSessionToken();
+      const res = await vincularComprobanteAMovimiento(comprobanteId, movimientoBancarioId, token, montoAsociado);
+      if (res && res.success) {
+        await fetchData();
+      }
+      return res;
+    } catch (err: any) {
+      console.error('Error al vincular comprobante con movimiento:', err);
+      return { success: false, error: err.message || 'Error al vincular comprobante.' };
+    }
+  };
+
+  const desvincularComprobante = async (comprobanteId: string, movimientoBancarioId: string | null = null) => {
+    try {
+      const token = await getSessionToken();
+      const res = await desvincularComprobanteDeMovimiento(comprobanteId, movimientoBancarioId, token);
+      if (res && res.success) {
+        await fetchData();
+      }
+      return res;
+    } catch (err: any) {
+      console.error('Error al desvincular comprobante:', err);
+      return { success: false, error: err.message || 'Error al desvincular comprobante.' };
+    }
+  };
+
+  // Mapa de relación de tickets y depósitos bancarios asociados
+  const ticketVinculacionMap = useMemo(() => {
+    const map = new Map<string, {
+      totalVinculado: number;
+      dif: number;
+      isCuadrado100: boolean;
+      isParcial: boolean;
+      movIds: Set<string>;
+      montoObjetivo: number;
+      esCuadreEfectivo: boolean;
+      movDetails: Array<{ id: string; montoAsociado: number; concepto: string; fecha: string; esEfectivo: boolean }>;
+    }>();
+
+    const movMap = new Map<string, any>();
+    movimientosDeposito.forEach(m => movMap.set(m.id, m));
+
+    comprobantes.forEach((comp: any) => {
+      const cdms = comp.comprobantes_deposito_movimientos || [];
+      let totalVinculado = 0;
+      const movIds = new Set<string>();
+      const movDetails: Array<{ id: string; montoAsociado: number; concepto: string; fecha: string; esEfectivo: boolean }> = [];
+
+      cdms.forEach((rel: any) => {
+        const mov = movMap.get(rel.movimiento_id);
+        const esEfectivo = !!mov && esMovimientoEfectivo(mov.concepto || '');
+        const montoAsoc = rel.monto_asociado !== undefined && rel.monto_asociado !== null
+          ? Number(rel.monto_asociado)
+          : (mov && !esEfectivo ? Number(mov.deposito || mov.monto || 0) : 0);
+        totalVinculado += montoAsoc;
+        movIds.add(rel.movimiento_id);
+        if (mov) {
+          movDetails.push({
+            id: mov.id,
+            montoAsociado: montoAsoc,
+            concepto: mov.concepto || '',
+            fecha: mov.fecha || '',
+            esEfectivo
+          });
+        }
+      });
+
+      const esCuadreEfectivo = movDetails.length > 0 && movDetails.every(mov => mov.esEfectivo) &&
+        Number(comp.monto_efectivo || 0) + Number(comp.propina_efectivo || 0) > 0;
+      const montoObjetivo = esCuadreEfectivo
+        ? Number(comp.monto_efectivo || 0) + Number(comp.propina_efectivo || 0)
+        : Number(comp.monto || 0);
+      const dif = montoObjetivo - totalVinculado;
+      const isCuadrado100 = totalVinculado > 0 && Math.abs(dif) < 0.05;
+      const isParcial = totalVinculado > 0 && !isCuadrado100;
+
+      map.set(comp.id, {
+        totalVinculado,
+        dif,
+        isCuadrado100,
+        isParcial,
+        montoObjetivo,
+        esCuadreEfectivo,
+        movIds,
+        movDetails
+      });
+    });
+
+    return map;
+  }, [comprobantes, movimientosDeposito, esMovimientoEfectivo]);
+
+  // Mapa de depósitos a su ticket vinculado (con validación de 100% y advertencia si difiere)
+  const movVinculacionMap = useMemo(() => {
+    const map = new Map<string, {
+      ticket: any;
+      isCuadrado100: boolean;
+      isParcial: boolean;
+      dif: number;
+      montoAsociado: number;
+      totalVinculado: number;
+      tickets: Array<{ ticket: any; montoAsociado: number }>;
+      esCuadreEfectivo: boolean;
+      advertencia: string | null;
+    }>();
+    const cashTicketsByMovement = new Map<string, Array<{ ticket: any; montoAsociado: number }>>();
+    const movementMap = new Map(movimientosDeposito.map(movimiento => [movimiento.id, movimiento]));
+
+    comprobantes.forEach((comp: any) => {
+      const vInfo = ticketVinculacionMap.get(comp.id);
+      if (!vInfo || vInfo.movDetails.length === 0) return;
+
+      vInfo.movDetails.forEach(md => {
+        if (md.esEfectivo) {
+          const tickets = cashTicketsByMovement.get(md.id) || [];
+          const cashAmount = Number(comp.monto_efectivo || 0) + Number(comp.propina_efectivo || 0);
+          tickets.push({ ticket: comp, montoAsociado: Math.min(cashAmount, md.montoAsociado) });
+          cashTicketsByMovement.set(md.id, tickets);
+          return;
+        }
+
+        const compDesc = comp.descripcion || `Ticket #${comp.id.slice(0, 6)}`;
+        const advertencia = !vInfo.isCuadrado100
+          ? `⚠️ El ticket (${compDesc}) por $${vInfo.montoObjetivo.toLocaleString('es-MX', { minimumFractionDigits: 2 })} no coincide al 100% con los depósitos asociados (suma: $${vInfo.totalVinculado.toLocaleString('es-MX', { minimumFractionDigits: 2 })}). Diferencia: ${vInfo.dif > 0 ? '+' : ''}$${vInfo.dif.toLocaleString('es-MX', { minimumFractionDigits: 2 })}. No se descuenta del saldo bancario hasta que el cuadre sea exacto.`
+          : null;
+
+        map.set(md.id, {
+          ticket: comp,
+          tickets: [{ ticket: comp, montoAsociado: md.montoAsociado }],
+          isCuadrado100: vInfo.isCuadrado100,
+          isParcial: vInfo.isParcial,
+          dif: vInfo.dif,
+          montoAsociado: md.montoAsociado,
+          totalVinculado: vInfo.totalVinculado,
+          esCuadreEfectivo: false,
+          advertencia
+        });
+      });
+    });
+
+    cashTicketsByMovement.forEach((tickets, movementId) => {
+      const movement = movementMap.get(movementId);
+      if (!movement) return;
+
+      const totalVinculado = tickets.reduce((sum, item) => sum + item.montoAsociado, 0);
+      const montoDeposito = Math.abs(Number(movement.deposito || movement.monto || 0));
+      const dif = montoDeposito - totalVinculado;
+      const isCuadrado100 = totalVinculado > 0 && Math.abs(dif) < 0.05;
+      const isParcial = totalVinculado > 0 && !isCuadrado100;
+      const advertencia = !isCuadrado100
+        ? `⚠️ El depósito en efectivo por $${montoDeposito.toLocaleString('es-MX', { minimumFractionDigits: 2 })} no coincide al 100% con los importes en efectivo de ${tickets.length} corte(s) asociado(s) (suma: $${totalVinculado.toLocaleString('es-MX', { minimumFractionDigits: 2 })}). Diferencia: ${dif > 0 ? '+' : ''}$${dif.toLocaleString('es-MX', { minimumFractionDigits: 2 })}.`
+        : null;
+
+      map.set(movementId, {
+        ticket: tickets[0].ticket,
+        tickets,
+        isCuadrado100,
+        isParcial,
+        dif,
+        montoAsociado: totalVinculado,
+        totalVinculado,
+        esCuadreEfectivo: true,
+        advertencia
+      });
+    });
+
+    return map;
+  }, [comprobantes, movimientosDeposito, ticketVinculacionMap]);
+
   // Clasificación de tickets y cortes POS del mes
   const allTicketsMes = useMemo(() => {
     return comprobantes.filter(c => {
@@ -701,15 +1132,31 @@ export function useFacturaPublicoGeneralData() {
       const hasExplicitPref = excludedComprobanteIds[selectedMonth] !== undefined;
       const isExcluded = hasExplicitPref ? currentExcludedCompIds.has(c.id) : isOtherMonth;
 
+      const vInfo = ticketVinculacionMap.get(c.id);
+      const totalVinculado = vInfo?.totalVinculado || 0;
+      const difPendiente = vInfo?.dif ?? Number(c.monto || 0);
+      const isCuadrado100 = vInfo?.isCuadrado100 || false;
+      const isParcial = vInfo?.isParcial || false;
+      const associatedMovs = vInfo?.movDetails || [];
+
       return {
         ...c,
         _isOtherMonth: isOtherMonth,
         _otherMonthRazon: autoCheck.razon || (currentManualOtherIds.has(c.id) ? 'Marcado manualmente' : ''),
         _mesDetectado: autoCheck.mesDetectado,
-        _isExcluded: isExcluded
+        _isExcluded: isExcluded,
+        _totalVinculado: totalVinculado,
+        _montoObjetivoVinculacion: vInfo?.montoObjetivo ?? Number(c.monto || 0),
+        _esCuadreEfectivo: vInfo?.esCuadreEfectivo || false,
+        _difPendiente: difPendiente,
+        _isCuadrado100: isCuadrado100,
+        _isParcial: isParcial,
+        _associatedMovs: associatedMovs,
+        // Pendiente por depositar: solo aplica mientras el ticket no esté cuadrado al 100% con depósitos
+        _isPendienteDeposito: currentPendienteDepositoIds.has(c.id) && !isCuadrado100
       };
     });
-  }, [comprobantes, selectedMonth, selectedCuentaId, currentManualOtherIds, currentExcludedCompIds, excludedComprobanteIds, extractYearMonth, checkIsOtherMonth]);
+  }, [comprobantes, selectedMonth, selectedCuentaId, currentManualOtherIds, currentExcludedCompIds, excludedComprobanteIds, extractYearMonth, checkIsOtherMonth, ticketVinculacionMap, currentPendienteDepositoIds]);
 
   const ticketsMes = useMemo(() => {
     return allTicketsMes.filter(t => !t._isExcluded);
@@ -721,9 +1168,10 @@ export function useFacturaPublicoGeneralData() {
       const mes = extractYearMonth(c.fecha);
       if (selectedMonth && mes !== selectedMonth) return false;
       if (currentExcludedCompIds.has(c.id)) return false;
+      if (checkIsOtherMonth(c, selectedMonth).isOtherMonth) return false;
       return true;
     });
-  }, [comprobantes, selectedMonth, currentExcludedCompIds, extractYearMonth]);
+  }, [comprobantes, selectedMonth, currentExcludedCompIds, extractYearMonth, checkIsOtherMonth]);
 
   const checkIsPG = useCallback((rfcStr?: string, nameStr?: string, folioStr?: string, usoCfdi?: string, clienteObj?: any) => {
     const rfc = (rfcStr || '').trim().toUpperCase();
@@ -919,11 +1367,22 @@ export function useFacturaPublicoGeneralData() {
         const hasExplicitPreference = excludedMovementIds[selectedMonth] !== undefined;
         const isExcluded = hasExplicitPreference ? currentExcludedMbIds.has(m.id) : isOtherMonth;
 
+        const isNoVenta = !!currentNoEsVentaMap[m.id];
+        const noVentaRazon = currentNoEsVentaMap[m.id] || '';
+
+        const vData = movVinculacionMap.get(m.id);
+        const isVinculadoCuadrado100 = !!(vData && vData.isCuadrado100);
+        const isVinculadoIncompleto = !!(vData && vData.isParcial);
+        const ticketAsociado = vData?.ticket || null;
+        const advertenciaCuadre = vData?.advertencia || null;
+
         let statusName = 'Sin Conciliar';
         if (hasInvoice) {
           statusName = 'Facturado';
-        } else if (hasTickets) {
-          statusName = 'Conciliado con Ticket';
+        } else if (isVinculadoCuadrado100) {
+          statusName = 'Conciliado 100% con Ticket';
+        } else if (hasTickets || isVinculadoIncompleto) {
+          statusName = 'Vinculado Parcial (Pendiente)';
         }
 
         return {
@@ -936,11 +1395,22 @@ export function useFacturaPublicoGeneralData() {
           _otherMonthRazon: otherMonthRazon,
           _mesDetectado: mesDetectado,
           _isExcluded: isExcluded,
+          _isNoVenta: isNoVenta,
+          _noVentaRazon: noVentaRazon,
+          _vinculadoCuadrado100: isVinculadoCuadrado100,
+          _vinculadoIncompleto: isVinculadoIncompleto,
+          _ticketAsociado: ticketAsociado,
+          _ticketsAsociados: vData?.tickets || (ticketAsociado ? [{ ticket: ticketAsociado, montoAsociado: vData?.montoAsociado || 0 }] : []),
+          _esDepositoEfectivo: esMovimientoEfectivo(m.concepto || ''),
+          _ticketTotalVinculado: vData?.totalVinculado ?? 0,
+          _ticketDiferencia: vData?.dif ?? Number(ticketAsociado?.monto || 0),
+          _advertenciaCuadre: advertenciaCuadre,
+          _montoAsociadoAlTicket: vData?.montoAsociado ?? (hasTickets ? montoVal : 0),
           _cdms: cdms,
           _concs: concs
         };
       });
-  }, [movimientosDeposito, userCargaMesIds, selectedMonth, currentManualOtherIds, currentExcludedMbIds, excludedMovementIds, extractYearMonth, checkIsOtherMonth]);
+  }, [movimientosDeposito, userCargaMesIds, selectedMonth, currentManualOtherIds, currentExcludedMbIds, excludedMovementIds, extractYearMonth, checkIsOtherMonth, currentNoEsVentaMap, movVinculacionMap, esMovimientoEfectivo]);
 
   const {
     totalMontoDepositosMes,
@@ -948,7 +1418,10 @@ export function useFacturaPublicoGeneralData() {
     montoDepositosFacturadosMes,
     totalDepositosConTicketMes,
     montoDepositosConTicketMes,
-    totalMontoExcluidoOtroMes
+    totalMontoExcluidoOtroMes,
+    totalMontoDepositosNoEsVenta,
+    totalMontoDepositosVinculadosCuadrados,
+    totalMontoDepositosPendientesAsociar
   } = useMemo(() => {
     let totalMonto = 0;
     let countFact = 0;
@@ -956,6 +1429,8 @@ export function useFacturaPublicoGeneralData() {
     let countTicket = 0;
     let montoTicket = 0;
     let montoExcluido = 0;
+    let montoNoVenta = 0;
+    let montoVinculadoCuadrado = 0;
 
     depositosMes.forEach(d => {
       totalMonto += d._monto;
@@ -963,14 +1438,23 @@ export function useFacturaPublicoGeneralData() {
         countFact++;
         montoFact += d._monto;
       }
-      if (d._hasTickets) {
+      if (d._hasTickets || d._vinculadoCuadrado100) {
         countTicket++;
         montoTicket += d._monto;
       }
       if (d._isExcluded) {
         montoExcluido += d._monto;
       }
+      if (d._isNoVenta) {
+        montoNoVenta += d._monto;
+      }
+      if (d._vinculadoCuadrado100) {
+        montoVinculadoCuadrado += d._monto;
+      }
     });
+
+    const depositosNetosCalc = Math.max(0, totalMonto - montoExcluido - montoNoVenta);
+    const pendientesAsociar = Math.max(0, depositosNetosCalc - montoVinculadoCuadrado);
 
     return {
       totalMontoDepositosMes: totalMonto,
@@ -978,7 +1462,10 @@ export function useFacturaPublicoGeneralData() {
       montoDepositosFacturadosMes: montoFact,
       totalDepositosConTicketMes: countTicket,
       montoDepositosConTicketMes: montoTicket,
-      totalMontoExcluidoOtroMes: montoExcluido
+      totalMontoExcluidoOtroMes: montoExcluido,
+      totalMontoDepositosNoEsVenta: montoNoVenta,
+      totalMontoDepositosVinculadosCuadrados: montoVinculadoCuadrado,
+      totalMontoDepositosPendientesAsociar: pendientesAsociar
     };
   }, [depositosMes]);
 
@@ -994,18 +1481,21 @@ export function useFacturaPublicoGeneralData() {
     facturasTercerosMes,
     facturasPgMes,
     montoFacturasTerceros,
+    ivaFacturasTerceros,
     montoFacturasPg,
     totalFacturadoMes
   } = useMemo(() => {
     const facTerceros = todasLasFacturasMes.filter(f => !f._isPG);
     const facPg = todasLasFacturasMes.filter(f => f._isPG);
     const sumFacTerceros = facTerceros.reduce((acc, f) => acc + Number(f._total || f.total || 0), 0);
+    const sumIvaFacTerceros = facTerceros.reduce((acc, f) => acc + Number(f._iva ?? f.iva_trasladado ?? 0), 0);
     const sumFacPg = facPg.reduce((acc, f) => acc + Number(f._total || f.total || 0), 0);
 
     return {
       facturasTercerosMes: facTerceros,
       facturasPgMes: facPg,
       montoFacturasTerceros: sumFacTerceros,
+      ivaFacturasTerceros: sumIvaFacTerceros,
       montoFacturasPg: sumFacPg,
       totalFacturadoMes: sumFacTerceros + sumFacPg
     };
@@ -1017,17 +1507,17 @@ export function useFacturaPublicoGeneralData() {
     const hasP = isSak && (cuentasBancarias.some(cb => cb.nombre?.toUpperCase().includes('PARROT')) || ticketsMes.some(t => t.tipo === 'corte_parrot'));
     return { isSakura: isSak, hasBbva: hasB, hasParrot: hasP };
   }, [empresaNombre, cuentasBancarias, ticketsMes]);
+  const isSeimenjo = !isSakura && (empresaNombre || '').toLowerCase().includes('seimenjo');
 
   // BASE PARROT: SOLO EFECTIVO + PARROTPAY PARA FACTURA GLOBAL
   const {
     totalEfectivoParrot,
     totalParrotPayParrot,
     totalFacturableParrotBase,
-    totalPropinasExcluidas,
+    totalPropinasParrotEfecPPay,
     tercerosEfecParrot,
     tercerosParrotPay,
     totalTercerosDeducibles,
-    totalFacturaPublicoGeneral,
     efectivoPublicoGeneral,
     parrotPayPublicoGeneral,
     manualTercerosVal,
@@ -1044,11 +1534,12 @@ export function useFacturaPublicoGeneralData() {
       const parrotPay = Number(c.monto_parrotpay || 0);
       const propEfec = Number(c.propina_efectivo || 0);
       const propPPay = Number(c.propina_parrotpay || 0);
-      const propTarj = Number(c.propina_debito || 0) + Number(c.propina_credito || 0) + Number(c.propina_amex || 0);
 
       sumEfectivo += efec;
       sumParrotPay += parrotPay;
-      sumPropinas += (propEfec + propPPay + propTarj);
+      // De Parrot solo se toman propinas de Efectivo y ParrotPay.
+      // Las propinas de tarjeta se toman exclusivamente de los tickets BBVA (ver comparativoTarjetas).
+      sumPropinas += (propEfec + propPPay);
 
       if (facturadosTerceros[c.id]) {
         sumTercerosEfec += efec;
@@ -1070,11 +1561,11 @@ export function useFacturaPublicoGeneralData() {
       totalEfectivoParrot: sumEfectivo,
       totalParrotPayParrot: sumParrotPay,
       totalFacturableParrotBase: baseFacturable,
-      totalPropinasExcluidas: sumPropinas,
+      totalPropinasParrotEfecPPay: sumPropinas,
       tercerosEfecParrot: sumTercerosEfec,
       tercerosParrotPay: sumTercerosParrotPay,
       totalTercerosDeducibles: totalTerceros,
-      totalFacturaPublicoGeneral: factPubGen,
+      totalFacturaParrotNeto: factPubGen,
       efectivoPublicoGeneral: efecPubGen,
       parrotPayPublicoGeneral: parrotPubGen,
       manualTercerosVal: manualVal,
@@ -1186,6 +1677,24 @@ export function useFacturaPublicoGeneralData() {
       dailyRows
     };
   }, [ticketsMes, cuentasBancarias, extractDateOnly]);
+
+  // PROPINAS EXCLUIDAS: Parrot (Efectivo + ParrotPay) + Tarjetas según tickets BBVA
+  const totalPropinasExcluidas = totalPropinasParrotEfecPPay + comparativoTarjetas.bbvaPropinasTarj;
+
+  // TICKETS PENDIENTES POR DEPOSITAR (marcados manualmente; aún sin depósito en el estado de cuenta)
+  const { ticketsPendientesDeposito, montoTicketsPendientesDeposito } = useMemo(() => {
+    const list = ticketsMes.filter(t => t._isPendienteDeposito);
+    const monto = list.reduce((acc, t) => acc + Math.max(0, Number(t._difPendiente ?? t.monto ?? 0)), 0);
+    return { ticketsPendientesDeposito: list, montoTicketsPendientesDeposito: monto };
+  }, [ticketsMes]);
+
+  // FACTURA AL PÚBLICO EN GENERAL:
+  // Efectivo Parrot + ParrotPay + todas las Tarjetas BBVA − Terceros − Propinas.
+  // La marca de pendiente solo afecta la conciliación; no excluye tickets del subtotal.
+  const totalFacturaPublicoGeneral = Math.max(
+    0,
+    totalFacturableParrotBase + (comparativoTarjetas.totalTarjetasBbva || 0) - totalTercerosDeducibles - totalPropinasExcluidas
+  );
 
   // BBVA: TICKETS VS ESTADO DE CUENTA
   const comparativoBbvaBanco = useMemo(() => {
@@ -1323,7 +1832,12 @@ export function useFacturaPublicoGeneralData() {
 
   // CONTROL Y ARQUEO DE EFECTIVO
   const controlEfectivo = useMemo(() => {
-    const ventasEfectivoParrot = totalEfectivoParrot;
+    const ventasEfectivoParrot = ticketsMes.reduce((sum, ticket) =>
+      sum + Number(ticket.monto_efectivo || 0) + Number(ticket.propina_efectivo || 0), 0
+    );
+    const periodMap = cashDepositPeriodsMap[selectedMonth || 'GLOBAL'] || {};
+    const periodForCashDeposit = (deposit: any) =>
+      periodMap[deposit.id] || (deposit._isExcluded || deposit._isOtherMonth ? 'anterior' : 'actual');
 
     let montoFichasVentanilla = 0;
     const fichasVentanilla: any[] = [];
@@ -1334,11 +1848,17 @@ export function useFacturaPublicoGeneralData() {
 
     let montoEfectivoEstadoCuenta = 0;
     let montoEfectivoExcluidoOtroMes = 0;
+    let montoEfectivoMesSiguiente = 0;
     const depositosBancoEfectivo: any[] = [];
+    const depositosBancoEfectivoAnterior: any[] = [];
     depositosMes.forEach(d => {
-      if (esMovimientoEfectivo(d.concepto || '')) {
-        if (d._isExcluded) {
+      if (esMovimientoEfectivo(d.concepto || '') && !d._isNoVenta) {
+        const periodo = periodForCashDeposit(d);
+        if (periodo === 'anterior') {
           montoEfectivoExcluidoOtroMes += d._monto;
+          depositosBancoEfectivoAnterior.push(d);
+        } else if (periodo === 'siguiente') {
+          montoEfectivoMesSiguiente += d._monto;
         } else {
           montoEfectivoEstadoCuenta += d._monto;
           depositosBancoEfectivo.push(d);
@@ -1346,12 +1866,46 @@ export function useFacturaPublicoGeneralData() {
       }
     });
 
-    const totalDepositosEfectivoRealizados = Math.max(montoFichasVentanilla, montoEfectivoEstadoCuenta);
-    const diferenciaEfectivo = ventasEfectivoParrot - totalDepositosEfectivoRealizados;
+    const depositosActualesIds = new Set(depositosBancoEfectivo.map(deposito => deposito.id));
+    const depositosAnterioresIds = new Set(depositosBancoEfectivoAnterior.map(deposito => deposito.id));
+    const cashAmountForTicket = (ticket: any) => Number(ticket.monto_efectivo || 0) + Number(ticket.propina_efectivo || 0);
+    const linkedCashForTicket = (ticket: any, depositIds: Set<string>) => {
+      const totalCash = cashAmountForTicket(ticket);
+      const linked = (ticket.comprobantes_deposito_movimientos || []).reduce((sum: number, relation: any) => {
+        if (!depositIds.has(relation.movimiento_id)) return sum;
+        return sum + Number(relation.monto_asociado || 0);
+      }, 0);
+      return Math.min(totalCash, linked);
+    };
+
+    const totalEfectivoConciliado = ticketsMes.reduce(
+      (sum, ticket) => sum + linkedCashForTicket(ticket, depositosActualesIds),
+      0
+    );
+    const efectivoPendienteTicketsMes = ticketsMes.reduce(
+      (sum, ticket) => sum + Math.max(0, cashAmountForTicket(ticket) - linkedCashForTicket(ticket, depositosActualesIds)),
+      0
+    );
+    const previousMonth = selectedMonth && /^\d{4}-\d{2}$/.test(selectedMonth)
+      ? (() => {
+        const [year, month] = selectedMonth.split('-').map(Number);
+        return new Date(Date.UTC(year, month - 2, 1)).toISOString().slice(0, 7);
+      })()
+      : '';
+    const carryForwardRecords = cashCarryForwardMap[previousMonth] || [];
+    const efectivoPendienteMesAnterior = carryForwardRecords.reduce((sum, record) => {
+      const ticket = comprobantes.find((item: any) => item.id === record.id);
+      const linked = ticket ? linkedCashForTicket(ticket, depositosAnterioresIds) : 0;
+      return sum + Math.max(0, Number(record.montoPendiente || 0) - linked);
+    }, 0);
+
+    const totalDepositosEfectivoRealizados = totalEfectivoConciliado;
+    const montoEfectivoSinAsignar = Math.max(0, montoEfectivoEstadoCuenta - totalEfectivoConciliado);
+    const diferenciaEfectivo = ventasEfectivoParrot - totalEfectivoConciliado;
     const faltaPorDepositar = Math.max(0, diferenciaEfectivo);
     const sobranteEfectivo = diferenciaEfectivo < 0 ? Math.abs(diferenciaEfectivo) : 0;
     const porcentajeDepositado = ventasEfectivoParrot > 0 
-      ? Math.min(100, Math.round((totalDepositosEfectivoRealizados / ventasEfectivoParrot) * 100))
+      ? Math.min(100, Math.round((totalEfectivoConciliado / ventasEfectivoParrot) * 100))
       : 100;
 
     const dailyCashMap: Record<string, {
@@ -1434,6 +1988,11 @@ export function useFacturaPublicoGeneralData() {
       montoEfectivoEstadoCuenta,
       montoEfectivoExcluidoOtroMes,
       totalDepositosEfectivoRealizados,
+      totalEfectivoConciliado,
+      montoEfectivoSinAsignar,
+      efectivoPendienteTicketsMes,
+      efectivoPendienteMesAnterior,
+      montoEfectivoMesSiguiente,
       diferenciaEfectivo,
       faltaPorDepositar,
       sobranteEfectivo,
@@ -1442,7 +2001,7 @@ export function useFacturaPublicoGeneralData() {
       depositosBancoEfectivo,
       dailyCashRows
     };
-  }, [totalEfectivoParrot, depositosVentanillaMes, depositosMes, ticketsMes, esMovimientoEfectivo, extractDateOnly]);
+  }, [depositosVentanillaMes, depositosMes, ticketsMes, comprobantes, cashDepositPeriodsMap, cashCarryForwardMap, selectedMonth, esMovimientoEfectivo, extractDateOnly]);
 
   // Tablas visibles filtradas
   const displayedTickets = useMemo(() => {
@@ -1489,21 +2048,29 @@ export function useFacturaPublicoGeneralData() {
       const wb = XLSX.utils.book_new();
 
       const summaryRows: any[] = [
-        { 'Concepto': '--- FACTURA PÚBLICO EN GENERAL (BASE PARROT) ---', 'Importe': '', 'Notas': '' },
+        { 'Concepto': '--- FACTURA PÚBLICO EN GENERAL ---', 'Importe': '', 'Notas': '' },
         { 'Concepto': 'Ventas en Efectivo Parrot (Sin Propina)', 'Importe': totalEfectivoParrot, 'Notas': 'Base facturable de Parrot' },
         { 'Concepto': 'Ventas en ParrotPay (Sin Propina)', 'Importe': totalParrotPayParrot, 'Notas': 'Base facturable de Parrot (si aplica)' },
         { 'Concepto': 'TOTAL BASE FACTURABLE PARROT', 'Importe': totalFacturableParrotBase, 'Notas': 'Efectivo + ParrotPay' },
+        { 'Concepto': 'Tarjetas BBVA Oficiales (Sin Propina)', 'Importe': comparativoTarjetas.totalTarjetasBbva, 'Notas': 'Según tickets BBVA (depositadas + pendientes)' },
+        { 'Concepto': '   de los cuales: Tickets Pendientes por Depositar', 'Importe': montoTicketsPendientesDeposito, 'Notas': `${ticketsPendientesDeposito.length} ticket(s) sin depósito en banco aún` },
+        { 'Concepto': 'Propinas (Efectivo, ParrotPay y Tarjetas)', 'Importe': -totalPropinasExcluidas, 'Notas': 'Excluidas de la base de la Factura Global' },
         { 'Concepto': 'Facturas a Clientes Terceros (Individual)', 'Importe': -montoFacturasTerceros, 'Notas': 'Deducible / Ya emitidas' },
         { 'Concepto': 'Tickets POS Marcados a Terceros', 'Importe': -(tercerosEfecParrot + tercerosParrotPay), 'Notas': 'Deducible de facturación' },
         { 'Concepto': 'Monto Manual Facturado a Terceros', 'Importe': -manualTercerosVal, 'Notas': 'Ajuste manual del mes' },
         { 'Concepto': 'TOTAL SUGERIDO FACTURA PÚBLICO GENERAL', 'Importe': totalFacturaPublicoGeneral, 'Notas': 'Importe a timbrar en el SAT' },
+        ...(isSeimenjo ? [
+          { 'Concepto': 'IVA TRASLADADO FACTURA GLOBAL', 'Importe': ivaFacturaGlobal, 'Notas': 'IVA incluido desglosado del total cobrado' },
+          { 'Concepto': 'IVA TRASLADADO FACTURAS A TERCEROS', 'Importe': ivaFacturasTerceros, 'Notas': 'Suma del IVA de CFDI individuales emitidos en el período' },
+          { 'Concepto': 'TOTAL IVA TRASLADADO DEL PERÍODO', 'Importe': totalIvaTrasladadoPeriodo, 'Notas': 'Factura Global + CFDI individuales a terceros' }
+        ] : []),
         { 'Concepto': '', 'Importe': '', 'Notas': '' },
         { 'Concepto': '--- CONTROL DE EFECTIVO Y DEPÓSITOS (CARGAS USUARIO) ---', 'Importe': '', 'Notas': '' },
         { 'Concepto': 'Ventas Efectivo Parrot', 'Importe': controlEfectivo.ventasEfectivoParrot, 'Notas': 'Cobrado en tienda' },
         { 'Concepto': 'Depósitos Efectivo Realizados (Banco / Fichas)', 'Importe': controlEfectivo.totalDepositosEfectivoRealizados, 'Notas': 'Depositado en practicaja/banco' },
         { 'Concepto': 'FALTA POR DEPOSITAR EN EFECTIVO', 'Importe': controlEfectivo.faltaPorDepositar, 'Notas': controlEfectivo.faltaPorDepositar > 0 ? 'FALTANTE PENDIENTE EN TIENDA' : '100% CUBIERTO' },
         { 'Concepto': '', 'Importe': '', 'Notas': '' },
-        { 'Concepto': '--- COMPARATIVO TARJETAS (NO CONTABILIZADO EN FACTURA) ---', 'Importe': '', 'Notas': '' },
+        { 'Concepto': '--- COMPARATIVO TARJETAS PARROT VS BBVA ---', 'Importe': '', 'Notas': '' },
         { 'Concepto': 'Corte Oficial BBVA Tarjetas (Sin Propina)', 'Importe': comparativoTarjetas.totalTarjetasBbva, 'Notas': 'Fuente Oficial / Correcta' },
         { 'Concepto': 'Tarjetas Registradas en Parrot (Sin Propina)', 'Importe': comparativoTarjetas.totalTarjetasParrot, 'Notas': 'Registro meseros / caja' },
         { 'Concepto': 'Diferencia Tarjetas (BBVA - Parrot)', 'Importe': comparativoTarjetas.diferenciaTarjetas, 'Notas': 'Variación comparativa' },
@@ -1640,9 +2207,176 @@ export function useFacturaPublicoGeneralData() {
     }
   };
 
+  // Auditoría exhaustiva de días del mes: Laborables vs. Descanso vs. Tickets capturados
+  const auditoriaDiasMes = useMemo(() => {
+    if (!selectedMonth || !/^\d{4}-\d{2}$/.test(selectedMonth)) {
+      return {
+        dias: [],
+        totalDiasMes: 0,
+        totalDiasLaborables: 0,
+        totalDiasNoLaborables: 0,
+        diasConTicket: 0,
+        diasLaborablesSinTicket: 0,
+        listaFaltantes: [],
+        porcentajeCumplimiento: 100
+      };
+    }
+
+    const [yStr, mStr] = selectedMonth.split('-');
+    const year = parseInt(yStr, 10);
+    const month = parseInt(mStr, 10);
+    const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+
+    const noLaborablesSet = new Set(currentDiasNoLaborables);
+
+    // Mapear tickets y comprobantes del mes por fecha
+    const ticketsPorFecha: Record<string, any[]> = {};
+    (comprobantes || []).forEach(c => {
+      if (!c.fecha) return;
+      const fOnly = extractDateOnly(c.fecha);
+      if (!ticketsPorFecha[fOnly]) ticketsPorFecha[fOnly] = [];
+      ticketsPorFecha[fOnly].push(c);
+    });
+
+    const diasList: Array<{
+      dateStr: string;
+      dayNum: number;
+      dayName: string;
+      dayOfWeek: number;
+      esNoLaborable: boolean;
+      tieneTicket: boolean;
+      esFaltante: boolean;
+      tickets: any[];
+      totalVentaDia: number;
+    }> = [];
+
+    const diasNombres = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+
+    let laborablesCount = 0;
+    let conTicketCount = 0;
+    let faltantesCount = 0;
+    const faltantesDates: string[] = [];
+
+    for (let day = 1; day <= daysInMonth; day++) {
+      const dateStr = `${selectedMonth}-${String(day).padStart(2, '0')}`;
+      const dObj = new Date(`${dateStr}T12:00:00Z`);
+      const dayOfWeek = dObj.getUTCDay();
+      const dayName = diasNombres[dayOfWeek];
+
+      const esNoLab = noLaborablesSet.has(dateStr);
+      const dayTickets = ticketsPorFecha[dateStr] || [];
+      const tieneTicket = dayTickets.length > 0;
+      const esFaltante = !esNoLab && !tieneTicket;
+
+      const totalDia = dayTickets.reduce((sum, t) => {
+        const ef = Number(t.monto_efectivo || 0);
+        const pp = Number(t.monto_parrotpay || 0);
+        const tot = Number(t.monto || 0);
+        return sum + (ef + pp > 0 ? (ef + pp) : tot);
+      }, 0);
+
+      if (!esNoLab) {
+        laborablesCount++;
+        if (tieneTicket) {
+          conTicketCount++;
+        } else {
+          faltantesCount++;
+          faltantesDates.push(dateStr);
+        }
+      }
+
+      diasList.push({
+        dateStr,
+        dayNum: day,
+        dayName,
+        dayOfWeek,
+        esNoLaborable: esNoLab,
+        tieneTicket,
+        esFaltante,
+        tickets: dayTickets,
+        totalVentaDia: totalDia
+      });
+    }
+
+    const cumplimiento = laborablesCount > 0 ? Math.round((conTicketCount / laborablesCount) * 100) : 100;
+
+    return {
+      dias: diasList,
+      totalDiasMes: daysInMonth,
+      totalDiasLaborables: laborablesCount,
+      totalDiasNoLaborables: noLaborablesSet.size,
+      diasConTicket: conTicketCount,
+      diasLaborablesSinTicket: faltantesCount,
+      listaFaltantes: faltantesDates,
+      porcentajeCumplimiento: cumplimiento
+    };
+  }, [selectedMonth, currentDiasNoLaborables, comprobantes, extractDateOnly]);
+
+  const subtotalFacturaGlobal = isSeimenjo
+    ? Number((Math.max(0, totalFacturaPublicoGeneral) / 1.16).toFixed(2))
+    : Math.max(0, totalFacturaPublicoGeneral);
+  const ivaFacturaGlobal = isSeimenjo
+    ? Number((Math.max(0, totalFacturaPublicoGeneral) - subtotalFacturaGlobal).toFixed(2))
+    : Number((subtotalFacturaGlobal * 0.16).toFixed(2));
+  const totalConIvaFacturaGlobal = isSeimenjo
+    ? Math.max(0, totalFacturaPublicoGeneral)
+    : Number((subtotalFacturaGlobal + ivaFacturaGlobal).toFixed(2));
+  const totalIvaTrasladadoPeriodo = Number((ivaFacturaGlobal + ivaFacturasTerceros).toFixed(2));
+
+  // BOLSA DE VENTAS DEL MES Y CONCILIACIÓN DE DESFASE TEMPORAL
+  // Tickets de cierre de mes (últimos 2 días) aún no depositados en el banco
+  const ticketsFinDeMesPendientes = useMemo(() => {
+    if (!selectedMonth) return [];
+    const [yearStr, monthStr] = selectedMonth.split('-');
+    const year = parseInt(yearStr, 10);
+    const month = parseInt(monthStr, 10);
+    if (isNaN(year) || isNaN(month)) return [];
+
+    const lastDayOfMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+    const thresholdDay = Math.max(1, lastDayOfMonth - 1);
+
+    return ticketsMes.filter(t => {
+      if (!t.fecha) return false;
+      const d = new Date(t.fecha);
+      const day = d.getUTCDate();
+      const m = d.getUTCMonth() + 1;
+      const y = d.getUTCFullYear();
+      if (y !== year || m !== month) return false;
+      if (day < thresholdDay) return false;
+      // Los marcados como "Pendiente por depositar" ya se reconocen aparte (evita doble conteo)
+      return !t._isCuadrado100 && !t._isPendienteDeposito;
+    });
+  }, [ticketsMes, selectedMonth]);
+
+  const montoTicketsFinDeMesPendientes = useMemo(() => {
+    return ticketsFinDeMesPendientes.reduce((acc, t) => acc + Number(t.monto || 0), 0);
+  }, [ticketsFinDeMesPendientes]);
+
+  const sugerenciaVentasFinDeMes = useMemo(() => {
+    if (montoTicketsFinDeMesPendientes > 0) {
+      return Number(montoTicketsFinDeMesPendientes.toFixed(2));
+    }
+    if (!auditoriaDiasMes || !auditoriaDiasMes.dias || auditoriaDiasMes.dias.length === 0) return 0;
+    const diasConVenta = auditoriaDiasMes.dias.filter(d => d.totalVentaDia > 0);
+    if (diasConVenta.length === 0) return 0;
+    const ultimoDia = diasConVenta[diasConVenta.length - 1];
+    return Number(ultimoDia.totalVentaDia || 0);
+  }, [montoTicketsFinDeMesPendientes, auditoriaDiasMes]);
+
+  const ventasDiaSiguienteMes = Number(ventasDiaSiguienteMap[selectedMonth || 'GLOBAL'] || 0);
+  const bolsaTotalVentasMes = totalEfectivoParrot + (comparativoTarjetas?.totalTarjetasBbva || 0) + totalParrotPayParrot;
+  const depositosMesPasadoExcluidos = totalMontoExcluidoOtroMes;
+  const depositosNoEsVentaExcluidos = totalMontoDepositosNoEsVenta;
+  const depositosNetosMes = Math.max(0, totalMontoDepositosMes - depositosMesPasadoExcluidos - depositosNoEsVentaExcluidos);
+  const depositosPendientesDeVincular = totalMontoDepositosPendientesAsociar;
+  const depositosVinculadosCuadrados = totalMontoDepositosVinculadosCuadrados;
+  const diferenciaBolsaCierre = bolsaTotalVentasMes - depositosNetosMes - ventasDiaSiguienteMes - montoTicketsPendientesDeposito;
+
   return {
     loading,
     empresaNombre,
+    isSakura,
+    isSeimenjo,
     cuentasBancarias,
     selectedMonth,
     refreshPeriodStatus,
@@ -1668,6 +2402,11 @@ export function useFacturaPublicoGeneralData() {
     toggleManualOtherMonth,
     toggleProximoMesComp,
     setAllExcludedMovements,
+    toggleNoEsVentaMovement,
+    cashDepositPeriods: cashDepositPeriodsMap[selectedMonth || 'GLOBAL'] || {},
+    setCashDepositPeriod,
+    vincularComprobante,
+    desvincularComprobante,
     facturadosTerceros,
     toggleFacturadoTercero,
     setMontoManualTercero,
@@ -1676,13 +2415,29 @@ export function useFacturaPublicoGeneralData() {
     formatCurrency,
     formatPeriodoCarga,
     esMovimientoEfectivo,
+    // Auditoría de días laborables y calendario
+    currentDiasNoLaborables,
+    toggleDiaNoLaborable,
+    setDiasNoLaborablesBulk,
+    auditoriaDiasMes,
+    // Totales calculados oficiales Factura Global
+    subtotalFacturaGlobal,
+    ivaFacturaGlobal,
+    totalConIvaFacturaGlobal,
+    ivaFacturasTerceros,
+    totalIvaTrasladadoPeriodo,
+    totalFacturableParrotBase,
+    // Datos crudos y comprobantes
+    comprobantes,
     // Datos procesados
     userCargasMes,
+    pedidosMes,
     todasLasFacturasMes,
     displayedFacturas,
     ticketsMes,
     displayedTickets,
     depositosMes,
+    movimientosDeposito,
     movimientosOtroMes,
     ticketsOtroMes,
     facturasTercerosMes,
@@ -1709,5 +2464,22 @@ export function useFacturaPublicoGeneralData() {
     totalDepositosFacturadosMes,
     montoDepositosFacturadosMes,
     totalMontoExcluidoOtroMes,
+    // Bolsa de Ventas y Conciliación de Desfase
+    bolsaTotalVentasMes,
+    depositosMesPasadoExcluidos,
+    depositosNoEsVentaExcluidos,
+    depositosNetosMes,
+    depositosPendientesDeVincular,
+    depositosVinculadosCuadrados,
+    ventasDiaSiguienteMes,
+    setVentasDiaSiguienteMonto,
+    diferenciaBolsaCierre,
+    sugerenciaVentasFinDeMes,
+    ticketsFinDeMesPendientes,
+    montoTicketsFinDeMesPendientes,
+    // Tickets pendientes por depositar
+    togglePendienteDeposito,
+    ticketsPendientesDeposito,
+    montoTicketsPendientesDeposito,
   };
 }

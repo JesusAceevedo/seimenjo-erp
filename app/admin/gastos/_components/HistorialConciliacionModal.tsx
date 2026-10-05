@@ -191,8 +191,8 @@ export default function HistorialConciliacionModal({
         // 5. Cargar trazabilidad de pagos en partes (múltiples abonos a la misma factura)
         const siblingMap: Record<string, any[]> = {};
         for (const link of mergedConc) {
-          const targetGastoId = link.gasto?.id;
-          const targetPedidoId = link.pedido?.id;
+          const targetGastoId = link.gasto?.id || link.gastos?.id || link.gasto_id;
+          const targetPedidoId = link.pedido?.id || link.pedidos?.id || link.pedido_id;
           const docId = targetGastoId || targetPedidoId;
           if (!docId) continue;
 
@@ -202,20 +202,23 @@ export default function HistorialConciliacionModal({
               .from('conciliaciones_bancarias')
               .select(`
                 monto_asociado,
-                movimiento_bancario:movimientos_bancarios(id, fecha, concepto, monto, retiro, deposito)
+                movimiento_id,
+                movimiento_bancario:movimientos_bancarios(id, fecha, concepto, monto, retiro, deposito),
+                movimientos_bancarios(id, fecha, concepto, monto, retiro, deposito)
               `)
               .eq('gasto_id', targetGastoId);
 
             if (sConcs) {
               sConcs.forEach((sc: any) => {
-                if (sc.movimiento_bancario) {
+                const mb = sc.movimiento_bancario || sc.movimientos_bancarios || (allMovimientos || []).find((m: any) => m.id === sc.movimiento_id);
+                if (mb) {
                   siblingList.push({
-                    id: sc.movimiento_bancario.id,
-                    fecha: sc.movimiento_bancario.fecha,
-                    concepto: sc.movimiento_bancario.concepto,
-                    monto: Math.abs(Number(sc.movimiento_bancario.monto || sc.movimiento_bancario.retiro || sc.movimiento_bancario.deposito || 0)),
-                    montoAsociado: Number(sc.monto_asociado || sc.movimiento_bancario.monto || 0),
-                    isCurrent: sc.movimiento_bancario.id === movimiento.id
+                    id: mb.id,
+                    fecha: mb.fecha,
+                    concepto: mb.concepto,
+                    monto: Math.abs(Number(mb.monto || mb.retiro || mb.deposito || 0)),
+                    montoAsociado: Number(sc.monto_asociado || mb.monto || 0),
+                    isCurrent: mb.id === movimiento.id
                   });
                 }
               });
@@ -229,14 +232,36 @@ export default function HistorialConciliacionModal({
 
             if (siblingGastos) {
               siblingGastos.forEach((sg: any) => {
-                if (sg.movimientos_bancarios && !siblingList.some(item => item.id === sg.movimientos_bancarios.id)) {
+                const sm = sg.movimientos_bancarios || (allMovimientos || []).find((m: any) => m.id === sg.movimiento_bancario_id);
+                if (sm && !siblingList.some(item => item.id === sm.id)) {
                   siblingList.push({
-                    id: sg.movimientos_bancarios.id,
-                    fecha: sg.movimientos_bancarios.fecha,
-                    concepto: sg.movimientos_bancarios.concepto,
-                    monto: Math.abs(Number(sg.movimientos_bancarios.monto || sg.movimientos_bancarios.retiro || sg.movimientos_bancarios.deposito || 0)),
-                    montoAsociado: Number(sg.monto),
-                    isCurrent: sg.movimientos_bancarios.id === movimiento.id
+                    id: sm.id,
+                    fecha: sm.fecha,
+                    concepto: sm.concepto,
+                    monto: Math.abs(Number(sm.monto || sm.retiro || sm.deposito || 0)),
+                    montoAsociado: Number(sg.monto || sm.monto || 0),
+                    isCurrent: sm.id === movimiento.id
+                  });
+                }
+              });
+            }
+
+            // Buscar en allMovimientos si comparten XML, UUID o conciliación con targetGastoId
+            if (allMovimientos && allMovimientos.length > 0) {
+              const gUuid = (link.gasto?.uuid_fiscal || link.gastos?.uuid_fiscal || '').toUpperCase();
+              const gXml = link.gasto?.xml_url || link.gastos?.xml_url;
+              allMovimientos.forEach((otherM: any) => {
+                const sharesXml = gXml && otherM.xml_url && gXml.split(',').some((u: string) => otherM.xml_url.split(',').includes(u));
+                const sharesUuid = gUuid && otherM.xml_url && otherM.xml_url.toUpperCase().includes(gUuid);
+                const sharesJunction = otherM.conciliaciones_bancarias?.some((c: any) => (c.gasto_id === targetGastoId || c.gasto?.id === targetGastoId || c.gastos?.id === targetGastoId));
+                if ((sharesXml || sharesUuid || sharesJunction) && !siblingList.some(item => item.id === otherM.id)) {
+                  siblingList.push({
+                    id: otherM.id,
+                    fecha: otherM.fecha,
+                    concepto: otherM.concepto,
+                    monto: Math.abs(Number(otherM.monto || otherM.retiro || otherM.deposito || 0)),
+                    montoAsociado: Math.abs(Number(otherM.monto || 0)),
+                    isCurrent: otherM.id === movimiento.id
                   });
                 }
               });
@@ -246,24 +271,39 @@ export default function HistorialConciliacionModal({
               .from('conciliaciones_bancarias')
               .select(`
                 monto_asociado,
-                movimiento_bancario:movimientos_bancarios(id, fecha, concepto, monto, retiro, deposito)
+                movimiento_id,
+                movimiento_bancario:movimientos_bancarios(id, fecha, concepto, monto, retiro, deposito),
+                movimientos_bancarios(id, fecha, concepto, monto, retiro, deposito)
               `)
               .eq('pedido_id', targetPedidoId);
 
             if (sConcs) {
               sConcs.forEach((sc: any) => {
-                if (sc.movimiento_bancario) {
+                const mb = sc.movimiento_bancario || sc.movimientos_bancarios || (allMovimientos || []).find((m: any) => m.id === sc.movimiento_id);
+                if (mb) {
                   siblingList.push({
-                    id: sc.movimiento_bancario.id,
-                    fecha: sc.movimiento_bancario.fecha,
-                    concepto: sc.movimiento_bancario.concepto,
-                    monto: Math.abs(Number(sc.movimiento_bancario.monto || sc.movimiento_bancario.retiro || sc.movimiento_bancario.deposito || 0)),
-                    montoAsociado: Number(sc.monto_asociado || sc.movimiento_bancario.monto || 0),
-                    isCurrent: sc.movimiento_bancario.id === movimiento.id
+                    id: mb.id,
+                    fecha: mb.fecha,
+                    concepto: mb.concepto,
+                    monto: Math.abs(Number(mb.monto || mb.retiro || mb.deposito || 0)),
+                    montoAsociado: Number(sc.monto_asociado || mb.monto || 0),
+                    isCurrent: mb.id === movimiento.id
                   });
                 }
               });
             }
+          }
+
+          // Asegurar que el movimiento actual siempre forme parte de la lista
+          if (!siblingList.some(item => item.id === movimiento.id)) {
+            siblingList.unshift({
+              id: movimiento.id,
+              fecha: movimiento.fecha,
+              concepto: movimiento.concepto,
+              monto: Math.abs(Number(movimiento.monto || movimiento.retiro || movimiento.deposito || 0)),
+              montoAsociado: Number(link.monto_asociado || Math.abs(Number(movimiento.monto || 0))),
+              isCurrent: true
+            });
           }
 
           const uniqueSiblings = Array.from(new Map(siblingList.map(item => [item.id, item])).values());
@@ -507,41 +547,67 @@ export default function HistorialConciliacionModal({
   }> = [];
 
   conciliaciones.forEach((link: any) => {
-    const isG = !!link.gasto;
-    const targetId = isG ? link.gasto?.id : link.pedido?.id;
+    const isG = !!link.gasto || !!link.gastos;
+    const targetG = link.gasto || link.gastos;
+    const targetP = link.pedido || link.pedidos;
+    const targetId = isG ? (targetG?.id || link.gasto_id) : (targetP?.id || link.pedido_id);
     if (!targetId) return;
 
-    const docTotal = Number(isG ? link.gasto?.monto : link.pedido?.precio_total || 0);
-    const docConcepto = isG ? link.gasto?.concepto : `Pedido #${link.pedido?.numero_pedido}`;
-    let linkedMovements = fetchedSiblingMovs[targetId] || [];
+    const docTotal = Number(isG ? (targetG?.monto || 0) : (targetP?.precio_total || 0));
+    const docConcepto = isG ? (targetG?.concepto || 'Factura de Egreso') : `Pedido #${targetP?.numero_pedido || 'S/N'}`;
+    let linkedMovements = [...(fetchedSiblingMovs[targetId] || [])];
 
-    if (linkedMovements.length === 0) {
+    if (linkedMovements.length <= 1) {
       const lmList: any[] = [];
       allMovimientos.forEach((otherM: any) => {
         const oLink = otherM.conciliaciones_bancarias?.find((l: any) =>
-          (isG && l.gasto?.id === targetId) || (!isG && l.pedido?.id === targetId)
+          (isG && (l.gasto?.id === targetId || l.gastos?.id === targetId || l.gasto_id === targetId)) ||
+          (!isG && (l.pedido?.id === targetId || l.pedidos?.id === targetId || l.pedido_id === targetId))
         );
-        if (oLink) {
-          lmList.push({
-            id: otherM.id,
-            fecha: otherM.fecha,
-            concepto: otherM.concepto,
-            monto: Math.abs(Number(otherM.monto) || Number(otherM.retiro) || Number(otherM.deposito) || 0),
-            montoAsociado: Number(oLink.monto_asociado || Math.abs(otherM.monto) || 0),
-            isCurrent: otherM.id === movimiento.id
-          });
+        const gUuid = (targetG?.uuid_fiscal || '').toUpperCase();
+        const gXml = targetG?.xml_url;
+        const sharesXml = gXml && otherM.xml_url && gXml.split(',').some((u: string) => otherM.xml_url.split(',').includes(u));
+        const sharesUuid = gUuid && otherM.xml_url && otherM.xml_url.toUpperCase().includes(gUuid);
+        const sharesGastoFk = isG && targetG?.movimiento_bancario_id === otherM.id;
+
+        if (oLink || sharesXml || sharesUuid || sharesGastoFk) {
+          if (!lmList.some(x => x.id === otherM.id)) {
+            lmList.push({
+              id: otherM.id,
+              fecha: otherM.fecha,
+              concepto: otherM.concepto,
+              monto: Math.abs(Number(otherM.monto) || Number(otherM.retiro) || Number(otherM.deposito) || 0),
+              montoAsociado: Number(oLink?.monto_asociado || Math.abs(otherM.monto) || 0),
+              isCurrent: otherM.id === movimiento.id
+            });
+          }
         }
       });
-      linkedMovements = lmList;
+
+      if (!lmList.some(x => x.id === movimiento.id)) {
+        lmList.unshift({
+          id: movimiento.id,
+          fecha: movimiento.fecha,
+          concepto: movimiento.concepto,
+          monto: Math.abs(Number(movimiento.monto) || Number(movimiento.retiro) || Number(movimiento.deposito) || 0),
+          montoAsociado: Number(link.monto_asociado || Math.abs(movimiento.monto) || 0),
+          isCurrent: true
+        });
+      }
+
+      if (lmList.length > 1) {
+        linkedMovements = lmList;
+      }
     }
 
     if (linkedMovements.length > 1) {
-      const sumaPagos = linkedMovements.reduce((sum, x) => sum + Number(x.montoAsociado || x.monto || 0), 0);
+      const sortedHermanos = [...linkedMovements].sort((a, b) => new Date(a.fecha).getTime() - new Date(b.fecha).getTime());
+      const sumaPagos = sortedHermanos.reduce((sum, x) => sum + Number(x.montoAsociado || x.monto || 0), 0);
       multiPaymentsInfo.push({
         documentoId: targetId,
         documentoConcepto: docConcepto,
         documentoTotal: docTotal,
-        movimientosHermanos: linkedMovements,
+        movimientosHermanos: sortedHermanos,
         sumaTotalPagos: sumaPagos,
         saldoRestante: Math.max(0, docTotal - sumaPagos)
       });
@@ -1008,6 +1074,24 @@ export default function HistorialConciliacionModal({
                                   Total Factura: {formatCurrency(isGasto ? item.monto : item.precio_total)}
                                 </div>
                               )}
+                              {(() => {
+                                const targetDocId = isGasto ? (item.id || link.gasto_id) : (item.id || link.pedido_id);
+                                const mpDoc = multiPaymentsInfo.find(m => m.documentoId === targetDocId);
+                                if (!mpDoc || mpDoc.movimientosHermanos.length <= 1) return null;
+                                const hermanos = mpDoc.movimientosHermanos.filter(h => !h.isCurrent);
+                                return (
+                                  <div className="mt-1 flex flex-col items-end gap-0.5">
+                                    <span className="px-1.5 py-0.5 rounded text-[8.5px] font-black bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                                      🔗 Factura dividida en {mpDoc.movimientosHermanos.length} pagos
+                                    </span>
+                                    {hermanos.map((h, hidx) => (
+                                      <span key={hidx} className="text-[9px] font-mono font-semibold text-indigo-600 dark:text-indigo-400">
+                                        Pago hermano: {new Date(h.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })} (-{formatCurrency(h.montoAsociado || h.monto)})
+                                      </span>
+                                    ))}
+                                  </div>
+                                );
+                              })()}
                             </div>
                           </div>
 

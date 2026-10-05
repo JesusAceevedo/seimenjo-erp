@@ -1,6 +1,6 @@
 'use client';
 import React, { useState, useRef } from 'react';
-import { UploadCloud, X, FileText, CheckCircle, AlertTriangle } from 'lucide-react';
+import { UploadCloud, X, FileText, CheckCircle, AlertTriangle, FileCode } from 'lucide-react';
 import { supabase } from '../../../../lib/supabase';
 import { consultarSatYActualizarCfdi } from '../actions';
 
@@ -9,6 +9,12 @@ interface CargaXmlMasivaModalProps {
   onSuccess: () => void;
   tipo: 'gasto' | 'venta';
   empresaRfc?: string | null;
+}
+
+function getFileBaseName(fileName: string): string {
+  const lastDot = fileName.lastIndexOf('.');
+  const base = lastDot !== -1 ? fileName.substring(0, lastDot) : fileName;
+  return base.trim().toLowerCase();
 }
 
 export default function CargaXmlMasivaModal({ onClose, onSuccess, tipo, empresaRfc }: CargaXmlMasivaModalProps) {
@@ -29,27 +35,52 @@ export default function CargaXmlMasivaModal({ onClose, onSuccess, tipo, empresaR
     e.preventDefault();
     e.stopPropagation();
     setDragActive(false);
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      const files = Array.from(e.dataTransfer.files).filter(f => f.name.toLowerCase().endsWith('.xml'));
-      setArchivos(prev => [...prev, ...files]);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      const files = Array.from(e.dataTransfer.files).filter(f => {
+        const n = f.name.toLowerCase();
+        return n.endsWith('.xml') || n.endsWith('.pdf');
+      });
+      setArchivos(prev => {
+        const existingKeys = new Set(prev.map(f => `${f.name.toLowerCase()}_${f.size}`));
+        const uniqueNewFiles = files.filter(f => !existingKeys.has(`${f.name.toLowerCase()}_${f.size}`));
+        return [...prev, ...uniqueNewFiles];
+      });
     }
   };
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     e.preventDefault();
-    if (e.target.files && e.target.files[0]) {
-      const files = Array.from(e.target.files).filter(f => f.name.toLowerCase().endsWith('.xml'));
-      setArchivos(prev => [...prev, ...files]);
+    if (e.target.files && e.target.files.length > 0) {
+      const files = Array.from(e.target.files).filter(f => {
+        const n = f.name.toLowerCase();
+        return n.endsWith('.xml') || n.endsWith('.pdf');
+      });
+      setArchivos(prev => {
+        const existingKeys = new Set(prev.map(f => `${f.name.toLowerCase()}_${f.size}`));
+        const uniqueNewFiles = files.filter(f => !existingKeys.has(`${f.name.toLowerCase()}_${f.size}`));
+        return [...prev, ...uniqueNewFiles];
+      });
     }
+    if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   const procesarArchivos = async () => {
-    if (archivos.length === 0) return;
+    const xmlFiles = archivos.filter(f => f.name.toLowerCase().endsWith('.xml'));
+    const pdfFiles = archivos.filter(f => f.name.toLowerCase().endsWith('.pdf'));
+
+    if (xmlFiles.length === 0 && pdfFiles.length === 0) return;
     setProcesando(true);
     setResultados([]);
 
     const nuevosResultados: any[] = [];
     const tableStr = tipo === 'gasto' ? 'gastos' : 'facturas_clientes';
+
+    // Mapa de PDFs disponibles por nombre base
+    const pdfMap = new Map<string, File>();
+    for (const p of pdfFiles) {
+      pdfMap.set(getFileBaseName(p.name), p);
+    }
+    const usedPdfNames = new Set<string>();
 
     try {
       const { data: { user } } = await supabase.auth.getUser();
@@ -130,9 +161,13 @@ export default function CargaXmlMasivaModal({ onClose, onSuccess, tipo, empresaR
           .map(c => c.mes)
       );
 
-      for (const file of archivos) {
+      // Procesar cada archivo XML
+      for (const file of xmlFiles) {
         let insertPayload: any = {};
         try {
+          const baseName = getFileBaseName(file.name);
+          let matchingPdf = pdfMap.get(baseName);
+
           const text = await file.text();
           const parser = new DOMParser();
           const xmlDoc = parser.parseFromString(text, 'application/xml');
@@ -296,6 +331,19 @@ export default function CargaXmlMasivaModal({ onClose, onSuccess, tipo, empresaR
             continue;
           }
 
+          // Buscar PDF por UUID si no se encontró por nombre de archivo
+          if (!matchingPdf && uuid) {
+            const uuidClean = uuid.toLowerCase();
+            matchingPdf = pdfFiles.find(p => {
+              const pBase = getFileBaseName(p.name);
+              return pBase === uuidClean || pBase.includes(uuidClean);
+            });
+          }
+
+          if (matchingPdf) {
+            usedPdfNames.add(matchingPdf.name);
+          }
+
           // 5. Impuestos -> Traslados (IVA 002 Global)
           let globalIva = 0;
           if (!isComplementoPago) {
@@ -333,21 +381,38 @@ export default function CargaXmlMasivaModal({ onClose, onSuccess, tipo, empresaR
             metodoPago = mapFormaPagoCodeToMetodo(code);
           }
 
+          const timestamp = Date.now();
+
           // 1. Subir XML al storage
-          const fileExt = file.name.split('.').pop();
-          const fileName = `${tipo}s/${Date.now()}_${uuid}.${fileExt}`;
+          const fileExt = file.name.split('.').pop() || 'xml';
+          const fileName = `${tipo}s/${timestamp}_${uuid}.${fileExt}`;
           const { error: uploadError } = await supabase.storage.from('facturas').upload(fileName, file);
 
           let xmlUrl = '';
           if (!uploadError) {
             xmlUrl = fileName;
+          } else {
+            console.error('Error al subir XML al storage:', uploadError);
           }
 
-          // 2. Insertar en base de datos
+          // 2. Subir PDF al storage si existe archivo emparejado con el mismo nombre
+          let pdfUrl = '';
+          if (matchingPdf) {
+            const pdfExt = matchingPdf.name.split('.').pop() || 'pdf';
+            const pdfFileName = `${tipo}s/${timestamp}_${uuid}.${pdfExt}`;
+            const { error: pdfUploadError } = await supabase.storage.from('facturas').upload(pdfFileName, matchingPdf);
+            if (!pdfUploadError) {
+              pdfUrl = pdfFileName;
+            } else {
+              console.error('Error al subir PDF al storage:', pdfUploadError);
+            }
+          }
+
+          // 3. Insertar en base de datos
           insertPayload = {};
+          let ambiguedadMensaje = '';
 
           if (tipo === 'gasto') {
-
             // Buscar o crear proveedor por RFC
             let proveedorId = null;
             if (rfc) {
@@ -383,6 +448,7 @@ export default function CargaXmlMasivaModal({ onClose, onSuccess, tipo, empresaR
               subtotal: subtotal || total,
               iva_acreditable: globalIva,
               xml_url: xmlUrl,
+              pdf_url: pdfUrl || null,
               fecha_gasto: fecha_emision,
               empresa_id: empresaId,
               concepto: isNomina ? `Nómina - ${proveedor_cliente_nombre}` : `Gasto por factura XML (UUID: ${uuid.substring(0, 8)})`,
@@ -396,7 +462,6 @@ export default function CargaXmlMasivaModal({ onClose, onSuccess, tipo, empresaR
               es_deducible: true
             };
           } else {
-
             // Buscar o crear cliente por RFC
             let clienteId = null;
             if (rfc) {
@@ -428,7 +493,6 @@ export default function CargaXmlMasivaModal({ onClose, onSuccess, tipo, empresaR
 
             // Buscar pedido candidato único para vincular automáticamente si no hay ambigüedad
             let candidatePedido: any = null;
-            let ambiguedadMensaje = '';
 
             if (clienteId && total > 0) {
               const { data: candidates } = await supabase
@@ -454,6 +518,7 @@ export default function CargaXmlMasivaModal({ onClose, onSuccess, tipo, empresaR
               subtotal: subtotal || total,
               iva_trasladado: globalIva,
               xml_url: xmlUrl,
+              pdf_url: pdfUrl || null,
               fecha_emision: fecha_emision,
               cliente_id: clienteId,
               pedido_id: candidatePedido ? candidatePedido.id : null,
@@ -497,16 +562,19 @@ export default function CargaXmlMasivaModal({ onClose, onSuccess, tipo, empresaR
           if (satRes.estado === 'Cancelado') {
             const { data: duplicate } = await supabase
               .from(tableStr)
-              .select('id')
+              .select('id, pdf_url')
               .ilike('uuid_fiscal', uuid)
               .maybeSingle();
 
             if (duplicate) {
+              if (pdfUrl && !duplicate.pdf_url) {
+                await supabase.from(tableStr).update({ pdf_url: pdfUrl }).eq('id', duplicate.id);
+              }
               // Ya existía en la BD y fue actualizada a Cancelada por el Server Action (liberando conciliaciones)
               nuevosResultados.push({
                 nombre: file.name,
                 estatus: 'error',
-                mensaje: `La factura ya existía, pero se detectó que está CANCELADA en el SAT. Se ha actualizado su estatus a 'Cancelado' y se liberó la conciliación bancaria asociada.`
+                mensaje: `La factura ya existía, pero se detectó que está CANCELADA en el SAT. Se ha actualizado su estatus a 'Cancelado' y se liberó la conciliación bancaria asociada.${pdfUrl ? ' (PDF adjuntado)' : ''}`
               });
               continue;
             } else {
@@ -535,11 +603,13 @@ export default function CargaXmlMasivaModal({ onClose, onSuccess, tipo, empresaR
                 insertPayload.iva_acreditable = 0;
                 insertPayload.estatus_facturado = false;
                 insertPayload.estatus_factura_id = canceladoEstatusId;
+                insertPayload.pdf_url = pdfUrl || null;
               } else {
                 insertPayload.total = 0;
                 insertPayload.subtotal = 0;
                 insertPayload.iva_trasladado = 0;
                 insertPayload.estatus_factura_id = canceladoEstatusId;
+                insertPayload.pdf_url = pdfUrl || null;
               }
 
               const { error: dbError } = await supabase.from(tableStr).insert([insertPayload]);
@@ -548,7 +618,7 @@ export default function CargaXmlMasivaModal({ onClose, onSuccess, tipo, empresaR
               nuevosResultados.push({
                 nombre: file.name,
                 estatus: 'ok',
-                mensaje: `Factura guardada directamente con estatus 'Cancelado' debido a que se encuentra cancelada en el SAT.`
+                mensaje: `Factura guardada directamente con estatus 'Cancelado' debido a que se encuentra cancelada en el SAT.${pdfUrl ? ' (Con PDF registrado)' : ''}`
               });
               continue;
             }
@@ -558,10 +628,41 @@ export default function CargaXmlMasivaModal({ onClose, onSuccess, tipo, empresaR
           if (insertPayload.uuid_fiscal) {
             const { data: duplicate } = await supabase
               .from(tableStr)
-              .select('id')
+              .select('id, pdf_url')
               .ilike('uuid_fiscal', insertPayload.uuid_fiscal)
               .maybeSingle();
+
             if (duplicate) {
+              if (pdfUrl && !duplicate.pdf_url) {
+                // Factura ya existía pero no tenía PDF; la vinculamos y actualizamos ahora
+                await supabase
+                  .from(tableStr)
+                  .update({ pdf_url: pdfUrl })
+                  .eq('id', duplicate.id);
+
+                if (tipo === 'venta') {
+                  const { data: fcFull } = await supabase
+                    .from('facturas_clientes')
+                    .select('pedido_id')
+                    .eq('id', duplicate.id)
+                    .single();
+                  if (fcFull?.pedido_id) {
+                    await supabase.from('pedidos').update({ pdf_url: pdfUrl }).eq('id', fcFull.pedido_id);
+                    const { data: pedData } = await supabase.from('pedidos').select('movimiento_bancario_id').eq('id', fcFull.pedido_id).single();
+                    if (pedData?.movimiento_bancario_id) {
+                      await supabase.from('movimientos_bancarios').update({ pdf_factura_url: pdfUrl }).eq('id', pedData.movimiento_bancario_id);
+                    }
+                  }
+                }
+
+                nuevosResultados.push({
+                  nombre: file.name,
+                  estatus: 'ok',
+                  mensaje: `Factura ya existía en sistema (UUID: ${insertPayload.uuid_fiscal.substring(0, 8)}). Se adjuntó exitosamente su archivo PDF.`
+                });
+                continue;
+              }
+
               nuevosResultados.push({
                 nombre: file.name,
                 estatus: 'error',
@@ -577,22 +678,42 @@ export default function CargaXmlMasivaModal({ onClose, onSuccess, tipo, empresaR
           // Sincronizar folio en pedido y documentos en movimiento bancario si hubo vinculación
           if (tipo === 'venta' && insertPayload.pedido_id) {
             const folioStr = insertPayload.serie_folio || (insertPayload.uuid_fiscal ? `UUID:${insertPayload.uuid_fiscal.substring(0, 8)}` : '');
-            await supabase.from('pedidos').update({ folio_factura: folioStr }).eq('id', insertPayload.pedido_id);
+            await supabase.from('pedidos').update({
+              folio_factura: folioStr,
+              xml_url: insertPayload.xml_url || null,
+              pdf_url: insertPayload.pdf_url || null
+            }).eq('id', insertPayload.pedido_id);
 
             // Obtener pedido para verificar si tiene movimiento bancario
             const { data: pData } = await supabase.from('pedidos').select('movimiento_bancario_id').eq('id', insertPayload.pedido_id).single();
             if (pData?.movimiento_bancario_id) {
               await supabase.from('movimientos_bancarios').update({
                 xml_url: insertPayload.xml_url || null,
+                pdf_factura_url: insertPayload.pdf_url || null,
                 visible_ingresos: true
               }).eq('id', pData.movimiento_bancario_id);
             }
           }
 
+          const msgParts: string[] = [];
+          if (matchingPdf && pdfUrl) {
+            msgParts.push('XML y PDF registrados');
+          } else if (matchingPdf && !pdfUrl) {
+            msgParts.push('XML registrado (error al subir PDF)');
+          } else {
+            msgParts.push('XML registrado');
+          }
+
+          if (insertPayload?.pedido_id) {
+            msgParts.push('Vinculado al Pedido');
+          } else if (ambiguedadMensaje) {
+            msgParts.push(ambiguedadMensaje.trim());
+          }
+
           nuevosResultados.push({
             nombre: file.name,
             estatus: 'ok',
-            mensaje: insertPayload?.pedido_id ? 'Vinculado automáticamente al Pedido del cliente' : undefined
+            mensaje: msgParts.join(' • ')
           });
 
         } catch (err: any) {
@@ -604,6 +725,83 @@ export default function CargaXmlMasivaModal({ onClose, onSuccess, tipo, empresaR
           nuevosResultados.push({ nombre: file.name, estatus: 'error', mensaje: detailedMessage });
         }
       }
+
+      // Procesar PDFs que no coincidieron con ningún XML en esta misma carga
+      const leftoverPdfs = pdfFiles.filter(p => !usedPdfNames.has(p.name));
+      for (const pdf of leftoverPdfs) {
+        try {
+          const base = getFileBaseName(pdf.name);
+          const isLikelyUuid = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(base);
+          let existingDoc: any = null;
+
+          if (isLikelyUuid) {
+            const { data } = await supabase
+              .from(tableStr)
+              .select('id, uuid_fiscal, pdf_url')
+              .eq('empresa_id', empresaId)
+              .ilike('uuid_fiscal', base)
+              .maybeSingle();
+            existingDoc = data;
+          } else {
+            const folioCol = tipo === 'gasto' ? 'folio_factura' : 'serie_folio';
+            const { data } = await supabase
+              .from(tableStr)
+              .select(`id, uuid_fiscal, pdf_url, ${folioCol}`)
+              .eq('empresa_id', empresaId)
+              .ilike(folioCol, base)
+              .maybeSingle();
+            existingDoc = data;
+          }
+
+          if (existingDoc) {
+            if (existingDoc.pdf_url) {
+              nuevosResultados.push({
+                nombre: pdf.name,
+                estatus: 'error',
+                mensaje: 'Esta factura ya contaba previamente con un archivo PDF registrado.'
+              });
+              continue;
+            }
+
+            const pdfExt = pdf.name.split('.').pop() || 'pdf';
+            const pdfFileName = `${tipo}s/${Date.now()}_${existingDoc.uuid_fiscal || existingDoc.id}.${pdfExt}`;
+            const { error: upErr } = await supabase.storage.from('facturas').upload(pdfFileName, pdf);
+            if (upErr) throw upErr;
+
+            await supabase.from(tableStr).update({ pdf_url: pdfFileName }).eq('id', existingDoc.id);
+
+            if (tipo === 'venta') {
+              const { data: fcData } = await supabase.from('facturas_clientes').select('pedido_id').eq('id', existingDoc.id).single();
+              if (fcData?.pedido_id) {
+                await supabase.from('pedidos').update({ pdf_url: pdfFileName }).eq('id', fcData.pedido_id);
+                const { data: pData } = await supabase.from('pedidos').select('movimiento_bancario_id').eq('id', fcData.pedido_id).single();
+                if (pData?.movimiento_bancario_id) {
+                  await supabase.from('movimientos_bancarios').update({ pdf_factura_url: pdfFileName }).eq('id', pData.movimiento_bancario_id);
+                }
+              }
+            }
+
+            nuevosResultados.push({
+              nombre: pdf.name,
+              estatus: 'ok',
+              mensaje: `PDF asociado a factura existente (${existingDoc.uuid_fiscal ? existingDoc.uuid_fiscal.substring(0, 8) : existingDoc.id}).`
+            });
+          } else {
+            nuevosResultados.push({
+              nombre: pdf.name,
+              estatus: 'error',
+              mensaje: 'No se encontró archivo XML con el mismo nombre ni factura registrada previamente en el sistema con este nombre/folio.'
+            });
+          }
+        } catch (err: any) {
+          nuevosResultados.push({
+            nombre: pdf.name,
+            estatus: 'error',
+            mensaje: `Error al asociar PDF: ${err?.message || 'Error desconocido'}`
+          });
+        }
+      }
+
     } catch (gErr: any) {
       console.error('Error general en procesarArchivos:', gErr);
       let detailedGeneralMessage = gErr?.message || gErr?.details || (typeof gErr === 'object' ? JSON.stringify(gErr) : String(gErr)) || 'Error de sesión';
@@ -618,6 +816,12 @@ export default function CargaXmlMasivaModal({ onClose, onSuccess, tipo, empresaR
     onSuccess();
   };
 
+  const xmlFiles = archivos.filter(f => f.name.toLowerCase().endsWith('.xml'));
+  const pdfFiles = archivos.filter(f => f.name.toLowerCase().endsWith('.pdf'));
+  const pdfBaseSet = new Set(pdfFiles.map(f => getFileBaseName(f.name)));
+  const pairedCount = xmlFiles.filter(f => pdfBaseSet.has(getFileBaseName(f.name))).length;
+  const standalonePdfs = pdfFiles.filter(p => !xmlFiles.some(x => getFileBaseName(x.name) === getFileBaseName(p.name)));
+
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6 bg-black/60 backdrop-blur-sm font-sans animate-in fade-in duration-200">
       <div className="bg-white dark:bg-gray-950 w-full max-w-2xl rounded-2xl shadow-2xl flex flex-col max-h-[90vh] overflow-hidden border border-gray-200 dark:border-gray-800">
@@ -626,10 +830,12 @@ export default function CargaXmlMasivaModal({ onClose, onSuccess, tipo, empresaR
         <div className="flex items-center justify-between p-6 border-b border-gray-100 dark:border-gray-900 bg-gray-50/50 dark:bg-gray-900/20">
           <div>
             <h2 className="text-xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
-              <UploadCloud className="text-amber-500" /> Carga Masiva de XML
+              <UploadCloud className="text-amber-500" /> Carga Masiva de Facturas (XML / PDF)
             </h2>
             <p className="text-sm text-gray-500 mt-1">
-              {tipo === 'gasto' ? 'Sube las facturas de tus proveedores.' : 'Sube las facturas emitidas a clientes.'}
+              {tipo === 'gasto' 
+                ? 'Sube las facturas de tus proveedores en XML y PDF (se emparejan automáticamente por nombre).' 
+                : 'Sube las facturas emitidas a clientes en XML y PDF (se emparejan automáticamente por nombre).'}
             </p>
           </div>
           <button onClick={onClose} className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-xl transition-colors">
@@ -644,7 +850,7 @@ export default function CargaXmlMasivaModal({ onClose, onSuccess, tipo, empresaR
             <>
               {/* Drag Area */}
               <div
-                className={`border-2 border-dashed rounded-2xl p-10 flex flex-col items-center justify-center text-center transition-colors cursor-pointer ${
+                className={`border-2 border-dashed rounded-2xl p-8 flex flex-col items-center justify-center text-center transition-colors cursor-pointer ${
                   dragActive 
                     ? 'border-amber-500 bg-amber-50 dark:bg-amber-500/10' 
                     : 'border-gray-300 dark:border-gray-800 hover:border-gray-400 dark:hover:border-gray-700 bg-gray-50/50 dark:bg-gray-900/50'
@@ -659,7 +865,7 @@ export default function CargaXmlMasivaModal({ onClose, onSuccess, tipo, empresaR
                   ref={fileInputRef}
                   type="file"
                   multiple
-                  accept=".xml"
+                  accept=".xml,.pdf"
                   className="hidden"
                   onChange={handleChange}
                 />
@@ -667,26 +873,80 @@ export default function CargaXmlMasivaModal({ onClose, onSuccess, tipo, empresaR
                   <UploadCloud size={32} />
                 </div>
                 <h3 className="text-lg font-bold text-gray-800 dark:text-gray-200 mb-1">
-                  Arrastra tus archivos XML aquí
+                  Arrastra tus archivos XML y PDF aquí
                 </h3>
-                <p className="text-sm text-gray-500 max-w-sm">
-                  O haz clic para explorar tu computadora. Puedes seleccionar múltiples archivos a la vez. (Solo formato .xml)
+                <p className="text-sm text-gray-500 max-w-md">
+                  O haz clic para explorar tu equipo. Si tus archivos XML y PDF tienen el mismo nombre, se vincularán automáticamente al registrarlos.
                 </p>
               </div>
 
               {/* Lista previa */}
               {archivos.length > 0 && (
                 <div className="space-y-3">
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="font-semibold text-gray-700 dark:text-gray-300">{archivos.length} archivos listos</span>
-                    <button onClick={() => setArchivos([])} className="text-red-500 hover:underline">Limpiar lista</button>
+                  <div className="flex items-center justify-between text-xs sm:text-sm">
+                    <span className="font-semibold text-gray-700 dark:text-gray-300 flex items-center gap-2">
+                      <span className="font-bold text-amber-600 dark:text-amber-400">{xmlFiles.length} XML</span>
+                      <span>•</span>
+                      <span className="font-bold text-emerald-600 dark:text-emerald-400">{pairedCount} con PDF</span>
+                      {standalonePdfs.length > 0 && (
+                        <>
+                          <span>•</span>
+                          <span className="text-purple-600 dark:text-purple-400">{standalonePdfs.length} PDF sin XML</span>
+                        </>
+                      )}
+                    </span>
+                    <button onClick={() => setArchivos([])} className="text-red-500 hover:underline text-xs">Limpiar lista</button>
                   </div>
-                  <div className="grid grid-cols-2 gap-3 max-h-48 overflow-y-auto pr-2">
-                    {archivos.map((f, i) => (
-                      <div key={i} className="flex items-center gap-3 p-3 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl">
-                        <FileText size={18} className="text-amber-500 shrink-0" />
-                        <span className="text-xs font-medium text-gray-700 dark:text-gray-300 truncate">{f.name}</span>
-                        <button onClick={() => setArchivos(archivos.filter((_, idx) => idx !== i))} className="ml-auto text-gray-400 hover:text-red-500 shrink-0">
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-56 overflow-y-auto pr-1">
+                    {/* Tarjetas de XMLs */}
+                    {xmlFiles.map((xml, i) => {
+                      const matchingPdf = pdfFiles.find(p => getFileBaseName(p.name) === getFileBaseName(xml.name));
+                      return (
+                        <div key={`xml-${i}`} className="flex items-center gap-2.5 p-3 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl">
+                          <FileCode size={20} className="text-amber-500 shrink-0" />
+                          <div className="min-w-0 flex-1">
+                            <p className="text-xs font-semibold text-gray-800 dark:text-gray-200 truncate">{xml.name}</p>
+                            <div className="flex items-center gap-1.5 mt-0.5">
+                              {matchingPdf ? (
+                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-50 dark:bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-500/20 truncate max-w-[170px]">
+                                  <FileText size={10} /> + PDF emparejado
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-gray-100 dark:bg-gray-800 text-gray-400">
+                                  Solo XML
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <button 
+                            onClick={() => {
+                              setArchivos(prev => prev.filter(f => f !== xml && (matchingPdf ? f !== matchingPdf : true)));
+                            }} 
+                            className="text-gray-400 hover:text-red-500 p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 shrink-0 transition-colors"
+                            title="Quitar comprobante"
+                          >
+                            <X size={14} />
+                          </button>
+                        </div>
+                      );
+                    })}
+
+                    {/* Tarjetas de PDFs sin XML en el lote */}
+                    {standalonePdfs.map((pdf, i) => (
+                      <div key={`pdf-${i}`} className="flex items-center gap-2.5 p-3 bg-white dark:bg-gray-900 border border-purple-200 dark:border-purple-900/30 rounded-xl">
+                        <FileText size={20} className="text-purple-500 shrink-0" />
+                        <div className="min-w-0 flex-1">
+                          <p className="text-xs font-semibold text-gray-800 dark:text-gray-200 truncate">{pdf.name}</p>
+                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-purple-50 dark:bg-purple-500/10 text-purple-600 dark:text-purple-400 border border-purple-200 dark:border-purple-500/20 mt-0.5">
+                            PDF para factura previa
+                          </span>
+                        </div>
+                        <button 
+                          onClick={() => setArchivos(prev => prev.filter(f => f !== pdf))} 
+                          className="text-gray-400 hover:text-red-500 p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 shrink-0 transition-colors"
+                          title="Quitar PDF"
+                        >
                           <X size={14} />
                         </button>
                       </div>
@@ -713,7 +973,7 @@ export default function CargaXmlMasivaModal({ onClose, onSuccess, tipo, empresaR
                     )}
                     <div className="min-w-0 flex-1">
                       <p className="text-xs font-semibold text-gray-800 dark:text-gray-200 truncate">{res.nombre}</p>
-                      {res.mensaje && <p className="text-[10px] text-red-600 dark:text-red-400 mt-0.5">{res.mensaje}</p>}
+                      {res.mensaje && <p className={`text-[10px] mt-0.5 ${res.estatus === 'ok' ? 'text-emerald-700 dark:text-emerald-300' : 'text-red-600 dark:text-red-400'}`}>{res.mensaje}</p>}
                     </div>
                   </div>
                 ))}
@@ -740,8 +1000,10 @@ export default function CargaXmlMasivaModal({ onClose, onSuccess, tipo, empresaR
               >
                 {procesando ? (
                   <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"/> Procesando...</>
+                ) : xmlFiles.length > 0 ? (
+                  <>Procesar {xmlFiles.length} Factura{xmlFiles.length > 1 ? 's' : ''} {pdfFiles.length > 0 ? `(${pairedCount} con PDF)` : ''}</>
                 ) : (
-                  <>Procesar {archivos.length} XMLs</>
+                  <>Asociar {pdfFiles.length} PDF{pdfFiles.length > 1 ? 's' : ''}</>
                 )}
               </button>
             </>
@@ -762,3 +1024,4 @@ export default function CargaXmlMasivaModal({ onClose, onSuccess, tipo, empresaR
 function mapFormaPagoCodeToMetodo(code: string): string {
   return code ? code.trim().padStart(2, '0') : '99';
 }
+

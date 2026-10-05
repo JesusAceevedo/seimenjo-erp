@@ -53,7 +53,7 @@ export const ControlBarSecondary: React.FC<ControlBarSecondaryProps> = ({
         )}
         <div className="h-6 w-px bg-gray-200 dark:bg-gray-800 hidden sm:block" />
         <div>
-          <span className="text-[10px] uppercase font-bold text-gray-400 block">Tarjetas BBVA (Informativo / No Facturable)</span>
+          <span className="text-[10px] uppercase font-bold text-gray-400 block">Tarjetas BBVA (Facturable)</span>
           <span className="font-mono font-bold text-blue-600 dark:text-blue-400">
             {formatCurrency(totalTarjetasBbva)}
           </span>

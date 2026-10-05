@@ -317,6 +317,7 @@ function parseFechaClean(rawFecha: any, concepto?: string, periodoAsignado?: str
 }
 
 import { esComisionTpv, esComisionBancaria } from './commissionUtils';
+import { isComprobanteVentaMesAnterior } from './reconciliationUtils';
 
 // 1. IMPORTAR MOVIMIENTOS BANCARIOS DESDE EXCEL / CSV
 export async function importarMovimientosBancarios(
@@ -883,7 +884,7 @@ async function asociarMovimientosSinCarga(empresaId: string) {
     const grupos: { [key: string]: typeof movsSinCarga } = {};
 
     for (const m of movsSinCarga) {
-      const fechaBase = m.creado_en ? new Date(m.creado_en).toISOString().substring(0, 10) : (m.fecha || 'Sin fecha');
+      const fechaBase = m.fecha ? String(m.fecha).substring(0, 10) : (m.creado_en ? new Date(m.creado_en).toISOString().substring(0, 10) : 'Sin fecha');
       const cuentaKey = m.cuenta_bancaria_id || 'sin_cuenta';
       const groupKey = `${cuentaKey}_${fechaBase}`;
 
@@ -898,7 +899,7 @@ async function asociarMovimientosSinCarga(empresaId: string) {
       if (list.length === 0) continue;
 
       const cuentaId = list[0].cuenta_bancaria_id || null;
-      const minDate = list[0].creado_en || new Date().toISOString();
+      const minDate = list[0].fecha || list[0].creado_en || new Date().toISOString();
       const fechaStr = new Date(minDate).toISOString().substring(0, 10);
 
       let totDep = 0;
@@ -1026,6 +1027,109 @@ export async function eliminarCargaEstadoCuenta(cargaId: string, token: string) 
     return { success: true };
   } catch (err: any) {
     return { success: false, error: err.message || 'Error al eliminar la carga de estado de cuenta' };
+  }
+}
+
+// ASIGNAR / ACTUALIZAR FECHA DE UNA CARGA Y TODOS SUS MOVIMIENTOS
+export async function actualizarFechaCargaYMovimientos({
+  cargaId,
+  nuevaFecha,
+  actualizarCarga = true,
+  token
+}: {
+  cargaId: string;
+  nuevaFecha: string; // 'YYYY-MM-DD'
+  actualizarCarga?: boolean;
+  token: string;
+}) {
+  try {
+    const { empresaId } = await getUserEmpresaId(token);
+
+    if (!nuevaFecha || !/^\d{4}-\d{2}-\d{2}$/.test(nuevaFecha)) {
+      throw new Error('La fecha proporcionada no tiene un formato válido (AAAA-MM-DD).');
+    }
+
+    // 1. Obtener la carga para verificar existencia y pertenencia
+    const { data: carga, error: fetchCargaErr } = await supabaseAdmin
+      .from('cargas_estados_cuenta')
+      .select('id, nombre_archivo, fecha_carga')
+      .eq('id', cargaId)
+      .eq('empresa_id', empresaId)
+      .single();
+
+    if (fetchCargaErr || !carga) {
+      throw new Error('No se encontró la carga seleccionada.');
+    }
+
+    // 2. Actualizar la fecha de todos los movimientos bancarios asociados
+    const { data: movsUpdated, error: movsErr } = await supabaseAdmin
+      .from('movimientos_bancarios')
+      .update({ fecha: nuevaFecha })
+      .eq('carga_id', cargaId)
+      .eq('empresa_id', empresaId)
+      .select('id');
+
+    if (movsErr) throw movsErr;
+
+    // 3. Si se solicita, actualizar la fecha y nombre de la carga
+    if (actualizarCarga) {
+      let nuevoNombre = carga.nombre_archivo || '';
+      if (nuevoNombre.startsWith('Carga Existente')) {
+        nuevoNombre = `Carga Existente (${nuevaFecha})`;
+      }
+
+      const { error: updCargaErr } = await supabaseAdmin
+        .from('cargas_estados_cuenta')
+        .update({
+          fecha_carga: nuevaFecha,
+          nombre_archivo: nuevoNombre
+        })
+        .eq('id', cargaId)
+        .eq('empresa_id', empresaId);
+
+      if (updCargaErr) throw updCargaErr;
+    }
+
+    return { 
+      success: true, 
+      totalActualizados: movsUpdated?.length || 0,
+      nuevaFecha
+    };
+  } catch (err: any) {
+    console.error('Error al actualizar fecha de la carga y sus movimientos:', err);
+    return { success: false, error: err.message || 'Error al actualizar la fecha' };
+  }
+}
+
+// ACTUALIZAR FECHA DE UN MOVIMIENTO BANCARIO INDIVIDUAL
+export async function actualizarFechaMovimientoBancario({
+  movimientoId,
+  nuevaFecha,
+  token
+}: {
+  movimientoId: string;
+  nuevaFecha: string; // 'YYYY-MM-DD'
+  token: string;
+}) {
+  try {
+    const { empresaId } = await getUserEmpresaId(token);
+
+    if (!nuevaFecha || !/^\d{4}-\d{2}-\d{2}$/.test(nuevaFecha)) {
+      throw new Error('La fecha proporcionada no tiene un formato válido (AAAA-MM-DD).');
+    }
+
+    const { error } = await supabaseAdmin
+      .from('movimientos_bancarios')
+      .update({ fecha: nuevaFecha })
+      .eq('id', movimientoId)
+      .eq('empresa_id', empresaId);
+
+    if (error) throw error;
+
+    return { success: true, nuevaFecha };
+  } catch (err: any) {
+    console.error('Error al actualizar fecha del movimiento bancario:', err);
+    return { success: false, error: err.message || 'Error al actualizar fecha del movimiento' };
   }
 }
 
@@ -2533,32 +2637,104 @@ export async function guardarConciliacionManual(
     }
 
     if (primaryMov.tipo_movimiento === 'Deposito' && payload.pedidosIds.length > 0) {
-      const cleanPedidosIds = payload.pedidosIds.map(id => id.replace(/^suelta_/, ''));
-      const { error: linkErr } = await supabaseAdmin
-        .from('pedidos')
-        .update({ movimiento_bancario_id: primaryMovId, estatus_pago: 'Liquidado' })
-        .in('id', cleanPedidosIds)
-        .eq('empresa_id', empresaId);
+      const cleanPedidosIds = payload.pedidosIds.filter(id => !id.startsWith('suelta_'));
+      const sueltasIds = payload.pedidosIds.filter(id => id.startsWith('suelta_')).map(id => id.replace(/^suelta_/, ''));
 
-      if (linkErr) throw linkErr;
+      // 1. Si hay pedidos reales seleccionados:
+      if (cleanPedidosIds.length > 0) {
+        const { error: linkErr } = await supabaseAdmin
+          .from('pedidos')
+          .update({ movimiento_bancario_id: primaryMovId, estatus_pago: 'Liquidado' })
+          .in('id', cleanPedidosIds)
+          .eq('empresa_id', empresaId);
 
-      const rawPedidosIds = payload.pedidosIds.map(id => id.replace(/^suelta_/, ''));
+        if (linkErr) throw linkErr;
 
-      const { data: pedidosInfo } = await supabaseAdmin
-        .from('pedidos')
-        .select('id, precio_total, folio_factura')
-        .in('id', rawPedidosIds)
-        .eq('empresa_id', empresaId);
+        // Tríada: Actualizar facturas que ya pertenecían a estos pedidos para ligarlas al movimiento bancario
+        for (const mItem of targetMovements) {
+          await supabaseAdmin
+            .from('facturas_clientes')
+            .update({ movimiento_bancario_id: mItem.id })
+            .in('pedido_id', cleanPedidosIds)
+            .eq('empresa_id', empresaId);
+        }
+      }
+
+      // 2. Tríada Fusionada: Si se seleccionó factura(s) suelta(s) JUNTO con un pedido real:
+      if (cleanPedidosIds.length === 1 && sueltasIds.length > 0) {
+        const targetPedidoId = cleanPedidosIds[0];
+        // Enlazar la(s) factura(s) suelta(s) al pedido Y a los movimientos bancarios objetivo
+        for (const mItem of targetMovements) {
+          await supabaseAdmin
+            .from('facturas_clientes')
+            .update({
+              pedido_id: targetPedidoId,
+              movimiento_bancario_id: mItem.id
+            })
+            .in('id', sueltasIds)
+            .eq('empresa_id', empresaId);
+        }
+
+        // Copiar serie_folio al pedido si este no tenía folio_factura
+        const { data: fcInfo } = await supabaseAdmin
+          .from('facturas_clientes')
+          .select('serie_folio, uuid_fiscal')
+          .in('id', sueltasIds)
+          .order('fecha_emision', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (fcInfo) {
+          const folioStr = fcInfo.serie_folio || (fcInfo.uuid_fiscal ? `UUID:${fcInfo.uuid_fiscal.substring(0, 8)}` : '');
+          if (folioStr) {
+            await supabaseAdmin
+              .from('pedidos')
+              .update({ folio_factura: folioStr })
+              .eq('id', targetPedidoId)
+              .is('folio_factura', null)
+              .eq('empresa_id', empresaId);
+          }
+        }
+      } else if (cleanPedidosIds.length === 0 && sueltasIds.length > 0) {
+        // Facturas sueltas individuales sin pedido
+        for (const mItem of targetMovements) {
+          await supabaseAdmin
+            .from('facturas_clientes')
+            .update({ movimiento_bancario_id: mItem.id })
+            .in('id', sueltasIds)
+            .eq('empresa_id', empresaId);
+        }
+      }
+
+      const { data: pedidosInfo } = cleanPedidosIds.length > 0
+        ? await supabaseAdmin
+            .from('pedidos')
+            .select('id, precio_total, folio_factura')
+            .in('id', cleanPedidosIds)
+            .eq('empresa_id', empresaId)
+        : { data: [] };
 
       const foliosFromPedidos = (pedidosInfo || [])
         .map(p => p.folio_factura)
         .filter(Boolean);
 
-      const { data: pedidosFiles } = await supabaseAdmin
-        .from('facturas_clientes')
-        .select('xml_url, pdf_url, ticket_url')
-        .eq('empresa_id', empresaId)
-        .or(`pedido_id.in.(${rawPedidosIds.join(',')}),id.in.(${rawPedidosIds.join(',')})${foliosFromPedidos.length > 0 ? `,serie_folio.in.(${foliosFromPedidos.map(f => `"${f}"`).join(',')})` : ''}`);
+      const allSearchIds = [...cleanPedidosIds, ...sueltasIds];
+      const orConditions: string[] = [];
+      if (allSearchIds.length > 0) {
+        orConditions.push(`pedido_id.in.(${allSearchIds.join(',')})`);
+        orConditions.push(`id.in.(${allSearchIds.join(',')})`);
+      }
+      if (foliosFromPedidos.length > 0) {
+        orConditions.push(`serie_folio.in.(${foliosFromPedidos.map(f => `"${f}"`).join(',')})`);
+      }
+
+      const { data: pedidosFiles } = orConditions.length > 0
+        ? await supabaseAdmin
+            .from('facturas_clientes')
+            .select('xml_url, pdf_url, ticket_url')
+            .eq('empresa_id', empresaId)
+            .or(orConditions.join(','))
+        : { data: [] };
 
       if (pedidosFiles) {
         const xmls: string[] = [];
@@ -2630,20 +2806,6 @@ export async function guardarConciliacionManual(
               monto_asociado: Math.round(movRemanente * 100) / 100,
               empresa_id: empresaId
             });
-          }
-        }
-      }
-
-      // Tratar facturas sueltas
-      for (const mItem of targetMovements) {
-        for (const pId of payload.pedidosIds) {
-          if (pId.startsWith('suelta_')) {
-            const cleanPid = pId.replace(/^suelta_/, '');
-            await supabaseAdmin
-              .from('facturas_clientes')
-              .update({ movimiento_bancario_id: mItem.id })
-              .eq('id', cleanPid)
-              .eq('empresa_id', empresaId);
           }
         }
       }
@@ -3248,11 +3410,18 @@ export async function crearComprobanteDeposito(
 
     const montoFinal = Number(p.monto) > 0 ? Number(p.monto) : calculatedTotal;
 
+    const isVentaMesAnt = Boolean(p.es_venta_mes_anterior ?? p.esVentaMesAnterior ?? false);
+    const mesVentaVal = p.mes_venta ?? p.mesVenta ?? null;
+    let finalDesc = p.descripcion || null;
+    if (isVentaMesAnt && finalDesc && !finalDesc.includes('[VENTA_MES_ANTERIOR]') && !finalDesc.includes('[VENTA_MES:')) {
+      finalDesc = mesVentaVal ? `[VENTA_MES:${mesVentaVal}] ${finalDesc}` : `[VENTA_MES_ANTERIOR] ${finalDesc}`;
+    }
+
     const insertPayload: any = {
       tipo: p.tipo || 'corte_tarjeta',
       fecha: p.fecha,
       monto: montoFinal,
-      descripcion: p.descripcion || null,
+      descripcion: finalDesc,
       archivo_url: p.archivo_url || p.archivoUrl || null,
       storage_provider: p.storage_provider || p.storageProvider || 'Supabase',
       cuenta_bancaria_id: p.cuenta_bancaria_id || p.cuentaBancariaId || null,
@@ -3270,7 +3439,9 @@ export async function crearComprobanteDeposito(
       comision_transacciones: Number(p.comision_transacciones ?? p.comisionTransacciones ?? 0),
       iva_transacciones: Number(p.iva_transacciones ?? p.ivaTransacciones ?? 0),
       otros_cargos: Number(p.otros_cargos ?? p.otrosCargos ?? 0),
-      desglose_tickets: p.desglose_tickets || p.desgloseTickets || []
+      desglose_tickets: p.desglose_tickets || p.desgloseTickets || [],
+      es_venta_mes_anterior: isVentaMesAnt,
+      mes_venta: mesVentaVal
     };
 
     let { data, error } = await supabaseAdmin
@@ -3278,6 +3449,19 @@ export async function crearComprobanteDeposito(
       .insert(insertPayload)
       .select()
       .single();
+
+    if (error && (error.message?.includes('es_venta_mes_anterior') || error.message?.includes('mes_venta') || error.code === '42703')) {
+      console.warn('Column es_venta_mes_anterior or mes_venta not yet in DB, falling back to payload without columns');
+      delete insertPayload.es_venta_mes_anterior;
+      delete insertPayload.mes_venta;
+      const retryRes = await supabaseAdmin
+        .from('comprobantes_deposito')
+        .insert(insertPayload)
+        .select()
+        .single();
+      data = retryRes.data;
+      error = retryRes.error;
+    }
 
     if (error && (error.message?.includes('comprobantes_deposito_tipo_check') || error.code === '23514')) {
       console.warn('comprobantes_deposito_tipo_check active in DB, retrying insert with corte_tarjeta fallback');
@@ -3339,17 +3523,30 @@ export async function actualizarComprobanteDeposito(
     iva_transacciones?: number;
     otros_cargos?: number;
     desglose_tickets?: any[];
+    es_venta_mes_anterior?: boolean;
+    mes_venta?: string | null;
     [key: string]: any;
   },
   token: string
 ) {
   try {
     const { empresaId } = await getUserEmpresaId(token);
+    const p: any = payload;
+    const isVentaMesAnt = p.es_venta_mes_anterior !== undefined ? Boolean(p.es_venta_mes_anterior) : (p.esVentaMesAnterior !== undefined ? Boolean(p.esVentaMesAnterior) : undefined);
+    const mesVentaVal = p.mes_venta !== undefined ? p.mes_venta : (p.mesVenta !== undefined ? p.mesVenta : undefined);
+
+    let descVal = payload.descripcion !== undefined ? (payload.descripcion || null) : undefined;
+    if (isVentaMesAnt === true && descVal && !descVal.includes('[VENTA_MES_ANTERIOR]') && !descVal.includes('[VENTA_MES:')) {
+      descVal = mesVentaVal ? `[VENTA_MES:${mesVentaVal}] ${descVal}` : `[VENTA_MES_ANTERIOR] ${descVal}`;
+    } else if (isVentaMesAnt === false && descVal) {
+      descVal = descVal.replace(/\[VENTA_MES_ANTERIOR\]/g, '').replace(/\[VENTA_MES:[^\]]+\]/g, '').trim() || null;
+    }
+
     const updatePayload: any = {
       tipo: payload.tipo,
       fecha: payload.fecha ? String(payload.fecha).substring(0, 10) : payload.fecha,
       monto: payload.monto,
-      descripcion: payload.descripcion || null,
+      descripcion: descVal !== undefined ? descVal : (payload.descripcion || null),
       archivo_url: payload.archivo_url || null,
       storage_provider: payload.storage_provider || 'Supabase',
       cuenta_bancaria_id: payload.cuenta_bancaria_id || null,
@@ -3368,7 +3565,9 @@ export async function actualizarComprobanteDeposito(
       otros_cargos: payload.otros_cargos || 0,
       ...(payload.desglose_tickets !== undefined || (payload as any).desgloseTickets !== undefined
         ? { desglose_tickets: payload.desglose_tickets ?? (payload as any).desgloseTickets }
-        : {})
+        : {}),
+      ...(isVentaMesAnt !== undefined ? { es_venta_mes_anterior: isVentaMesAnt } : {}),
+      ...(mesVentaVal !== undefined ? { mes_venta: mesVentaVal } : {})
     };
 
     let { data, error } = await supabaseAdmin
@@ -3377,6 +3576,20 @@ export async function actualizarComprobanteDeposito(
       .eq('id', id)
       .select()
       .single();
+
+    if (error && (error.message?.includes('es_venta_mes_anterior') || error.message?.includes('mes_venta') || error.code === '42703')) {
+      console.warn('Column es_venta_mes_anterior or mes_venta not yet in DB, updating without those columns');
+      delete updatePayload.es_venta_mes_anterior;
+      delete updatePayload.mes_venta;
+      const retryRes = await supabaseAdmin
+        .from('comprobantes_deposito')
+        .update(updatePayload)
+        .eq('id', id)
+        .select()
+        .single();
+      data = retryRes.data;
+      error = retryRes.error;
+    }
 
     if (error && (error.message?.includes('comprobantes_deposito_tipo_check') || error.code === '23514')) {
       console.warn('comprobantes_deposito_tipo_check active in DB, retrying update with corte_tarjeta fallback');
@@ -4435,4 +4648,3 @@ export async function adjuntarArchivoDirectoAction(
     return { success: false, error: err.message || 'Error al adjuntar archivo' };
   }
 }
-

@@ -241,7 +241,7 @@ export default function IngresosTab({
               onClick={() => setShowXmlModal(true)}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-xs font-bold shadow-sm transition-colors"
             >
-              <UploadCloud size={13} /> Subir Masivo (XML)
+              <UploadCloud size={13} /> Subir Masivo (XML / PDF)
             </button>
             <button
               onClick={() => setManualModal({isOpen: true})}

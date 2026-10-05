@@ -11,11 +11,13 @@ import {
   CheckCircle2,
   AlertTriangle,
   Loader2,
-  Check
+  Check,
+  RefreshCw,
+  Trash2
 } from 'lucide-react';
 import { supabase } from '../../../../lib/supabase';
 import { formatCurrency } from '../../../../lib/formatters';
-import { enviarFacturaPorCorreo, obtenerEmailClientePedido } from '../../gastos/actions';
+import { enviarFacturaPorCorreo, obtenerEmailClientePedido, desvincularFacturaDePedidoId } from '../../gastos/actions';
 
 interface SubirFacturaPedidoModalProps {
   pedido: any | null;
@@ -57,6 +59,7 @@ export default function SubirFacturaPedidoModal({
   const [procesando, setProcesando] = useState(false);
   const [cargandoEmail, setCargandoEmail] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [desvinculando, setDesvinculando] = useState(false);
 
   useEffect(() => {
     if (pedido) {
@@ -262,10 +265,41 @@ export default function SubirFacturaPedidoModal({
     setPdfFile(file);
   };
 
+  const handleDesvincularFactura = async () => {
+    const folioTexto = pedido?.folio_factura || (Array.isArray(pedido?.facturas_clientes) ? pedido?.facturas_clientes[0]?.serie_folio : pedido?.facturas_clientes?.serie_folio);
+    if (!confirm(`¿Estás seguro de quitar y desvincular la factura actual (${folioTexto || 'Factura'}) de este pedido? Podrás subir la factura correcta cuando lo requieras.`)) {
+      return;
+    }
+    setDesvinculando(true);
+    setError(null);
+    try {
+      const token = await getSessionToken();
+      const res = await desvincularFacturaDePedidoId(pedido.id, token);
+      if (!res.success) {
+        throw new Error(res.error || 'No se pudo desvincular la factura');
+      }
+      onSuccess({ desvinculado: true });
+      onClose();
+    } catch (err: any) {
+      setError(err.message || 'Error al desvincular la factura.');
+    } finally {
+      setDesvinculando(false);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!xmlFile || !parsedData) {
       setError('Debes cargar al menos el archivo XML de la factura.');
+      return;
+    }
+
+    const pedidoTotal = Number(pedido.precio_total || 0);
+    const diffMonto = Math.abs(parsedData.total - pedidoTotal);
+    if (diffMonto > 0.05) {
+      setError(
+        `No se permite enviar ni registrar esta factura: El monto del XML ($${parsedData.total.toFixed(2)}) no coincide con el total del pedido ($${pedidoTotal.toFixed(2)}). Debes seleccionar la factura correcta.`
+      );
       return;
     }
 
@@ -331,11 +365,23 @@ export default function SubirFacturaPedidoModal({
       const folioStr = parsedData.folio ? `${parsedData.serie}${parsedData.folio}`.trim() : (parsedData.uuid ? `UUID-${parsedData.uuid.substring(0, 6)}` : 'FACTURADO');
 
       // 7. Insertar o actualizar registro en facturas_clientes
+      let existingFcId: string | null = null;
       const { data: existingFc } = await supabase
         .from('facturas_clientes')
         .select('id')
         .eq('pedido_id', pedido.id)
         .maybeSingle();
+
+      if (existingFc) {
+        existingFcId = existingFc.id;
+      } else if (pedido.folio_factura) {
+        const { data: existingByFolio } = await supabase
+          .from('facturas_clientes')
+          .select('id')
+          .or(`serie_folio.eq.${pedido.folio_factura},uuid_fiscal.eq.${pedido.folio_factura}`)
+          .maybeSingle();
+        if (existingByFolio) existingFcId = existingByFolio.id;
+      }
 
       const facturaPayload: any = {
         pedido_id: pedido.id,
@@ -355,11 +401,11 @@ export default function SubirFacturaPedidoModal({
         fecha_timbrado: parsedData.fechaTimbrado || null
       };
 
-      if (existingFc) {
+      if (existingFcId) {
         const { error: updErr } = await supabase
           .from('facturas_clientes')
           .update(facturaPayload)
-          .eq('id', existingFc.id);
+          .eq('id', existingFcId);
         if (updErr) throw updErr;
       } else {
         const { error: insErr } = await supabase
@@ -412,7 +458,13 @@ export default function SubirFacturaPedidoModal({
     }
   };
 
+  const esCorreccion = !!(
+    pedido.folio_factura ||
+    (pedido.facturas_clientes && (Array.isArray(pedido.facturas_clientes) ? pedido.facturas_clientes.length > 0 : true))
+  );
+  const folioActual = pedido.folio_factura || (Array.isArray(pedido.facturas_clientes) ? pedido.facturas_clientes[0]?.serie_folio : pedido.facturas_clientes?.serie_folio);
   const diferenciaMontos = parsedData ? Math.abs(parsedData.total - Number(pedido.precio_total || 0)) : 0;
+  const hayDiferenciaBloqueante = parsedData ? diferenciaMontos > 0.05 : false;
 
   return (
     <div className="fixed inset-0 z-[120] flex items-center justify-center p-4 sm:p-6 bg-black/60 backdrop-blur-sm font-sans animate-in fade-in duration-200">
@@ -421,11 +473,15 @@ export default function SubirFacturaPedidoModal({
         <div className="flex items-center justify-between p-5 border-b border-gray-100 dark:border-gray-900 bg-gray-50/60 dark:bg-gray-900/30">
           <div>
             <div className="flex items-center gap-2">
-              <span className="p-1.5 bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 rounded-lg">
-                <UploadCloud size={18} />
+              <span className={`p-1.5 rounded-lg ${
+                esCorreccion
+                  ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-600 dark:text-amber-400'
+                  : 'bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400'
+              }`}>
+                {esCorreccion ? <RefreshCw size={18} /> : <UploadCloud size={18} />}
               </span>
               <h2 className="text-lg font-black text-gray-900 dark:text-white">
-                Subir Factura al Pedido #{pedido.numero_pedido}
+                {esCorreccion ? 'Corregir Factura' : 'Subir Factura'} al Pedido #{pedido.numero_pedido}
               </h2>
             </div>
             <p className="text-xs text-gray-500 mt-1">
@@ -434,7 +490,7 @@ export default function SubirFacturaPedidoModal({
           </div>
           <button
             onClick={onClose}
-            disabled={procesando}
+            disabled={procesando || desvinculando}
             className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 rounded-xl transition-colors"
           >
             <X size={18} />
@@ -447,6 +503,30 @@ export default function SubirFacturaPedidoModal({
             <div className="p-3 bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/40 rounded-xl text-red-600 dark:text-red-400 flex items-start gap-2">
               <AlertTriangle size={16} className="shrink-0 mt-0.5" />
               <span>{error}</span>
+            </div>
+          )}
+
+          {esCorreccion && (
+            <div className="p-3.5 bg-amber-50/90 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/40 rounded-xl text-amber-900 dark:text-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-start gap-2.5">
+                <AlertTriangle size={17} className="shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
+                <div>
+                  <p className="font-bold text-xs">Modo Corrección de Factura</p>
+                  <p className="text-[11px] text-amber-800 dark:text-amber-300 mt-0.5 leading-relaxed">
+                    Factura actual: <strong className="font-mono">{folioActual || 'Registrada previamente'}</strong>. Puedes cargar el XML/PDF correcto para sobrescribirla y notificar al cliente, o desvincularla si se subió por error.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleDesvincularFactura}
+                disabled={desvinculando || procesando}
+                className="shrink-0 px-2.5 py-1.5 bg-red-100 hover:bg-red-200 dark:bg-red-950/60 dark:hover:bg-red-900/60 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800 rounded-lg font-bold text-[11px] transition-colors flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                title="Desvincular y eliminar la factura errónea de este pedido"
+              >
+                {desvinculando ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
+                <span>Quitar factura actual</span>
+              </button>
             </div>
           )}
 
@@ -571,12 +651,24 @@ export default function SubirFacturaPedidoModal({
                 </select>
               </div>
 
-              {diferenciaMontos > 0.05 && (
-                <div className="p-2 bg-amber-100 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 rounded-lg text-amber-800 dark:text-amber-300 text-[10px] flex items-center gap-1.5 mt-1">
-                  <AlertTriangle size={13} className="shrink-0" />
-                  <span>
-                    El total del XML ({formatCurrency(parsedData.total)}) difiere del pedido ({formatCurrency(pedido.precio_total)}). Se registrará con el total del comprobante fiscal.
-                  </span>
+              {hayDiferenciaBloqueante && (
+                <div className="p-3 bg-red-100 dark:bg-red-950/50 border-2 border-red-400 dark:border-red-800 rounded-xl text-red-900 dark:text-red-200 text-xs flex items-start gap-2.5 mt-2 animate-in fade-in duration-200">
+                  <AlertTriangle size={18} className="shrink-0 mt-0.5 text-red-600 dark:text-red-400" />
+                  <div className="space-y-1">
+                    <p className="font-black text-xs text-red-700 dark:text-red-300 uppercase tracking-wide">
+                      Monto discrepante (Bloqueado)
+                    </p>
+                    <p className="text-[11px] leading-relaxed">
+                      Total XML Factura: <strong className="font-mono text-red-700 dark:text-red-300">{formatCurrency(parsedData.total)}</strong>
+                      <br />
+                      Total Pedido: <strong className="font-mono text-emerald-700 dark:text-emerald-400">{formatCurrency(pedido.precio_total)}</strong>
+                      <br />
+                      Diferencia: <strong className="font-mono underline text-red-700 dark:text-red-300">{formatCurrency(diferenciaMontos)}</strong>
+                    </p>
+                    <p className="text-[11px] font-semibold text-red-800 dark:text-red-200 pt-0.5">
+                      Por seguridad y control contable, no se permite enviar ni registrar facturas que no coincidan con el monto del pedido. Carga el archivo XML correspondiente.
+                    </p>
+                  </div>
                 </div>
               )}
             </div>
@@ -642,21 +734,42 @@ export default function SubirFacturaPedidoModal({
             <button
               type="button"
               onClick={onClose}
-              disabled={procesando}
-              className="px-4 py-2 text-xs font-semibold text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-xl transition-colors"
+              disabled={procesando || desvinculando}
+              className="px-4 py-2 text-xs font-semibold text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-xl transition-colors cursor-pointer"
             >
               Cancelar
             </button>
             <button
               type="submit"
-              disabled={procesando || !xmlFile}
-              className="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-md transition-colors cursor-pointer"
+              disabled={procesando || !xmlFile || hayDiferenciaBloqueante}
+              className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold shadow-md transition-colors ${
+                hayDiferenciaBloqueante
+                  ? 'bg-red-600 text-white cursor-not-allowed opacity-80'
+                  : 'bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white cursor-pointer'
+              }`}
             >
               {procesando ? (
                 <>
                   <Loader2 size={14} className="animate-spin" />
-                  <span>Subiendo y enviando...</span>
+                  <span>{esCorreccion ? 'Actualizando factura...' : 'Subiendo y enviando...'}</span>
                 </>
+              ) : hayDiferenciaBloqueante ? (
+                <>
+                  <AlertTriangle size={14} />
+                  <span>Monto no coincide (Bloqueado)</span>
+                </>
+              ) : esCorreccion ? (
+                enviarPorCorreo ? (
+                  <>
+                    <RefreshCw size={14} />
+                    <span>Corregir Factura y Enviar Correo</span>
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw size={14} />
+                    <span>Corregir Factura</span>
+                  </>
+                )
               ) : enviarPorCorreo ? (
                 <>
                   <Mail size={14} />

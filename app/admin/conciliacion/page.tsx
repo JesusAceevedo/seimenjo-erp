@@ -10,6 +10,7 @@ import { useThemeMode } from '../../../lib/useThemeMode';
 import { usePeriod } from '../../../lib/hooks/usePeriod';
 import { useEmpresaId } from '../../../lib/hooks/useEmpresaId';
 import { useSessionToken } from '../../../lib/hooks/useSessionToken';
+import { fetchCuentasBancarias } from '../../../lib/cuentasBancarias';
 import { EditMovimientoModal } from '../gastos/_components/EditModals';
 import {
   obtenerSignedUrl,
@@ -191,25 +192,8 @@ export default function BankReconciliationModule() {
       const empresaId = await getEmpresaId();
       if (!empresaId) return;
 
-      // 1. Cuentas bancarias
-      let cbData = null;
-      const { data: cbDataTry, error: cbError } = await supabase
-        .from('cuentas_bancarias')
-        .select('*')
-        .eq('empresa_id', empresaId)
-        .order('nombre', { ascending: true });
-
-      if (cbError && cbError.code === '42703') {
-        const { data: cbGlobal, error: cbGlobalError } = await supabase
-          .from('cuentas_bancarias')
-          .select('*')
-          .order('nombre', { ascending: true });
-        if (!cbGlobalError) {
-          cbData = cbGlobal;
-        }
-      } else if (!cbError) {
-        cbData = cbDataTry;
-      }
+      // 1. Cuentas bancarias (Carga robusta con fallback multiempresa y auto-inicialización)
+      const cbData = await fetchCuentasBancarias(empresaId);
       setCuentasBancarias(cbData || []);
 
       // 2. Movimientos bancarios
@@ -358,21 +342,30 @@ export default function BankReconciliationModule() {
           folio_factura: p.folio_factura || fc?.serie_folio || (fc?.uuid_fiscal ? `UUID:${fc.uuid_fiscal.substring(0, 8)}` : ''),
           precio_total: Number(fc?.total || p.precio_total || 0),
           cliente_nombre: p.cliente_nombre || p.clientes?.nombre_local || fc?.razon_social_receptor || '',
+          cliente_rfc: p.clientes?.rfc || fc?.rfc_receptor || '',
           fecha_pedido: p.fecha_pedido || fc?.fecha_emision || p.creado_en,
           metodo_pago: p.metodo_pago || fc?.metodo_pago || '',
-          uuid_fiscal: p.uuid_fiscal || fc?.uuid_fiscal || ''
+          uuid_fiscal: p.uuid_fiscal || fc?.uuid_fiscal || '',
+          facturas_clientes: fcList ? (Array.isArray(fcList) ? fcList : [fcList]) : [],
+          xml_url: fc?.xml_url || '',
+          pdf_url: fc?.pdf_url || '',
+          has_factura: Boolean(fc || p.folio_factura)
         };
       });
 
       const sueltasMapped = (fIngresosSueltas || []).map((f: any) => ({
-        id: f.id,
+        id: `suelta_${f.id}`,
+        factura_id: f.id,
         numero_pedido: '',
         folio_factura: f.serie_folio || (f.uuid_fiscal ? `UUID:${f.uuid_fiscal.substring(0, 8)}` : 'Factura XML'),
         precio_total: Number(f.total || 0),
         cliente_nombre: f.clientes?.nombre_local || f.razon_social_receptor || '',
+        cliente_rfc: f.clientes?.rfc || f.rfc_receptor || '',
         fecha_pedido: f.fecha_emision,
         metodo_pago: f.metodo_pago || '',
         uuid_fiscal: f.uuid_fiscal || '',
+        xml_url: f.xml_url || '',
+        pdf_url: f.pdf_url || '',
         _esFacturaSuelta: true
       }));
 

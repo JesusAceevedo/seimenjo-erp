@@ -18,13 +18,17 @@ import {
   UploadCloud,
   Check,
   Download,
-  Tag
+  Tag,
+  CalendarDays,
+  Edit2
 } from 'lucide-react';
 import { 
   obtenerCargasEstadosCuenta, 
   obtenerMovimientosPorCarga, 
   eliminarCargaEstadoCuenta,
-  importarMovimientosBancarios
+  importarMovimientosBancarios,
+  actualizarFechaCargaYMovimientos,
+  actualizarFechaMovimientoBancario
 } from '../reconciliationActions';
 import { useSessionToken } from '../../../../lib/hooks/useSessionToken';
 import { supabase } from '../../../../lib/supabase';
@@ -67,6 +71,17 @@ export function CargasTab({
   const [deleting, setDeleting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+
+  // Estados para Asignar Fecha a la Carga y Movimientos
+  const [cargaToAssignDate, setCargaToAssignDate] = useState<any | null>(null);
+  const [newDateValue, setNewDateValue] = useState<string>('2026-08-31');
+  const [updateCargaHeader, setUpdateCargaHeader] = useState<boolean>(true);
+  const [assigningDate, setAssigningDate] = useState<boolean>(false);
+
+  // Estados para edición inline de fecha de movimientos individuales
+  const [editingMovId, setEditingMovId] = useState<string | null>(null);
+  const [editingMovDate, setEditingMovDate] = useState<string>('');
+  const [savingMovDate, setSavingMovDate] = useState<boolean>(false);
 
   // Estados para Carga de Archivo Excel y Mapeo
   const [excelFile, setExcelFile] = useState<File | null>(null);
@@ -438,6 +453,73 @@ export function CargasTab({
     }
   };
 
+  // Manejo de apertura y confirmación de Asignación de Fecha
+  const handleOpenAssignDate = (carga: any) => {
+    setCargaToAssignDate(carga);
+    let defaultDate = '2026-08-31';
+    if (carga.fecha_carga) {
+      defaultDate = carga.fecha_carga.substring(0, 10);
+    } else if (selectedMonth) {
+      defaultDate = `${selectedMonth}-01`;
+    }
+    setNewDateValue(defaultDate);
+    setUpdateCargaHeader(true);
+  };
+
+  const handleConfirmAssignDate = async () => {
+    if (!newDateValue || !cargaToAssignDate) return;
+    setAssigningDate(true);
+    setErrorMessage(null);
+    try {
+      const activeToken = token || await getSessionToken();
+      const res = await actualizarFechaCargaYMovimientos({
+        cargaId: cargaToAssignDate.id,
+        nuevaFecha: newDateValue,
+        actualizarCarga: updateCargaHeader,
+        token: activeToken
+      });
+      if (res.success) {
+        setSuccessMessage(`Se asignó la fecha ${formatDateSafe(newDateValue)} a ${res.totalActualizados} movimiento(s) de la carga exitosamente.`);
+        setCargaToAssignDate(null);
+        await fetchCargas();
+        if (onReloadMovimientos) onReloadMovimientos();
+        if (selectedCargaDetail && selectedCargaDetail.id === cargaToAssignDate.id) {
+          handleOpenDetail({ ...selectedCargaDetail, fecha_carga: newDateValue });
+        }
+      } else {
+        setErrorMessage(res.error || 'Error al asignar la fecha a los movimientos.');
+      }
+    } catch (e: any) {
+      setErrorMessage(e?.message || 'Error inesperado al asignar fecha.');
+    } finally {
+      setAssigningDate(false);
+    }
+  };
+
+  const handleSaveIndividualDate = async (movId: string) => {
+    if (!editingMovDate) return;
+    setSavingMovDate(true);
+    try {
+      const activeToken = token || await getSessionToken();
+      const res = await actualizarFechaMovimientoBancario({
+        movimientoId: movId,
+        nuevaFecha: editingMovDate,
+        token: activeToken
+      });
+      if (res.success) {
+        setCargaMovimientos(prev => prev.map(m => m.id === movId ? { ...m, fecha: editingMovDate } : m));
+        setEditingMovId(null);
+        if (onReloadMovimientos) onReloadMovimientos();
+      } else {
+        alert(res.error || 'Error al actualizar fecha del movimiento');
+      }
+    } catch (e: any) {
+      alert(e?.message || 'Error inesperado');
+    } finally {
+      setSavingMovDate(false);
+    }
+  };
+
   const filteredCargas = cargas.filter(c => {
     // Filtro por periodo (AAAA-MM) basado en la fecha de carga o periodo
     if (selectedMonth) {
@@ -636,7 +718,7 @@ export function CargasTab({
               className="w-full sm:w-auto bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 px-3 py-2 rounded-xl text-xs font-semibold text-gray-700 dark:text-gray-200 outline-none focus:ring-2 focus:ring-amber-500 transition-all cursor-pointer"
             >
               <option value="">🏦 Todas las Cuentas</option>
-              {cuentasBancarias.map(cb => (
+              {(cuentasBancarias || []).map(cb => (
                 <option key={cb.id} value={cb.id}>{cb.nombre} {cb.numero_cuenta ? `(•••${cb.numero_cuenta.slice(-4)})` : ''}</option>
               ))}
               <option value="sin_cuenta">General / Auto-enrutado</option>
@@ -733,6 +815,13 @@ export function CargasTab({
                         <div className="flex items-center gap-1.5 text-xs font-bold text-gray-800 dark:text-gray-200">
                           <Calendar size={13} className="text-amber-500 shrink-0" />
                           <span>{formatCargaFecha(carga)}</span>
+                          <button
+                            onClick={() => handleOpenAssignDate(carga)}
+                            title="Asignar / Cambiar fecha a los movimientos"
+                            className="ml-1 p-1 text-gray-400 hover:text-amber-600 dark:hover:text-amber-400 rounded hover:bg-amber-50 dark:hover:bg-amber-950/40 transition-colors cursor-pointer"
+                          >
+                            <Edit2 size={11} />
+                          </button>
                         </div>
                         {carga.creado_en && (
                           <div className="text-[10px] text-gray-400 pl-4">
@@ -768,15 +857,23 @@ export function CargasTab({
                         <button
                           onClick={() => handleOpenDetail(carga)}
                           title="Ver detalle de movimientos"
-                          className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg text-gray-600 dark:text-gray-300 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
+                          className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg text-gray-600 dark:text-gray-300 hover:text-blue-600 dark:hover:text-blue-400 transition-colors cursor-pointer"
                         >
                           <Eye size={15} />
                         </button>
 
                         <button
+                          onClick={() => handleOpenAssignDate(carga)}
+                          title="Asignar / Cambiar fecha a los movimientos de esta carga"
+                          className="p-1.5 hover:bg-amber-50 dark:hover:bg-amber-950/50 rounded-lg text-amber-600 dark:text-amber-400 transition-colors cursor-pointer"
+                        >
+                          <CalendarDays size={15} />
+                        </button>
+
+                        <button
                           onClick={() => handleStartSustituir(carga)}
                           title="Sustituir / Actualizar carga con un nuevo archivo"
-                          className="p-1.5 hover:bg-amber-50 dark:hover:bg-amber-950/50 rounded-lg text-amber-600 dark:text-amber-400 transition-colors"
+                          className="p-1.5 hover:bg-amber-50 dark:hover:bg-amber-950/50 rounded-lg text-amber-600 dark:text-amber-400 transition-colors cursor-pointer"
                         >
                           <RefreshCw size={15} />
                         </button>
@@ -784,7 +881,7 @@ export function CargasTab({
                         <button
                           onClick={() => setCargaToDelete(carga)}
                           title="Eliminar esta carga y sus registros"
-                          className="p-1.5 hover:bg-rose-50 dark:hover:bg-rose-950/50 rounded-lg text-rose-600 dark:text-rose-400 transition-colors"
+                          className="p-1.5 hover:bg-rose-50 dark:hover:bg-rose-950/50 rounded-lg text-rose-600 dark:text-rose-400 transition-colors cursor-pointer"
                         >
                           <Trash2 size={15} />
                         </button>
@@ -867,7 +964,7 @@ export function CargasTab({
                     className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs font-bold outline-none focus:ring-2 focus:ring-amber-500"
                   >
                     <option value="">-- Detección Automática (BBVA / Caja / Parrot) --</option>
-                    {cuentasBancarias.map((cuenta) => (
+                    {(cuentasBancarias || []).map((cuenta) => (
                       <option key={cuenta.id} value={cuenta.id}>
                         {cuenta.nombre} {cuenta.numero_cuenta ? `(${cuenta.numero_cuenta})` : ''}
                       </option>
@@ -1016,12 +1113,22 @@ export function CargasTab({
                   </span>
                 </div>
               </div>
-              <button
-                onClick={() => setSelectedCargaDetail(null)}
-                className="p-2 hover:bg-gray-200 dark:hover:bg-gray-800 rounded-xl text-gray-500 transition-colors"
-              >
-                <X size={18} />
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => handleOpenAssignDate(selectedCargaDetail)}
+                  className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5 shadow-xs cursor-pointer"
+                  title="Asignar una fecha a todos los movimientos de esta carga"
+                >
+                  <CalendarDays size={14} />
+                  <span>Asignar Fecha a Todos</span>
+                </button>
+                <button
+                  onClick={() => setSelectedCargaDetail(null)}
+                  className="p-2 hover:bg-gray-200 dark:hover:bg-gray-800 rounded-xl text-gray-500 transition-colors cursor-pointer"
+                >
+                  <X size={18} />
+                </button>
+              </div>
             </div>
 
             <div className="p-4 overflow-y-auto flex-1">
@@ -1047,9 +1154,47 @@ export function CargasTab({
                     </thead>
                     <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
                       {cargaMovimientos.map((m) => (
-                        <tr key={m.id} className="hover:bg-gray-50 dark:hover:bg-gray-900">
+                        <tr key={m.id} className="hover:bg-gray-50 dark:hover:bg-gray-900 group">
                           <td className="p-3 whitespace-nowrap text-gray-700 dark:text-gray-300 font-mono">
-                            {formatDateSafe(m.fecha)}
+                            {editingMovId === m.id ? (
+                              <div className="flex items-center gap-1">
+                                <input
+                                  type="date"
+                                  value={editingMovDate}
+                                  onChange={(e) => setEditingMovDate(e.target.value)}
+                                  className="px-2 py-1 text-xs border border-amber-400 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white outline-none"
+                                />
+                                <button
+                                  onClick={() => handleSaveIndividualDate(m.id)}
+                                  disabled={savingMovDate}
+                                  className="p-1 bg-emerald-600 text-white rounded-lg hover:bg-emerald-500 transition-colors disabled:opacity-50 cursor-pointer"
+                                  title="Guardar fecha"
+                                >
+                                  <Check size={12} />
+                                </button>
+                                <button
+                                  onClick={() => setEditingMovId(null)}
+                                  className="p-1 bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded-lg hover:bg-gray-300 transition-colors cursor-pointer"
+                                  title="Cancelar"
+                                >
+                                  <X size={12} />
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="flex items-center gap-1.5">
+                                <span>{formatDateSafe(m.fecha)}</span>
+                                <button
+                                  onClick={() => {
+                                    setEditingMovId(m.id);
+                                    setEditingMovDate(m.fecha ? String(m.fecha).substring(0, 10) : '2026-08-31');
+                                  }}
+                                  className="opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-amber-500 rounded transition-opacity cursor-pointer"
+                                  title="Editar fecha de este movimiento"
+                                >
+                                  <Edit2 size={11} />
+                                </button>
+                              </div>
+                            )}
                           </td>
                           <td className="p-3 font-medium text-gray-900 dark:text-white max-w-xs truncate" title={m.concepto}>
                             {m.concepto}
@@ -1136,6 +1281,158 @@ export function CargasTab({
                 ) : (
                   <>
                     <Trash2 size={14} /> Confirmar Eliminación
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL PARA ASIGNAR FECHA A LA CARGA Y MOVIMIENTOS */}
+      {cargaToAssignDate && (
+        <div className="fixed inset-0 bg-black/60 dark:bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4 transition-all animate-in fade-in duration-150 font-sans">
+          <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-2xl w-full max-w-lg shadow-2xl p-6 text-gray-900 dark:text-gray-100">
+            <div className="flex items-center justify-between pb-3 border-b border-gray-100 dark:border-gray-800 mb-4">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-xl bg-amber-50 dark:bg-amber-950/60 border border-amber-200 dark:border-amber-800 flex items-center justify-center text-amber-600 dark:text-amber-400">
+                  <CalendarDays size={20} />
+                </div>
+                <div>
+                  <h3 className="text-base font-extrabold text-gray-900 dark:text-white">
+                    Asignar Fecha a Movimientos
+                  </h3>
+                  <p className="text-xs text-gray-500">
+                    Establece la fecha contable para los registros de esta carga
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setCargaToAssignDate(null)}
+                className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg text-gray-400 transition-colors cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Resumen de la carga */}
+            <div className="p-3.5 bg-gray-50 dark:bg-gray-900/60 border border-gray-200 dark:border-gray-800 rounded-xl space-y-2 mb-4 text-xs">
+              <div className="flex justify-between items-center">
+                <span className="text-gray-500">Carga / Archivo:</span>
+                <span className="font-bold text-gray-900 dark:text-white truncate max-w-[240px]">
+                  {cargaToAssignDate.nombre_archivo}
+                </span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-gray-500">Cuenta Destino:</span>
+                <span className="font-semibold text-gray-800 dark:text-gray-200">
+                  {cargaToAssignDate.cuentas_bancarias?.nombre || 'General / Auto-enrutado'}
+                </span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-gray-500">Registros a Modificar:</span>
+                <span className="font-bold text-blue-600 dark:text-blue-400">
+                  {cargaToAssignDate.total_registros || 0} movimientos bancarios
+                </span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-gray-500">Fecha Actual Registrada:</span>
+                <span className="font-mono text-gray-600 dark:text-gray-400">
+                  {formatCargaFecha(cargaToAssignDate)}
+                </span>
+              </div>
+            </div>
+
+            {/* Selector de Fecha */}
+            <div className="space-y-3 mb-5">
+              <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
+                Nueva Fecha para los Movimientos
+              </label>
+
+              <input
+                type="date"
+                value={newDateValue}
+                onChange={(e) => setNewDateValue(e.target.value)}
+                className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 px-3.5 py-2.5 rounded-xl text-sm font-semibold text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-amber-500 transition-all cursor-pointer"
+              />
+
+              {/* Atajos rápidos para Agosto */}
+              <div className="space-y-1.5 pt-1">
+                <span className="text-[11px] font-semibold text-gray-400 block">Atajos rápidos para Agosto:</span>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setNewDateValue('2026-08-31')}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-semibold border transition-all cursor-pointer ${
+                      newDateValue === '2026-08-31'
+                        ? 'bg-amber-500 text-white border-amber-500 font-bold shadow-xs'
+                        : 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 border-gray-200 dark:border-gray-700 hover:border-amber-400'
+                    }`}
+                  >
+                    31 de Agosto (Cierre de mes)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setNewDateValue('2026-08-15')}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-semibold border transition-all cursor-pointer ${
+                      newDateValue === '2026-08-15'
+                        ? 'bg-amber-500 text-white border-amber-500 font-bold shadow-xs'
+                        : 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 border-gray-200 dark:border-gray-700 hover:border-amber-400'
+                    }`}
+                  >
+                    15 de Agosto (Quincena)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setNewDateValue('2026-08-01')}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-semibold border transition-all cursor-pointer ${
+                      newDateValue === '2026-08-01'
+                        ? 'bg-amber-500 text-white border-amber-500 font-bold shadow-xs'
+                        : 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 border-gray-200 dark:border-gray-700 hover:border-amber-400'
+                    }`}
+                  >
+                    01 de Agosto (Inicio de mes)
+                  </button>
+                </div>
+              </div>
+
+              {/* Opción de actualizar cabecera de carga */}
+              <label className="flex items-start gap-2.5 pt-2 cursor-pointer text-xs text-gray-600 dark:text-gray-300 select-none">
+                <input
+                  type="checkbox"
+                  checked={updateCargaHeader}
+                  onChange={(e) => setUpdateCargaHeader(e.target.checked)}
+                  className="mt-0.5 w-4 h-4 rounded text-amber-500 focus:ring-amber-500 border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 cursor-pointer"
+                />
+                <span>
+                  <strong>Actualizar fecha y título de la carga</strong> (Permite que aparezca catalogada dentro del período contable de <strong>Agosto</strong> al filtrar por mes).
+                </span>
+              </label>
+            </div>
+
+            <div className="flex gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setCargaToAssignDate(null)}
+                disabled={assigningDate}
+                className="flex-1 py-2.5 border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-300 rounded-xl font-semibold hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors text-xs disabled:opacity-50 cursor-pointer"
+              >
+                Cancelar
+              </button>
+
+              <button
+                type="button"
+                onClick={handleConfirmAssignDate}
+                disabled={assigningDate || !newDateValue}
+                className="flex-1 py-2.5 bg-amber-600 hover:bg-amber-500 text-white font-bold rounded-xl shadow-md transition-all flex items-center justify-center gap-2 text-xs disabled:opacity-50 cursor-pointer"
+              >
+                {assigningDate ? (
+                  <>
+                    <RefreshCw className="animate-spin" size={14} /> Asignando fecha...
+                  </>
+                ) : (
+                  <>
+                    <Check size={14} /> Asignar Fecha a {cargaToAssignDate.total_registros} Movs
                   </>
                 )}
               </button>

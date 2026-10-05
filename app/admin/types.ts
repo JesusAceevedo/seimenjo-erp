@@ -338,5 +338,7 @@ export interface ComprobanteDeposito {
   iva_transacciones?: number;
   otros_cargos?: number;
   desglose_tickets?: any[] | null;
+  es_venta_mes_anterior?: boolean;
+  mes_venta?: string | null;
   [key: string]: any;
 }

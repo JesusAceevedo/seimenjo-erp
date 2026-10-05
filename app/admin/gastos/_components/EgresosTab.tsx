@@ -405,7 +405,7 @@ export default function EgresosTab({
               onClick={() => setShowXmlModal(true)}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-xs font-bold shadow-sm transition-colors"
             >
-              <UploadCloud size={13} /> Subir Masivo (XML)
+              <UploadCloud size={13} /> Subir Masivo (XML / PDF)
             </button>
             <button
               onClick={() => setManualModal({isOpen: true})}
@@ -713,14 +713,42 @@ export default function EgresosTab({
                             {hijos.length} {hijos.length === 1 ? 'Parcialidad' : 'Parcialidades'}
                           </span>
                         )}
-                        {g.conciliaciones_bancarias && g.conciliaciones_bancarias.length > 0 && (
-                          <span 
-                            className="px-1.5 py-0.5 rounded text-[8px] font-black bg-emerald-100 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 uppercase border border-emerald-300 dark:border-emerald-800"
-                            title={`Conciliado con ${g.conciliaciones_bancarias.length} pago(s) bancario(s)`}
-                          >
-                            💳 {g.conciliaciones_bancarias.length} {g.conciliaciones_bancarias.length === 1 ? 'Pago Conciliado' : 'Pagos Conciliados'}
-                          </span>
-                        )}
+                        {g.conciliaciones_bancarias && g.conciliaciones_bancarias.length > 0 && (() => {
+                          const concs = g.conciliaciones_bancarias;
+                          const isMulti = concs.length > 1;
+                          if (isMulti) {
+                            return (
+                              <div className="w-full mt-1.5 flex items-center gap-1.5 flex-wrap">
+                                <span 
+                                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[9px] font-black bg-indigo-100 dark:bg-indigo-950/80 text-indigo-800 dark:text-indigo-200 border border-indigo-300 dark:border-indigo-800 shadow-2xs"
+                                  title={concs.map((c: any) => {
+                                    const m = c.movimiento || c.movimiento_bancario || c.movimientos_bancarios;
+                                    const fStr = m?.fecha ? new Date(m.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : '';
+                                    return `${fStr}: -${formatCurrency(c.monto_asociado || m?.monto || 0)}`;
+                                  }).join(' | ')}
+                                >
+                                  <LinkIcon size={10} className="text-indigo-600 dark:text-indigo-400 shrink-0" />
+                                  <span>🔗 {concs.length} PAGOS BANCARIOS VINCULADOS</span>
+                                </span>
+                                <span className="text-[9px] font-mono font-bold text-gray-500 dark:text-gray-400">
+                                  ({concs.map((c: any) => {
+                                    const m = c.movimiento || c.movimiento_bancario || c.movimientos_bancarios;
+                                    const fStr = m?.fecha ? new Date(m.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : '';
+                                    return `${fStr ? `${fStr}: ` : ''}-${formatCurrency(c.monto_asociado || m?.monto || 0)}`;
+                                  }).join(' + ')})
+                                </span>
+                              </div>
+                            );
+                          }
+                          return (
+                            <span 
+                              className="px-1.5 py-0.5 rounded text-[8px] font-black bg-emerald-100 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 uppercase border border-emerald-300 dark:border-emerald-800"
+                              title="Conciliado con 1 pago bancario"
+                            >
+                              💳 1 Pago Conciliado
+                            </span>
+                          );
+                        })()}
                       </div>
                     </td>
 
@@ -804,6 +832,14 @@ export default function EgresosTab({
                       <div className="font-bold text-red-500 dark:text-red-400 text-sm">
                         -{formatCurrency(g.monto)}
                       </div>
+                      {g.conciliaciones_bancarias && g.conciliaciones_bancarias.length > 1 && (
+                        <div 
+                          className="text-[9px] font-black text-indigo-700 dark:text-indigo-300 mt-1 bg-indigo-50 dark:bg-indigo-950/40 px-2 py-0.5 rounded-lg border border-indigo-200 dark:border-indigo-800/50 inline-block shadow-2xs" 
+                          title="Pagado en múltiples parcialidades bancarias"
+                        >
+                          🔗 {g.conciliaciones_bancarias.length} pagos en banco
+                        </div>
+                      )}
                       {hasHijos && (() => {
                         const totalHijos = hijos.reduce((sum, h) => sum + Number(h.monto || 0), 0);
                         const totalAcumuladoGasto = Number(g.monto || 0) + totalHijos;

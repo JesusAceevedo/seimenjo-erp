@@ -9,6 +9,7 @@ import { useSessionToken } from '../../../lib/hooks/useSessionToken';
 import { CargasTab } from '../gastos/_components/CargasTab';
 import PeriodSelector from '../_components/PeriodSelector';
 import { usePeriod } from '../../../lib/hooks/usePeriod';
+import { fetchCuentasBancarias } from '../../../lib/cuentasBancarias';
 import { FileSpreadsheet, RefreshCw, ArrowLeft } from 'lucide-react';
 
 export const dynamic = 'force-dynamic';
@@ -29,12 +30,7 @@ export default function CargasEstadosCuentaPage() {
       const empresaId = await getEmpresaId();
       if (!empresaId) return;
 
-      const { data: cbData } = await supabase
-        .from('cuentas_bancarias')
-        .select('*')
-        .eq('empresa_id', empresaId)
-        .order('nombre', { ascending: true });
-
+      const cbData = await fetchCuentasBancarias(empresaId);
       setCuentasBancarias(cbData || []);
     } catch (err) {
       console.error('Error al cargar cuentas bancarias:', err);

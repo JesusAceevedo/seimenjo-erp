@@ -20,8 +20,11 @@ interface ChecklistCierreFiscalProps {
   diferenciaTarjetas: number;
   faltaPorDepositar: number;
   totalFacturaPublicoGeneral: number;
+  totalLabel?: string;
   formatCurrency: (val: number | string | null | undefined) => string;
   selectedMonth: string;
+  onOpenWizard?: () => void;
+  diasLaborablesSinTicket?: number;
 }
 
 export const ChecklistCierreFiscal: React.FC<ChecklistCierreFiscalProps> = ({
@@ -31,12 +34,15 @@ export const ChecklistCierreFiscal: React.FC<ChecklistCierreFiscalProps> = ({
   diferenciaTarjetas,
   faltaPorDepositar,
   totalFacturaPublicoGeneral,
+  totalLabel = 'Base calculada lista para Factura Global:',
   formatCurrency,
   selectedMonth,
+  onOpenWizard,
+  diasLaborablesSinTicket = 0,
 }) => {
   const [expanded, setExpanded] = useState(false);
 
-  const step1Done = totalTickets > 0;
+  const step1Done = totalTickets > 0 && diasLaborablesSinTicket === 0;
   const step2Done = totalTercerosDeducibles > 0;
   const step3Done = totalTarjetasBbva > 0;
   const step4Done = faltaPorDepositar === 0;
@@ -51,28 +57,46 @@ export const ChecklistCierreFiscal: React.FC<ChecklistCierreFiscalProps> = ({
             <Sparkles size={16} />
           </div>
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <h4 className="text-xs font-black uppercase tracking-wide text-gray-900 dark:text-gray-100">
                 Asistente de Cierre Mensual Fiscal ({selectedMonth || 'Período Actual'})
               </h4>
               <span className="text-[10px] font-extrabold px-2 py-0.2 rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-955 dark:text-emerald-300">
                 {completedSteps} de 4 comprobaciones
               </span>
+              {diasLaborablesSinTicket > 0 && (
+                <span className="text-[10px] font-extrabold px-2 py-0.2 rounded-full bg-amber-100 text-amber-900 dark:bg-amber-900/60 dark:text-amber-200 flex items-center gap-1">
+                  <AlertTriangle size={10} /> {diasLaborablesSinTicket} día(s) sin ticket
+                </span>
+              )}
             </div>
             <p className="text-[11px] text-gray-500 dark:text-gray-400 font-sans">
-              Base calculada lista para Factura Global: <strong className="text-emerald-600 dark:text-emerald-400 font-mono">{formatCurrency(totalFacturaPublicoGeneral)}</strong>
+              {totalLabel} <strong className="text-emerald-600 dark:text-emerald-400 font-mono">{formatCurrency(totalFacturaPublicoGeneral)}</strong>
             </p>
           </div>
         </div>
 
-        <button
-          type="button"
-          onClick={() => setExpanded(prev => !prev)}
-          className="flex items-center gap-1 text-[11px] font-bold text-gray-600 dark:text-gray-300 hover:text-emerald-600 dark:hover:text-emerald-400 transition cursor-pointer"
-        >
-          <span>{expanded ? 'Ocultar verificación' : 'Ver checklist de pasos'}</span>
-          {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-        </button>
+        <div className="flex items-center gap-3">
+          {onOpenWizard && (
+            <button
+              type="button"
+              onClick={onOpenWizard}
+              className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-[11px] flex items-center gap-1.5 shadow-sm transition-all cursor-pointer"
+            >
+              <Sparkles size={13} className="text-yellow-300" />
+              <span>Abrir Asistente 7 Pasos</span>
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={() => setExpanded(prev => !prev)}
+            className="flex items-center gap-1 text-[11px] font-bold text-gray-600 dark:text-gray-300 hover:text-emerald-600 dark:hover:text-emerald-400 transition cursor-pointer"
+          >
+            <span>{expanded ? 'Ocultar verificación' : 'Ver checklist de pasos'}</span>
+            {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+          </button>
+        </div>
       </div>
 
       {expanded && (

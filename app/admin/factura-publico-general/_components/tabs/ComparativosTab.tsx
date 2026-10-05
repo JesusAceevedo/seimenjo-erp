@@ -30,6 +30,26 @@ interface ComparativosTabProps {
   toggleExcludeComprobante: (id: string) => void;
   toggleProximoMesComp: (id: string, isCurrentlyProximo: boolean) => void;
   esMovimientoEfectivo: (concepto: string) => boolean;
+  bolsaTotalVentasMes?: number;
+  totalEfectivoParrot?: number;
+  totalParrotPayParrot?: number;
+  totalMontoDepositosMes?: number;
+  depositosNetosMes?: number;
+  ventasDiaSiguienteMes?: number;
+  setVentasDiaSiguienteMonto?: (monto: number) => void;
+  diferenciaBolsaCierre?: number;
+  depositosMes?: any[];
+  depositosNoEsVentaExcluidos?: number;
+  depositosPendientesDeVincular?: number;
+  depositosVinculadosCuadrados?: number;
+  toggleNoEsVentaMovement?: any;
+  cashDepositPeriods?: Record<string, 'anterior' | 'actual' | 'siguiente'>;
+  setCashDepositPeriod?: (movementId: string, period: 'anterior' | 'actual' | 'siguiente') => void;
+  vincularComprobante?: any;
+  desvincularComprobante?: any;
+  ticketsFinDeMesPendientes?: any[];
+  montoTicketsFinDeMesPendientes?: number;
+  ticketsMes?: any[];
 }
 
 export const ComparativosTab: React.FC<ComparativosTabProps> = ({
@@ -50,6 +70,26 @@ export const ComparativosTab: React.FC<ComparativosTabProps> = ({
   toggleExcludeComprobante,
   toggleProximoMesComp,
   esMovimientoEfectivo,
+  bolsaTotalVentasMes = 0,
+  totalEfectivoParrot = 0,
+  totalParrotPayParrot = 0,
+  totalMontoDepositosMes = 0,
+  depositosNetosMes = 0,
+  ventasDiaSiguienteMes = 0,
+  setVentasDiaSiguienteMonto,
+  diferenciaBolsaCierre = 0,
+  depositosMes = [],
+  depositosNoEsVentaExcluidos = 0,
+  depositosPendientesDeVincular = 0,
+  depositosVinculadosCuadrados = 0,
+  toggleNoEsVentaMovement,
+  cashDepositPeriods = {},
+  setCashDepositPeriod,
+  vincularComprobante,
+  desvincularComprobante,
+  ticketsFinDeMesPendientes = [],
+  montoTicketsFinDeMesPendientes = 0,
+  ticketsMes = [],
 }) => {
   return (
     <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl overflow-hidden shadow-sm flex-1 min-h-0 flex flex-col">
@@ -127,7 +167,14 @@ export const ComparativosTab: React.FC<ComparativosTabProps> = ({
       {/* VISTA SEGÚN SUBPESTAÑA SELECCIONADA */}
       {subTabComparativo === 'efectivo' ? (
         <ArqueoEfectivoSubTab
-          controlEfectivo={controlEfectivo}
+          ticketsMes={ticketsMes}
+          depositosBbvaMes={comparativoBbvaBanco.bbvaMovimientos || []}
+          selectedMonth={selectedMonth}
+          cashDepositPeriods={cashDepositPeriods}
+          setCashDepositPeriod={setCashDepositPeriod}
+          esMovimientoEfectivo={esMovimientoEfectivo}
+          vincularComprobante={vincularComprobante}
+          desvincularComprobante={desvincularComprobante}
           formatCurrency={formatCurrency}
         />
       ) : subTabComparativo === 'tarjetas' ? (
@@ -156,6 +203,24 @@ export const ComparativosTab: React.FC<ComparativosTabProps> = ({
           toggleProximoMesComp={toggleProximoMesComp}
           formatCurrency={formatCurrency}
           esMovimientoEfectivo={esMovimientoEfectivo}
+          bolsaTotalVentasMes={bolsaTotalVentasMes}
+          totalEfectivoParrot={totalEfectivoParrot}
+          totalParrotPayParrot={totalParrotPayParrot}
+          totalMontoDepositosMes={totalMontoDepositosMes}
+          depositosNetosMes={depositosNetosMes}
+          ventasDiaSiguienteMes={ventasDiaSiguienteMes}
+          setVentasDiaSiguienteMonto={setVentasDiaSiguienteMonto}
+          diferenciaBolsaCierre={diferenciaBolsaCierre}
+          depositosMes={depositosMes}
+          depositosNoEsVentaExcluidos={depositosNoEsVentaExcluidos}
+          depositosPendientesDeVincular={depositosPendientesDeVincular}
+          depositosVinculadosCuadrados={depositosVinculadosCuadrados}
+          toggleNoEsVentaMovement={toggleNoEsVentaMovement}
+          vincularComprobante={vincularComprobante}
+          desvincularComprobante={desvincularComprobante}
+          ticketsFinDeMesPendientes={ticketsFinDeMesPendientes}
+          montoTicketsFinDeMesPendientes={montoTicketsFinDeMesPendientes}
+          ticketsMes={ticketsMes}
         />
       )}
 

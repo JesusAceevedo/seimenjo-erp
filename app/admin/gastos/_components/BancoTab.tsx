@@ -14,7 +14,7 @@ import {
   ArrowRightLeft, Play, RefreshCw, FileSpreadsheet, Plus, Trash2, Edit3,
   Layers, Check, X, UploadCloud, Paperclip, AlertTriangle, Filter, Eye, Link, Ticket, Landmark,
   Tag, Lock, Unlock, ChevronDown, ChevronRight, Users, Receipt, SlidersHorizontal, TrendingUp, TrendingDown,
-  History, Sparkles, ShieldAlert, Banknote
+  History, Sparkles, ShieldAlert, Banknote, Clock
 } from 'lucide-react';
 import { formatCurrency } from '../../../../lib/formatters';
 import type { MovimientoBancario, EstatusConciliacion, GastoReconciliable, FormaPago, ComprobanteDeposito } from '../../types';
@@ -24,18 +24,21 @@ import { useCfdiViewer } from '../../_components/CfdiViewerContext';
 import CargasTab from './CargasTab';
 import { generarSaldoFavorDesdeConciliacion } from '../../proveedores/proveedoresActions';
 import { esComisionTpv, esComisionBancaria } from '../commissionUtils';
+import { isComprobanteVentaMesAnterior } from '../reconciliationUtils';
+import { getCuentasBancariasAction } from '../actions';
 import { useSessionToken } from '../../../../lib/hooks/useSessionToken';
 import {
   actualizarCategoriaMovimientos,
   depurarMovimientosDuplicadosAction,
   obtenerPropuestasAutoConciliacion,
   aplicarPropuestasConciliacion,
-  PropuestaConciliacionItem
+  type PropuestaConciliacionItem
 } from '../reconciliationActions';
 import AutoConciliacionModal from './AutoConciliacionModal';
 import HistorialConciliacionModal from './HistorialConciliacionModal';
 import DetalleTicketsModal from './DetalleTicketsModal';
 import { ArqueoEfectivoTab } from './ArqueoEfectivoTab';
+import AccountSelectorDropdown from './AccountSelectorDropdown';
 
 // ── Tipos de estado que se pasan como props ──────────────────────────────────
 
@@ -188,7 +191,11 @@ export interface BancoTabProps {
   handleUpdateMesConciliacion?: (movimientoId: string, mes: string) => Promise<void>;
 
   comprobantes?: ComprobanteDeposito[];
+  allComprobantes?: ComprobanteDeposito[];
+  allMovimientos?: MovimientoBancario[];
   selectedMonth?: string;
+  cashDepositId?: string;
+  cashTicketId?: string;
   onCrearComprobante?: (payload: any) => Promise<any>;
   onActualizarComprobante?: (id: string, payload: any) => Promise<any>;
   onEliminarComprobante?: (id: string) => Promise<any>;
@@ -237,7 +244,8 @@ function filterMovimientos(
   visibilidadesSelected: string[],
   categoriasSelected: string[],
   cuentaId: string,
-  categoriasCatalog: any[] = []
+  categoriasCatalog: any[] = [],
+  cuentasBancarias: any[] = []
 ): MovimientoBancario[] {
   // Pass 1: identificar todos los IDs de Gastos y Pedidos que coinciden directamente con la búsqueda o cuyos movimientos vinculados coinciden
   const matchingGastoIds = new Set<string>();
@@ -333,7 +341,23 @@ function filterMovimientos(
   }
 
   return movimientos.filter((m) => {
-    if (cuentaId && m.cuenta_bancaria_id !== cuentaId) return false;
+    if (cuentaId) {
+      const directMatch = m.cuenta_bancaria_id === cuentaId || (m as any).cuentas_bancarias?.id === cuentaId;
+      if (!directMatch) {
+        const selCuenta = cuentasBancarias?.find(cb => cb.id === cuentaId);
+        const selName = (selCuenta?.nombre || '').toUpperCase();
+        const hasNoAccount = !m.cuenta_bancaria_id && !(m as any).cuentas_bancarias?.id;
+        const concept = (m.concepto || '').toUpperCase();
+        const matchesFallback = hasNoAccount && (
+          (selName.includes('BBVA') && (concept.includes('BBVA') || concept.includes('BANCOMER'))) ||
+          (selName.includes('CAJA') && (concept.includes('CAJA') || concept.includes('EFECTIVO'))) ||
+          (selName.includes('PARROT') && concept.includes('PARROT')) ||
+          (!selName.includes('CAJA') && !selName.includes('PARROT') && !concept.includes('CAJA') && !concept.includes('PARROT')) ||
+          (cuentasBancarias.length <= 1)
+        );
+        if (!matchesFallback) return false;
+      }
+    }
     if (busqueda.trim()) {
       const b = busqueda.toLowerCase().trim();
       const directMatch =
@@ -557,7 +581,7 @@ function detectarDiscrepanciaPago(conceptoBanco: string, metodoPagoGasto: string
 
 export default function BancoTab({
   bancoSubTab, setBancoSubTab,
-  cuentasBancarias = [],
+  cuentasBancarias: propCuentasBancarias = [],
   movimientos, estatusCatalog, formasPago, categoriasMovimiento = [], pedidosPendientes, gastosReconciliables,
   busquedaBanco, setBusquedaBanco,
   filtroBancoTipo, setFiltroBancoTipo,
@@ -590,7 +614,11 @@ export default function BancoTab({
   handleBulkMoveMovimientos,
   handleUpdateMesConciliacion,
   comprobantes = [],
+  allComprobantes = [],
+  allMovimientos = [],
   selectedMonth,
+  cashDepositId,
+  cashTicketId,
   onCrearComprobante,
   onActualizarComprobante,
   onEliminarComprobante,
@@ -610,6 +638,21 @@ export default function BancoTab({
   const { openCfdi } = useCfdiViewer();
   const handleViewCfdi = onViewCfdi || openCfdi;
   const getSessionToken = useSessionToken();
+
+  const [internalCuentas, setInternalCuentas] = React.useState<any[]>([]);
+  React.useEffect(() => {
+    if (!propCuentasBancarias || propCuentasBancarias.length === 0) {
+      getCuentasBancariasAction()
+        .then(res => {
+          if (res && res.length > 0) setInternalCuentas(res);
+        })
+        .catch(err => console.warn('Fallback getCuentasBancariasAction error in BancoTab:', err));
+    }
+  }, [propCuentasBancarias]);
+
+  const cuentasBancarias = (propCuentasBancarias && propCuentasBancarias.length > 0)
+    ? propCuentasBancarias
+    : internalCuentas;
 
   const [internalSelectedCuentaId, setInternalSelectedCuentaId] = React.useState('');
   const selectedCuentaId = propSelectedCuentaId !== undefined ? propSelectedCuentaId : internalSelectedCuentaId;
@@ -636,10 +679,17 @@ export default function BancoTab({
   const [showFiltrosAvanzados, setShowFiltrosAvanzados] = React.useState<boolean>(false);
   const [guardarExcedenteComoSaldoFavor, setGuardarExcedenteComoSaldoFavor] = React.useState<boolean>(false);
   const [ingresosSubSeccion, setIngresosSubSeccion] = React.useState<'comprobantes' | 'global' | 'factura_publico'>('comprobantes');
-  const [compSubFiltro, setCompSubFiltro] = React.useState<'todos' | 'tickets' | 'depositos' | 'arqueo'>('todos');
+  const [compSubFiltro, setCompSubFiltro] = React.useState<'todos' | 'tickets' | 'depositos' | 'arqueo' | 'ventas_mes_anterior' | 'ventas_mes_actual'>(() => cashDepositId ? 'arqueo' : 'todos');
+
+  const countVentasMesAnterior = React.useMemo(() => {
+    return (comprobantes || []).filter(c => isComprobanteVentaMesAnterior(c, selectedMonth)).length;
+  }, [comprobantes, selectedMonth]);
 
   const filteredComprobantes = React.useMemo(() => {
     return comprobantes.filter(c => {
+      const isVentaMesAnt = isComprobanteVentaMesAnterior(c, selectedMonth);
+      if (compSubFiltro === 'ventas_mes_anterior' && !isVentaMesAnt) return false;
+      if (compSubFiltro === 'ventas_mes_actual' && isVentaMesAnt) return false;
       if (compSubFiltro === 'tickets' && c.tipo === 'deposito_ventanilla') return false;
       if (compSubFiltro === 'depositos' && c.tipo !== 'deposito_ventanilla') return false;
       if (compSubFiltro === 'arqueo' && c.tipo === 'deposito_ventanilla') return false;
@@ -650,22 +700,29 @@ export default function BancoTab({
       const isParrot = selCuenta?.nombre?.toUpperCase().includes('PARROT');
       const isBBVA = selCuenta?.nombre?.toUpperCase().includes('BBVA');
 
-      // Si el comprobante ya tiene una cuenta bancaria asignada
+      const tarjetaTotalBBVA = Number(c.monto_debito || 0) + Number(c.propina_debito || 0) + Number(c.monto_credito || 0) + Number(c.propina_credito || 0) + Number(c.monto_amex || 0) + Number(c.propina_amex || 0);
+      const efectivoTotal = Number(c.monto_efectivo || 0) + Number(c.propina_efectivo || 0);
+      const parrotpayTotal = Number(c.monto_parrotpay || 0) + Number(c.propina_parrotpay || 0);
+
+      // 1. Coincidencia directa de ID de cuenta bancaria asignada
       if (c.cuenta_bancaria_id) {
-        if (c.cuenta_bancaria_id === selectedCuentaId) return true;
-        // Si es un corte con efectivo y la cuenta seleccionada es Caja Chica
-        if (isCaja && (Number(c.monto_efectivo || 0) > 0 || Number(c.propina_efectivo || 0) > 0)) return true;
-        return false;
+        return c.cuenta_bancaria_id === selectedCuentaId;
       }
 
-      // Si no tiene cuenta_bancaria_id explícita:
-      if (isCaja && (Number(c.monto_efectivo || 0) > 0 || Number(c.propina_efectivo || 0) > 0)) return true;
-      if (isParrot && (Number(c.monto_parrotpay || 0) > 0 || Number(c.propina_parrotpay || 0) > 0 || c.tipo === 'corte_parrot')) return true;
+      // 2. Si no tiene cuenta asignada, inferir por su tipo y descripción
+      const tipo = (c.tipo || '').toLowerCase();
+      const desc = (c.descripcion || '').toUpperCase();
+
+      if (isParrot) {
+        return tipo.includes('parrot') || desc.includes('PARROT') || parrotpayTotal > 0;
+      }
+
+      if (isCaja) {
+        return tipo.includes('caja') || tipo.includes('efectivo') || desc.includes('CAJA') || desc.includes('EFECTIVO') || efectivoTotal > 0;
+      }
 
       if (isBBVA) {
-        if (c.tipo === 'corte_parrot') return false;
-        const tarjetaTotalBBVA = Number(c.monto_debito || 0) + Number(c.propina_debito || 0) + Number(c.monto_credito || 0) + Number(c.propina_credito || 0) + Number(c.monto_amex || 0) + Number(c.propina_amex || 0);
-        if (tarjetaTotalBBVA > 0 || c.tipo === 'corte_bbva') return true;
+        return tipo.includes('bbva') || tipo === 'deposito_ventanilla' || desc.includes('BBVA') || desc.includes('BANCOMER');
       }
 
       return false;
@@ -722,11 +779,20 @@ export default function BancoTab({
   const [isApplyingPropuestas, setIsApplyingPropuestas] = React.useState<boolean>(false);
 
   const handleOpenAutoConciliacion = async () => {
-    if (!selectedCuentaId) {
-      alert('Por favor selecciona una cuenta bancaria.');
-      return;
+    let targetCuentaId = selectedCuentaId;
+    if (!targetCuentaId) {
+      const nonCaja = cuentasBancarias?.find(cb => !cb.nombre?.toUpperCase().includes('CAJA CHICA') && !cb.nombre?.toUpperCase().includes('EFECTIVO')) || cuentasBancarias?.[0];
+      if (nonCaja) {
+        targetCuentaId = nonCaja.id;
+        setSelectedCuentaId(nonCaja.id);
+      } else {
+        alert('Por favor selecciona una cuenta bancaria.');
+        return;
+      }
     }
-    if (isCajaChicaSelected) {
+    const targetCuentaObj = cuentasBancarias?.find(cb => cb.id === targetCuentaId);
+    const isTargetCaja = targetCuentaObj?.nombre?.toUpperCase().includes('CAJA CHICA') || targetCuentaObj?.nombre?.toUpperCase().includes('EFECTIVO');
+    if (isTargetCaja) {
       alert('Caja Chica es una cuenta de efectivo físico. Las facturas y gastos en efectivo ya están registrados directamente.');
       return;
     }
@@ -734,7 +800,7 @@ export default function BancoTab({
     setAutoConciliacionModalOpen(true);
     try {
       const activeToken = token || (await getSessionToken());
-      const res = await obtenerPropuestasAutoConciliacion(activeToken, selectedCuentaId, selectedMonth);
+      const res = await obtenerPropuestasAutoConciliacion(activeToken, targetCuentaId, selectedMonth);
       if (res.success && res.propuestas) {
         setPropuestasAutoConciliacion(res.propuestas);
       } else {
@@ -1251,6 +1317,8 @@ export default function BancoTab({
     ivaTransacciones: string;
     otrosCargos: string;
     desgloseTickets?: any[];
+    esVentaMesAnterior: boolean;
+    mesVenta: string;
   }>({
     tipo: 'deposito_ventanilla',
     fecha: new Date().toISOString().substring(0, 10),
@@ -1274,7 +1342,9 @@ export default function BancoTab({
     comisionTransacciones: '',
     ivaTransacciones: '',
     otrosCargos: '',
-    desgloseTickets: []
+    desgloseTickets: [],
+    esVentaMesAnterior: false,
+    mesVenta: ''
   });
 
   const [viewingTicketsComp, setViewingTicketsComp] = React.useState<any | null>(null);
@@ -1314,6 +1384,7 @@ export default function BancoTab({
   const [selectedLinkMovIds, setSelectedLinkMovIds] = React.useState<Set<string>>(new Set());
   const [linkDateFrom, setLinkDateFrom] = React.useState('');
   const [linkDateTo, setLinkDateTo] = React.useState('');
+  const [linkScopeMonth, setLinkScopeMonth] = React.useState<'current' | 'next' | 'all'>('current');
   const [linkingBatch, setLinkingBatch] = React.useState(false);
 
   const [uploadedXmlAmounts, setUploadedXmlAmounts] = React.useState<{[key: string]: number}>({});
@@ -1966,7 +2037,8 @@ export default function BancoTab({
     visibilidadesSelected, 
     categoriasSelected, 
     selectedCuentaId,
-    categoriasMovimiento || []
+    categoriasMovimiento || [],
+    cuentasBancarias || []
   );
 
   const filtered = React.useMemo(() => {
@@ -2040,6 +2112,123 @@ export default function BancoTab({
       cn.includes('CLIENTE')
     );
   }, []);
+
+  // Mapa de movimientos vinculados a una misma factura (pagos en partes / múltiples exhibiciones)
+  const sharedInvoicesMap = React.useMemo(() => {
+    const docToMovs = new Map<string, any[]>();
+
+    (movimientos || []).forEach((m: any) => {
+      // 1. Por conciliaciones bancarias
+      if (m.conciliaciones_bancarias && Array.isArray(m.conciliaciones_bancarias)) {
+        m.conciliaciones_bancarias.forEach((link: any) => {
+          const gId = link.gasto?.id || link.gastos?.id || link.gasto_id;
+          const pId = link.pedido?.id || link.pedidos?.id || link.pedido_id;
+          const docKey = gId ? `gasto:${gId}` : (pId ? `pedido:${pId}` : null);
+          if (docKey) {
+            const list = docToMovs.get(docKey) || [];
+            if (!list.some(x => x.id === m.id)) list.push(m);
+            docToMovs.set(docKey, list);
+          }
+        });
+      }
+
+      // 2. Por XML directo o UUID compartido
+      if (m.xml_url) {
+        const xmlParts = m.xml_url.split(',').map((x: string) => x.trim().toLowerCase()).filter(Boolean);
+        xmlParts.forEach((xp: string) => {
+          const baseName = xp.split('/').pop() || xp;
+          const docKey = `xml:${baseName}`;
+          const list = docToMovs.get(docKey) || [];
+          if (!list.some(x => x.id === m.id)) list.push(m);
+          docToMovs.set(docKey, list);
+        });
+      }
+
+      // 3. Revisar en gastosFacturados si este movimiento es el movimiento_bancario_id
+      if (gastosFacturados && Array.isArray(gastosFacturados)) {
+        gastosFacturados.forEach((g: any) => {
+          if (g.movimiento_bancario_id === m.id) {
+            const docKey = `gasto:${g.id}`;
+            const list = docToMovs.get(docKey) || [];
+            if (!list.some(x => x.id === m.id)) list.push(m);
+            docToMovs.set(docKey, list);
+          }
+        });
+      }
+    });
+
+    const movIdToGroup = new Map<string, {
+      allMovs: any[];
+      siblingMovs: any[];
+      totalPagos: number;
+      thisIndex: number;
+      facturaTotal: number;
+      sumaPagos: number;
+      docConcepto?: string;
+      docUuid?: string;
+      proveedorNombre?: string;
+    }>();
+
+    docToMovs.forEach((movs) => {
+      if (movs.length > 1) {
+        const sortedMovs = [...movs].sort((a, b) => new Date(a.fecha).getTime() - new Date(b.fecha).getTime());
+        const suma = sortedMovs.reduce((acc, x) => acc + Math.abs(Number(x.monto || x.retiro || 0)), 0);
+
+        let docTotal = suma;
+        let docConcepto = '';
+        let docUuid = '';
+        let provNombre = '';
+
+        for (const sm of sortedMovs) {
+          sm.conciliaciones_bancarias?.forEach((l: any) => {
+            const g = l.gasto || l.gastos;
+            if (g) {
+              if (g.monto) docTotal = Number(g.monto);
+              if (g.concepto) docConcepto = g.concepto;
+              if (g.uuid_fiscal) docUuid = g.uuid_fiscal;
+              if (g.proveedores?.nombre_comercial) provNombre = g.proveedores.nombre_comercial;
+            }
+          });
+          if (docConcepto) break;
+        }
+
+        if (!docConcepto && gastosFacturados && Array.isArray(gastosFacturados)) {
+          for (const sm of sortedMovs) {
+            const matchGasto = gastosFacturados.find((g: any) => 
+              (g.xml_url && sm.xml_url && g.xml_url.split(',').some((u: string) => sm.xml_url.split(',').includes(u))) ||
+              g.movimiento_bancario_id === sm.id
+            );
+            if (matchGasto) {
+              docTotal = Number(matchGasto.monto || docTotal);
+              docConcepto = matchGasto.concepto || '';
+              docUuid = matchGasto.uuid_fiscal || '';
+              provNombre = matchGasto.proveedores?.nombre_comercial || '';
+              break;
+            }
+          }
+        }
+
+        sortedMovs.forEach((mItem, idx) => {
+          const existing = movIdToGroup.get(mItem.id);
+          if (!existing || existing.allMovs.length < sortedMovs.length) {
+            movIdToGroup.set(mItem.id, {
+              allMovs: sortedMovs,
+              siblingMovs: sortedMovs.filter(x => x.id !== mItem.id),
+              totalPagos: sortedMovs.length,
+              thisIndex: idx,
+              facturaTotal: docTotal,
+              sumaPagos: suma,
+              docConcepto,
+              docUuid,
+              proveedorNombre: provNombre
+            });
+          }
+        });
+      }
+    });
+
+    return movIdToGroup;
+  }, [movimientos, gastosFacturados]);
 
   const accumulatedGroups = React.useMemo(() => {
     if (!agruparVisual) return [];
@@ -2417,7 +2606,7 @@ export default function BancoTab({
 
   return (
     <div className="flex flex-col flex-1 font-sans overflow-hidden">
-      <div className="flex-1 overflow-y-auto flex flex-col min-h-0">
+      <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
 
         {/* ── SUB-TAB 1: MOVIMIENTOS ───────────────────────────────────────── */}
         {bancoSubTab === 'movimientos' && (
@@ -2553,23 +2742,19 @@ export default function BancoTab({
                     />
                   </div>
 
-                  <select
-                    value={selectedCuentaId}
-                    onChange={(e) => {
-                      setSelectedCuentaId(e.target.value);
+                  <AccountSelectorDropdown
+                    selectedCuentaId={selectedCuentaId}
+                    onSelect={(id) => {
+                      setSelectedCuentaId(id);
                       setBancoPage(0);
                     }}
-                    className="bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 px-3 py-2 rounded-lg text-xs outline-none focus:ring-1 focus:ring-amber-500 transition-all text-gray-900 dark:text-gray-100 font-sans cursor-pointer font-semibold"
-                  >
-                    <option value="">-- Seleccionar Cuenta --</option>
-                    {cuentasBancarias?.map(c => (
-                      <option key={c.id} value={c.id}>{c.nombre} ({c.moneda})</option>
-                    ))}
-                  </select>
+                    cuentasBancarias={cuentasBancarias}
+                    placeholder="🏦 Todas las Cuentas"
+                  />
 
                   <button
                     onClick={handleOpenAutoConciliacion}
-                    disabled={!selectedCuentaId}
+                    disabled={!selectedCuentaId && (!cuentasBancarias || cuentasBancarias.length === 0)}
                     className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 shadow-md cursor-pointer"
                     title="Conciliación Inteligente Automática con Propuestas"
                   >
@@ -2640,98 +2825,6 @@ export default function BancoTab({
                   </button>
                 </div>
 
-                {/* Resumen Horizontal de Saldos y Comisiones Acumuladas */}
-                {selectedCuentaId && (() => {
-                  const cuenta = cuentasBancarias?.find(c => c.id === selectedCuentaId);
-                  const isCajaChica = cuenta?.nombre?.toUpperCase().includes('CAJA CHICA') || cuenta?.nombre?.toUpperCase().includes('EFECTIVO');
-
-                  // Si es caja chica, las entradas son cortes de venta en efectivo + depósitos/traspasos
-                  const entradasEfectivoVentas = isCajaChica
-                    ? (comprobantes || [])
-                        .filter(c => c.tipo !== 'deposito_ventanilla')
-                        .reduce((sum, c) => sum + Number(c.monto_efectivo || 0) + Number(c.propina_efectivo || 0), 0)
-                    : 0;
-
-                  const depositos = isCajaChica
-                    ? entradasEfectivoVentas + filtered.filter(m => m.tipo_movimiento === 'Deposito').reduce((acc, m) => acc + Math.abs(Number(m.monto)), 0)
-                    : filtered.filter(m => m.tipo_movimiento === 'Deposito').reduce((acc, m) => acc + Math.abs(Number(m.monto)), 0);
-
-                  const isMovRetiro = (m: MovimientoBancario) => {
-                    const rawType = (m.tipo_movimiento || '').toLowerCase();
-                    return rawType === 'retiro' || rawType === 'cargo' || rawType === 'egreso' || Number(m.retiro || 0) > 0 || Number(m.monto || 0) < 0;
-                  };
-
-                  const retiros = filtered.filter(m => isMovRetiro(m)).reduce((acc, m) => acc + Math.abs(Number(m.monto || m.retiro || 0)), 0);
-                  const saldoInicial = Number(cuenta?.saldo_inicial || 0);
-                  const saldoCalculado = saldoInicial + depositos - retiros;
-
-                  const tpvComisionesTotal = filtered
-                    .filter(m => isMovRetiro(m) && (esComisionTpv(m.concepto, getCatName(m)) || (m.concepto || '').includes('Total de comisiones TPV')))
-                    .reduce((acc, m) => acc + Math.abs(Number(m.monto || m.retiro || 0)), 0);
-
-                  const bancoComisionesTotal = filtered
-                    .filter(m => isMovRetiro(m) && (esComisionBancaria(m.concepto, getCatName(m)) || (m.concepto || '').includes('Total de comisiones bancarias')))
-                    .reduce((acc, m) => acc + Math.abs(Number(m.monto || m.retiro || 0)), 0);
-
-                  return (
-                    <div className="flex flex-col gap-2 shrink-0 font-sans">
-                      <div className="flex gap-6 items-center bg-gray-50/50 dark:bg-gray-900/30 p-2.5 rounded-xl border border-gray-200 dark:border-gray-800 text-[11px] flex-wrap">
-                        <span className="text-[10px] font-extrabold text-gray-400 dark:text-gray-500 uppercase tracking-wider">
-                          {isCajaChica ? 'Cuadre Caja Chica (Efectivo):' : 'Cuadre de Saldos:'}
-                        </span>
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-gray-550 dark:text-gray-400 font-medium">Saldo Inicial:</span>
-                          <span className="font-mono font-bold text-gray-800 dark:text-gray-200">{formatCurrency(saldoInicial)}</span>
-                        </div>
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-emerald-600 dark:text-emerald-500 font-medium">{isCajaChica ? '+ Entradas (Ventas/Fondeo):' : '+ Depósitos:'}</span>
-                          <span className="font-mono font-bold text-emerald-600 dark:text-emerald-500">{formatCurrency(depositos)}</span>
-                        </div>
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-red-600 dark:text-red-500 font-medium">{isCajaChica ? '- Pagos Facturas/Gastos:' : '- Retiros:'}</span>
-                          <span className="font-mono font-bold text-red-600 dark:text-red-400">{formatCurrency(retiros)}</span>
-                        </div>
-                        <div className="h-4 w-px bg-gray-300 dark:bg-gray-700 hidden sm:block" />
-                        <div className="flex items-center gap-1.5">
-                          <span className="font-bold text-gray-700 dark:text-gray-300">{isCajaChica ? 'Saldo en Caja:' : 'Saldo ERP:'}</span>
-                          <span className="font-mono font-extrabold text-xs text-gray-900 dark:text-white bg-amber-500/10 dark:bg-amber-500/20 px-2 py-0.5 rounded-md border border-amber-500/20">
-                            {formatCurrency(saldoCalculado)}
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Barra de Comisiones Acumuladas (Solo para cuentas bancarias) */}
-                      {!isCajaChica && (
-                        <div className="flex gap-4 items-center bg-purple-50/40 dark:bg-purple-955/20 p-2.5 rounded-xl border border-purple-200/80 dark:border-purple-900/40 text-[11px] flex-wrap">
-                          <span className="text-[10px] font-extrabold text-purple-600 dark:text-purple-400 uppercase tracking-wider flex items-center gap-1">
-                            <Layers size={13} /> Comisiones Acumuladas:
-                          </span>
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-gray-600 dark:text-gray-400 font-medium">Total Comisiones TPV:</span>
-                            <span className="font-mono font-bold text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-955/40 px-2 py-0.5 rounded border border-rose-200 dark:border-rose-900/40">
-                              {formatCurrency(tpvComisionesTotal)}
-                            </span>
-                          </div>
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-gray-600 dark:text-gray-400 font-medium">Total Comisiones Bancarias:</span>
-                            <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-955/40 px-2 py-0.5 rounded border border-indigo-200 dark:border-indigo-900/40">
-                              {formatCurrency(bancoComisionesTotal)}
-                            </span>
-                          </div>
-                          {onConsolidarComisiones && (
-                            <button
-                              onClick={onConsolidarComisiones}
-                              className="ml-auto px-3 py-1 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-[10px] font-extrabold transition-all shadow-sm flex items-center gap-1 cursor-pointer"
-                              title="Consolidar comisiones individuales en registros acumulados TPV y Bancarias"
-                            >
-                              <Layers size={12} /> Consolidar Comisiones
-                            </button>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })()}
 
                 {/* Grid de Checklists de Filtro (Colapsable) */}
                 {showFiltrosAvanzados && (
@@ -3134,6 +3227,7 @@ export default function BancoTab({
                         const color = m.estatus_conciliacion_bancaria?.color || '#9CA3AF';
                         const dateStr = new Date(m.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' });
                         const isRetiro = isMovRetiro(m);
+                        const sharedInfo = sharedInvoicesMap.get(m.id);
 
                         let rowBgClass = 'hover:bg-gray-50 dark:hover:bg-gray-900/10 transition-colors';
                         if (isChild) {
@@ -3161,6 +3255,8 @@ export default function BancoTab({
                               rowBgClass = 'bg-emerald-50/40 dark:bg-emerald-955/20 border-l-4 border-emerald-400 dark:border-emerald-600 hover:bg-emerald-100/50';
                               break;
                           }
+                        } else if (sharedInfo) {
+                          rowBgClass = 'bg-gradient-to-r from-indigo-50/70 via-indigo-50/30 to-transparent dark:from-indigo-955/40 dark:via-indigo-955/15 dark:to-transparent border-l-4 border-indigo-500 dark:border-indigo-400 hover:bg-indigo-100/50 dark:hover:bg-indigo-900/30 transition-all';
                         }
 
                         return (
@@ -3184,6 +3280,22 @@ export default function BancoTab({
                               {dateStr}
                             </td>
                             <td className="p-3">
+                              {sharedInfo && (
+                                <div className="mb-1.5 flex items-center gap-1.5 flex-wrap animate-in fade-in duration-150">
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md text-[9.5px] font-black bg-indigo-600 text-white shadow-xs">
+                                    <Link size={11} className="shrink-0 animate-pulse" />
+                                    <span>🔗 FACTURA COMPARTIDA • PAGO {sharedInfo.thisIndex + 1} DE {sharedInfo.totalPagos}</span>
+                                  </span>
+                                  <span className="font-mono text-[9px] font-black px-1.5 py-0.5 rounded bg-indigo-100 dark:bg-indigo-900/80 text-indigo-900 dark:text-indigo-200 border border-indigo-200 dark:border-indigo-800">
+                                    Total Factura: {formatCurrency(sharedInfo.facturaTotal)}
+                                  </span>
+                                  {sharedInfo.siblingMovs.length > 0 && (
+                                    <span className="text-[9px] font-bold text-indigo-700 dark:text-indigo-300">
+                                      (Vinculado con: {sharedInfo.siblingMovs.map(s => `${new Date(s.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })} [-${formatCurrency(Math.abs(s.monto))}]`).join(', ')})
+                                    </span>
+                                  )}
+                                </div>
+                              )}
                               <div className="flex items-center gap-2 flex-wrap">
                                 <div className="font-bold text-gray-800 dark:text-gray-200">{m.concepto}</div>
                                 {(m as any)._isCajaGasto && (
@@ -3262,87 +3374,70 @@ export default function BancoTab({
                               })()}
 
                               {/* Mostrar detalles de la conciliación si existen */}
-                              {m.conciliaciones_bancarias && m.conciliaciones_bancarias.length > 0 && (() => {
-                                const totalAcumuladoGasto = m.conciliaciones_bancarias.reduce((sum: number, link: any) => {
+                              {(sharedInfo || (m.conciliaciones_bancarias && m.conciliaciones_bancarias.length > 0)) && (() => {
+                                const concList = m.conciliaciones_bancarias || [];
+                                const allMovs = sharedInfo ? sharedInfo.allMovs : [m];
+                                const totalPagadoAcumulado = sharedInfo ? sharedInfo.sumaPagos : concList.reduce((sum: number, link: any) => {
                                   return sum + Number(link.monto_asociado || (link.gasto ? link.gasto.monto : link.pedido ? link.pedido.precio_total : 0));
                                 }, 0);
+                                const docTotal = sharedInfo ? sharedInfo.facturaTotal : totalPagadoAcumulado;
                                 const montoMov = Math.abs(Number(m.monto));
-                                const difMonto = montoMov - totalAcumuladoGasto;
-                                const esCoincidente = Math.abs(difMonto) < 0.05;
+                                const difMonto = montoMov - totalPagadoAcumulado;
+                                const esCoincidente = Math.abs(docTotal - totalPagadoAcumulado) < 0.05;
 
                                 return (
                                   <div className="mt-2 space-y-1.5 font-sans">
                                     {/* BANNER VISUAL DE PAGOS VINCULADOS / DIVIDIDOS ENTRE MULTIPLES MOVIMIENTOS */}
-                                    {(() => {
-                                      const linkedMovementsMap: any[] = [];
-                                      m.conciliaciones_bancarias.forEach((link: any) => {
-                                        const isG = !!link.gasto;
-                                        const targetId = isG ? link.gasto?.id : link.pedido?.id;
-                                        if (!targetId) return;
-
-                                        movimientos.forEach((otherM: any) => {
-                                          if (otherM.id === m.id) return;
-                                          const oLink = otherM.conciliaciones_bancarias?.find((l: any) =>
-                                            (isG && l.gasto?.id === targetId) || (!isG && l.pedido?.id === targetId)
-                                          );
-                                          if (oLink && !linkedMovementsMap.some(x => x.id === otherM.id)) {
-                                            linkedMovementsMap.push({
-                                              ...otherM,
-                                              monto_asociado: oLink.monto_asociado || Math.abs(otherM.monto)
-                                            });
-                                          }
-                                        });
-                                      });
-
-                                      if (linkedMovementsMap.length === 0) return null;
-
-                                      const allMovs = [m, ...linkedMovementsMap];
-                                      const totalPagadoAcumulado = allMovs.reduce((sum, x) => sum + Math.abs(Number(x.monto)), 0);
-
-                                      return (
-                                        <div className="p-2.5 rounded-xl bg-indigo-50 dark:bg-indigo-955/40 border border-indigo-200 dark:border-indigo-800 text-[10px] text-indigo-900 dark:text-indigo-200 font-sans space-y-1 shadow-sm">
-                                          <div className="flex items-center justify-between font-extrabold flex-wrap gap-1">
-                                            <span className="flex items-center gap-1.5">
-                                              <Link size={13} className="text-indigo-600 dark:text-indigo-400" />
-                                              <span>🔗 FACTURA COMPARTIDA / DIVIDIDA EN {allMovs.length} PAGOS BANCARIOS VINCULADOS</span>
-                                            </span>
+                                    {allMovs.length > 1 && (
+                                      <div className="p-2.5 rounded-xl bg-indigo-50 dark:bg-indigo-955/40 border border-indigo-200 dark:border-indigo-800 text-[10px] text-indigo-900 dark:text-indigo-200 font-sans space-y-1 shadow-sm">
+                                        <div className="flex items-center justify-between font-extrabold flex-wrap gap-1">
+                                          <span className="flex items-center gap-1.5">
+                                            <Link size={13} className="text-indigo-600 dark:text-indigo-400" />
+                                            <span>🔗 FACTURA COMPARTIDA / DIVIDIDA EN {allMovs.length} PAGOS BANCARIOS VINCULADOS</span>
+                                          </span>
+                                          <div className="flex items-center gap-2">
                                             <span className="font-mono text-[10px] text-indigo-800 dark:text-indigo-200 bg-indigo-100 dark:bg-indigo-900/60 px-2 py-0.5 rounded-lg font-black">
-                                              Suma Pagos: {formatCurrency(totalPagadoAcumulado)}
+                                              Suma Pagos: {formatCurrency(totalPagadoAcumulado)} de {formatCurrency(docTotal)}
                                             </span>
-                                          </div>
-                                          <div className="flex flex-wrap gap-1.5 pt-1">
-                                            {allMovs.map((movItem: any, oidx: number) => {
-                                              const isCurrent = movItem.id === m.id;
-                                              const fDate = movItem.fecha ? new Date(movItem.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : '';
-                                              return (
-                                                <span
-                                                  key={oidx}
-                                                  className={`px-2 py-1 rounded-lg border text-[9px] font-mono flex items-center gap-1.5 ${
-                                                    isCurrent
-                                                      ? 'bg-indigo-600 text-white border-indigo-700 font-bold shadow-xs'
-                                                      : 'bg-white dark:bg-gray-900 text-indigo-900 dark:text-indigo-200 border-indigo-200 dark:border-indigo-800'
-                                                  }`}
-                                                >
-                                                  <span>{isCurrent ? '👉 Este pago:' : '🔗 Pago par:'}</span>
-                                                  <span>📅 {fDate}</span>
-                                                  <strong className="truncate max-w-[140px]" title={movItem.concepto}>{movItem.concepto}</strong>
-                                                  <span className="font-bold">({formatCurrency(Math.abs(Number(movItem.monto)))})</span>
-                                                </span>
-                                              );
-                                            })}
+                                            {esCoincidente && (
+                                              <span className="px-2 py-0.5 rounded-md text-[9px] font-black bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800">
+                                                ✓ 100% Cubierto
+                                              </span>
+                                            )}
                                           </div>
                                         </div>
-                                      );
-                                    })()}
+                                        <div className="flex flex-wrap gap-1.5 pt-1">
+                                          {allMovs.map((movItem: any, oidx: number) => {
+                                            const isCurrent = movItem.id === m.id;
+                                            const fDate = movItem.fecha ? new Date(movItem.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : '';
+                                            return (
+                                              <span
+                                                key={oidx}
+                                                className={`px-2 py-1 rounded-lg border text-[9px] font-mono flex items-center gap-1.5 ${
+                                                  isCurrent
+                                                    ? 'bg-indigo-600 text-white border-indigo-700 font-bold shadow-xs'
+                                                    : 'bg-white dark:bg-gray-900 text-indigo-900 dark:text-indigo-200 border-indigo-200 dark:border-indigo-800'
+                                                }`}
+                                              >
+                                                <span>{isCurrent ? '👉 Este pago:' : '🔗 Pago par:'}</span>
+                                                <span>📅 {fDate}</span>
+                                                <strong className="truncate max-w-[140px]" title={movItem.concepto}>{movItem.concepto}</strong>
+                                                <span className="font-bold">(-{formatCurrency(Math.abs(Number(movItem.monto)))})</span>
+                                              </span>
+                                            );
+                                          })}
+                                        </div>
+                                      </div>
+                                    )}
 
                                     {/* Encabezado con el ACUMULADO DEL GASTO (Suma de Facturas) */}
                                     <div className="flex items-center justify-between bg-emerald-100/80 dark:bg-emerald-950/40 p-2 rounded-xl border border-emerald-200 dark:border-emerald-800 text-[11px]">
                                       <div className="flex items-center gap-2 flex-wrap">
                                         <span className="font-extrabold text-emerald-900 dark:text-emerald-300">
-                                          📊 Acumulado Gasto: <span className="font-mono text-xs">{formatCurrency(totalAcumuladoGasto)}</span>
+                                          📊 Acumulado Gasto: <span className="font-mono text-xs">{formatCurrency(totalPagadoAcumulado)}</span>
                                         </span>
                                         <span className="text-[10px] text-emerald-700 dark:text-emerald-400 font-semibold">
-                                          ({m.conciliaciones_bancarias.length} factura{m.conciliaciones_bancarias.length > 1 ? 's' : ''})
+                                          ({concList.length} factura{concList.length > 1 ? 's' : ''})
                                         </span>
                                       </div>
                                       <div className="flex items-center gap-1.5 flex-wrap">
@@ -3369,7 +3464,7 @@ export default function BancoTab({
                                     </div>
 
                                     {/* Lista de facturas vinculadas */}
-                                    {m.conciliaciones_bancarias.map((link: any, idx: number) => {
+                                    {concList.map((link: any, idx: number) => {
                                       const isGasto = !!link.gasto;
                                       const item = isGasto ? link.gasto : link.pedido;
                                       if (!item) return null;
@@ -3540,18 +3635,27 @@ export default function BancoTab({
                                 }, 0);
                                 const isFullyLinked = !isRetiro && associatedComps.length > 0 && Math.abs(compsSum - Number(m.deposito)) < 0.05;
 
-                                if (isFullyLinked) {
-                                  return (
-                                    <span className="px-2 py-0.5 rounded-full text-[9px] font-extrabold border bg-emerald-500/10 border-emerald-500/30 text-emerald-600 dark:text-emerald-400">
-                                      Conciliado
-                                    </span>
-                                  );
-                                }
                                 return (
-                                  <span className="px-2 py-0.5 rounded-full text-[9px] font-bold border"
-                                    style={{ backgroundColor: `${color}15`, borderColor: `${color}40`, color }}>
-                                    {m.estatus_conciliacion_bancaria?.nombre || 'Pendiente'}
-                                  </span>
+                                  <div className="flex flex-col items-center gap-1">
+                                    {isFullyLinked ? (
+                                      <span className="px-2 py-0.5 rounded-full text-[9px] font-extrabold border bg-emerald-500/10 border-emerald-500/30 text-emerald-600 dark:text-emerald-400">
+                                        Conciliado
+                                      </span>
+                                    ) : (
+                                      <span className="px-2 py-0.5 rounded-full text-[9px] font-bold border"
+                                        style={{ backgroundColor: `${color}15`, borderColor: `${color}40`, color }}>
+                                        {m.estatus_conciliacion_bancaria?.nombre || 'Pendiente'}
+                                      </span>
+                                    )}
+                                    {sharedInfo && (
+                                      <span 
+                                        className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[8.5px] font-black bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-300 dark:border-indigo-800 shadow-2xs"
+                                        title={`Pago ${sharedInfo.thisIndex + 1} de ${sharedInfo.totalPagos} • Factura compartida de ${formatCurrency(sharedInfo.facturaTotal)}`}
+                                      >
+                                        <Link size={9} /> Parcialidad {sharedInfo.thisIndex + 1}/{sharedInfo.totalPagos}
+                                      </span>
+                                    )}
+                                  </div>
                                 );
                               })()}
                             </td>
@@ -3994,7 +4098,7 @@ export default function BancoTab({
             {ingresosSubSeccion === 'comprobantes' && (
               <div className="flex-1 flex flex-col overflow-hidden min-h-0 gap-4">
                 {/* BARRA SUPERIOR DE SUB-VISTAS DE COMPROBANTES / ARQUEO */}
-                <div className="bg-white dark:bg-gray-955 p-2 rounded-xl border border-gray-200 dark:border-gray-800 shrink-0 flex justify-between items-center flex-wrap gap-2 shadow-xs">
+                <div className="bg-white dark:bg-gray-955 p-2 rounded-xl border border-gray-200 dark:border-gray-800 shrink-0 flex justify-between items-center flex-wrap gap-2 shadow-xs relative z-20">
                   <div className="flex items-center gap-1.5 bg-gray-100 dark:bg-gray-900 p-1 rounded-xl">
                     <button
                       type="button"
@@ -4031,6 +4135,18 @@ export default function BancoTab({
                     </button>
                     <button
                       type="button"
+                      onClick={() => setCompSubFiltro('ventas_mes_anterior')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                        compSubFiltro === 'ventas_mes_anterior'
+                          ? 'bg-amber-600 text-white shadow-sm'
+                          : 'text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-955/30'
+                      }`}
+                      title="Mostrar únicamente tickets y depósitos marcados como ventas de meses anteriores"
+                    >
+                      <Clock size={13} /> 🕒 Ventas Mes Anterior ({countVentasMesAnterior})
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => setCompSubFiltro('arqueo')}
                       className={`px-3.5 py-1.5 rounded-lg text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer ${
                         compSubFiltro === 'arqueo'
@@ -4043,23 +4159,20 @@ export default function BancoTab({
                   </div>
 
                   <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setConciliacionMasivaModal(p => ({ ...p, open: true }))}
-                      className="px-3 py-1.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white rounded-xl text-xs font-black shadow-sm flex items-center gap-1.5 transition-all cursor-pointer"
-                    >
-                      <Scale size={14} /> Conciliación Masiva
-                    </button>
-                    <select
-                      value={selectedCuentaId}
-                      onChange={(e) => setSelectedCuentaId && setSelectedCuentaId(e.target.value)}
-                      className="bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 px-2.5 py-1.5 rounded-xl text-xs text-gray-900 dark:text-white font-sans font-semibold outline-none focus:ring-1 focus:ring-amber-500 cursor-pointer"
-                    >
-                      <option value="">Todas las Cuentas</option>
-                      {cuentasBancarias?.map(c => (
-                        <option key={c.id} value={c.id}>{c.nombre} ({c.moneda})</option>
-                      ))}
-                    </select>
+                    {compSubFiltro !== 'arqueo' && (
+                      <button
+                        type="button"
+                        onClick={() => setConciliacionMasivaModal(p => ({ ...p, open: true }))}
+                        className="px-3 py-1.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white rounded-xl text-xs font-black shadow-sm flex items-center gap-1.5 transition-all cursor-pointer shrink-0"
+                      >
+                        <Scale size={14} /> Conciliación Masiva
+                      </button>
+                    )}
+                    <AccountSelectorDropdown
+                      selectedCuentaId={selectedCuentaId}
+                      onSelect={(id) => setSelectedCuentaId(id)}
+                      cuentasBancarias={cuentasBancarias}
+                    />
                   </div>
                 </div>
 
@@ -4070,9 +4183,13 @@ export default function BancoTab({
                       movimientos={movimientos}
                       cuentasBancarias={cuentasBancarias}
                       selectedMonth={selectedMonth}
+                      cashDepositId={cashDepositId}
+                      cashTicketId={cashTicketId}
                       gastos={gastosFacturados}
                       token={token}
                       onReloadMovimientos={onReloadMovimientos}
+                      onVincularComprobante={onVincularComprobante}
+                      onDesvincularComprobante={onDesvincularComprobante}
                     />
                   </div>
                 ) : (
@@ -4463,6 +4580,57 @@ export default function BancoTab({
                         />
                       </div>
 
+                      {/* Venta Mes Anterior / Diferida (Exclusión Factura Global) */}
+                      <div className={`p-3 rounded-xl border transition-all ${
+                        newCompForm.esVentaMesAnterior
+                          ? 'bg-amber-50/80 dark:bg-amber-955/30 border-amber-300 dark:border-amber-700/60 shadow-xs'
+                          : 'bg-gray-50/50 dark:bg-gray-900/30 border-gray-200 dark:border-gray-800'
+                      }`}>
+                        <label className="flex items-start gap-2.5 cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={newCompForm.esVentaMesAnterior}
+                            onChange={(e) => {
+                              const checked = e.target.checked;
+                              let defMes = '';
+                              if (checked && newCompForm.fecha) {
+                                const d = new Date(newCompForm.fecha + 'T12:00:00Z');
+                                d.setUTCMonth(d.getUTCMonth() - 1);
+                                defMes = d.toISOString().substring(0, 7);
+                              }
+                              setNewCompForm(p => ({
+                                ...p,
+                                esVentaMesAnterior: checked,
+                                mesVenta: checked ? (p.mesVenta || defMes) : ''
+                              }));
+                            }}
+                            className="mt-0.5 w-4 h-4 text-amber-500 rounded accent-amber-500 cursor-pointer"
+                          />
+                          <div className="flex-1">
+                            <span className="text-xs font-black text-amber-700 dark:text-amber-300 flex items-center gap-1.5">
+                              <Clock size={13} className="text-amber-500 shrink-0" /> 🕒 Venta de Mes Anterior (Diferida)
+                            </span>
+                            <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5 leading-snug">
+                              Marcar si este ingreso (ticket, corte o depósito) entró al banco este mes pero corresponde a ventas del mes anterior. Se identificará visualmente y <strong>NO se tomará en cuenta para la Factura Global</strong>.
+                            </p>
+                          </div>
+                        </label>
+
+                        {newCompForm.esVentaMesAnterior && (
+                          <div className="mt-2.5 pt-2 border-t border-amber-200 dark:border-amber-900/40 flex items-center justify-between gap-2 flex-wrap">
+                            <span className="text-[10px] font-bold text-amber-800 dark:text-amber-200 flex items-center gap-1">
+                              Mes al que corresponde la venta:
+                            </span>
+                            <input
+                              type="month"
+                              value={newCompForm.mesVenta || ''}
+                              onChange={(e) => setNewCompForm(p => ({ ...p, mesVenta: e.target.value }))}
+                              className="bg-white dark:bg-gray-900 border border-amber-300 dark:border-amber-700 px-2 py-1 rounded-md text-xs font-mono font-bold text-gray-900 dark:text-white outline-none focus:ring-1 focus:ring-amber-500"
+                            />
+                          </div>
+                        )}
+                      </div>
+
                       {/* Adjunto Ticket y Almacenamiento */}
                       <div>
                         <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block mb-1">Proveedor de Almacenamiento</label>
@@ -4556,7 +4724,9 @@ export default function BancoTab({
                               propinaParrotpay: '',
                               comisionTransacciones: '',
                               ivaTransacciones: '',
-                              otrosCargos: ''
+                              otrosCargos: '',
+                              esVentaMesAnterior: false,
+                              mesVenta: ''
                             });
                           }}
                           className="w-full mb-2 py-2 border border-gray-300 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300 rounded-lg text-xs font-bold transition-all shadow-sm"
@@ -4649,7 +4819,9 @@ export default function BancoTab({
                               comision_transacciones: parseInputNumber(newCompForm.comisionTransacciones || 0),
                               iva_transacciones: parseInputNumber(newCompForm.ivaTransacciones || 0),
                               otros_cargos: parseInputNumber(newCompForm.otrosCargos || 0),
-                              desglose_tickets: newCompForm.desgloseTickets || []
+                              desglose_tickets: newCompForm.desgloseTickets || [],
+                              es_venta_mes_anterior: newCompForm.esVentaMesAnterior,
+                              mes_venta: newCompForm.mesVenta || null
                             };
 
                             let res;
@@ -4712,7 +4884,9 @@ export default function BancoTab({
                               propinaParrotpay: '',
                               comisionTransacciones: '',
                               ivaTransacciones: '',
-                              otrosCargos: ''
+                              otrosCargos: '',
+                              esVentaMesAnterior: false,
+                              mesVenta: ''
                             });
                           } catch (err: any) {
                             setNewCompForm(p => ({ ...p, error: err.message || 'Error al guardar.' }));
@@ -4743,7 +4917,13 @@ export default function BancoTab({
 
                       <div className="flex items-center gap-2">
                         <span className="text-[11px] font-medium text-gray-500">
-                          Filtro: <strong className="text-gray-700 dark:text-gray-300">{compSubFiltro === 'tickets' ? 'Solo Tickets/Cortes' : compSubFiltro === 'depositos' ? 'Solo Depósitos Ventanilla' : 'Todos'}</strong>
+                          Filtro: <strong className="text-gray-700 dark:text-gray-300">
+                            {compSubFiltro === 'tickets' ? 'Solo Tickets/Cortes' :
+                             compSubFiltro === 'depositos' ? 'Solo Depósitos Ventanilla' :
+                             compSubFiltro === 'ventas_mes_anterior' ? 'Solo Ventas de Mes Anterior' :
+                             compSubFiltro === 'ventas_mes_actual' ? 'Solo Ventas de Este Mes' :
+                             'Todos'}
+                          </strong>
                         </span>
                       </div>
                     </div>
@@ -4764,17 +4944,28 @@ export default function BancoTab({
                         <tbody className="divide-y divide-gray-100 dark:divide-gray-800/60">
                           {filteredComprobantes.map(c => {
                               const isVentanilla = c.tipo === 'deposito_ventanilla';
-                              const sumAsoc = c.comprobantes_deposito_movimientos?.reduce((s, r) => s + Number(r.monto_asociado || 0), 0) || 0;
-                              const isFullyAssoc = Math.abs(Number(c.monto) - sumAsoc) < 0.05;
+                              const tarjetaTotalBBVA = Number(c.monto_debito || 0) + Number(c.propina_debito || 0) + Number(c.monto_credito || 0) + Number(c.propina_credito || 0) + Number(c.monto_amex || 0) + Number(c.propina_amex || 0);
+                              const isVentaMesAnt = isComprobanteVentaMesAnterior(c, selectedMonth);
 
                               const selCuenta = cuentasBancarias?.find(cb => cb.id === selectedCuentaId);
+                              const isBBVAFilter = selCuenta?.nombre?.toUpperCase().includes('BBVA');
                               const isCajaFilter = selCuenta?.nombre?.toUpperCase().includes('CAJA CHICA') || selCuenta?.nombre?.toUpperCase().includes('EFECTIVO');
                               const isParrotFilter = selCuenta?.nombre?.toUpperCase().includes('PARROT');
-                              const isBBVAFilter = selCuenta?.nombre?.toUpperCase().includes('BBVA');
-                              const tarjetaTotalBBVA = Number(c.monto_debito || 0) + Number(c.propina_debito || 0) + Number(c.monto_credito || 0) + Number(c.propina_credito || 0) + Number(c.monto_amex || 0) + Number(c.propina_amex || 0);
+
+                              const sumAsoc = (c.comprobantes_deposito_movimientos || []).reduce((s: number, r: any) => s + Number(r.monto_asociado || 0), 0);
+                              const effectiveMonto = isCajaFilter && (Number(c.monto_efectivo || 0) > 0 || Number(c.propina_efectivo || 0) > 0)
+                                ? (Number(c.monto_efectivo || 0) + Number(c.propina_efectivo || 0))
+                                : isParrotFilter && (Number(c.monto_parrotpay || 0) > 0 || Number(c.propina_parrotpay || 0) > 0)
+                                ? (Number(c.monto_parrotpay || 0) + Number(c.propina_parrotpay || 0))
+                                : isBBVAFilter && tarjetaTotalBBVA > 0
+                                ? tarjetaTotalBBVA
+                                : Number(c.monto || 0);
+                              const isFullyAssoc = effectiveMonto > 0 && Math.abs(effectiveMonto - sumAsoc) < 0.05;
 
                               return (
-                                <tr key={c.id} className="hover:bg-gray-50/40 dark:hover:bg-gray-900/20 transition-all">
+                                <tr key={c.id} className={`hover:bg-gray-50/40 dark:hover:bg-gray-900/20 transition-all ${
+                                  isVentaMesAnt ? 'border-l-4 border-l-amber-500 bg-amber-50/20 dark:bg-amber-955/10' : ''
+                                }`}>
                                   <td className="p-3 font-mono text-gray-500">{new Date(c.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })}</td>
                                   <td className="p-3">
                                     <div className="flex items-center gap-1.5 flex-wrap">
@@ -4789,6 +4980,34 @@ export default function BancoTab({
                                          c.tipo === 'corte_parrot' ? 'Corte Parrot' :
                                          'Corte POS'}
                                       </span>
+                                      {isVentaMesAnt && (
+                                        <span 
+                                          className="inline-flex items-center gap-1 bg-amber-100 dark:bg-amber-955/60 text-amber-800 dark:text-amber-300 text-[8.5px] font-black px-1.5 py-0.5 rounded uppercase border border-amber-300 dark:border-amber-700 shadow-2xs"
+                                          title="Ingresó este período pero corresponde a ventas de un mes previo. Excluido del cálculo de Factura Global."
+                                        >
+                                          <Clock size={10} className="text-amber-600 dark:text-amber-400 shrink-0" />
+                                          <span>Venta Mes Anterior</span>
+                                        </span>
+                                      )}
+                                      {(() => {
+                                        const compMonth = c.fecha ? String(c.fecha).substring(0, 7) : '';
+                                        const hasNextMonthDeposit = c.comprobantes_deposito_movimientos?.some((rel: any) => {
+                                          const mov = rel.movimientos_bancarios;
+                                          if (!mov?.fecha) return false;
+                                          return String(mov.fecha).substring(0, 7) > compMonth;
+                                        });
+                                        if (hasNextMonthDeposit) {
+                                          return (
+                                            <span
+                                              className="inline-flex items-center gap-1 bg-purple-100 dark:bg-purple-955/60 text-purple-800 dark:text-purple-300 text-[8.5px] font-black px-1.5 py-0.5 rounded uppercase border border-purple-300 dark:border-purple-700 shadow-2xs"
+                                              title="Ventas de este ticket respaldadas con depósitos bancarios que ingresaron en el mes siguiente"
+                                            >
+                                              <span>Pago en Mes Entrante ⇄</span>
+                                            </span>
+                                          );
+                                        }
+                                        return null;
+                                      })()}
                                       {isFullyAssoc ? (
                                         <span className="bg-emerald-100 text-emerald-700 dark:bg-emerald-955/30 dark:text-emerald-400 text-[8px] font-black px-1.5 py-0.5 rounded uppercase">Conciliado</span>
                                       ) : (
@@ -4818,7 +5037,7 @@ export default function BancoTab({
                                       <button
                                         type="button"
                                         onClick={() => setViewingTicketsComp(c)}
-                                        className="mt-1.5 inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/40 dark:hover:bg-amber-900/50 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 text-[10px] font-extrabold transition-all shadow-2xs cursor-pointer"
+                                        className="mt-1.5 inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-50 hover:bg-amber-100 dark:bg-amber-955/40 dark:hover:bg-amber-900/50 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 text-[10px] font-extrabold transition-all shadow-2xs cursor-pointer"
                                         title="Ver lista de ventas y tickets de este día"
                                       >
                                         <Receipt size={11} className="text-amber-500" />
@@ -4829,8 +5048,20 @@ export default function BancoTab({
                                   <td className="p-3 font-medium text-gray-700 dark:text-gray-300">
                                     {cuentasBancarias?.find(cb => cb.id === c.cuenta_bancaria_id)?.nombre || '-'}
                                   </td>
-                                  <td className="p-3 text-gray-600 dark:text-gray-400 font-mono text-[11px] max-w-[200px] truncate" title={c.descripcion || ''}>
-                                    {c.descripcion || '-'}
+                                  <td className="p-3 text-gray-600 dark:text-gray-400 font-mono text-[11px] max-w-[200px]" title={c.descripcion || ''}>
+                                    <div className="truncate">{c.descripcion || '-'}</div>
+                                    {isVentaMesAnt && (
+                                      <div className="mt-1 flex items-center gap-1 flex-wrap">
+                                        <span className="inline-flex items-center gap-0.5 text-[8.5px] font-bold text-amber-700 dark:text-amber-400 bg-amber-100/70 dark:bg-amber-900/40 px-1.5 py-0.5 rounded border border-amber-200 dark:border-amber-800">
+                                          🚫 Excluido Factura Global
+                                        </span>
+                                        {c.mes_venta && (
+                                          <span className="text-[8.5px] font-mono text-gray-500 dark:text-gray-400">
+                                            ({c.mes_venta})
+                                          </span>
+                                        )}
+                                      </div>
+                                    )}
                                   </td>
                                   <td className="p-3 text-right font-mono font-bold text-gray-900 dark:text-white">
                                     {isCajaFilter && (Number(c.monto_efectivo || 0) > 0 || Number(c.propina_efectivo || 0) > 0) ? (
@@ -4843,7 +5074,7 @@ export default function BancoTab({
                                         <span className="text-purple-600 dark:text-purple-400 block">{formatCurrency(Number(c.monto_parrotpay || 0) + Number(c.propina_parrotpay || 0))}</span>
                                         <span className="text-[9px] text-gray-400 font-mono block font-normal">({formatCurrency(c.monto_parrotpay || 0)} Parrot / {formatCurrency(c.monto)} Corte)</span>
                                       </div>
-                                    ) : isBBVAFilter && tarjetaTotalBBVA > 0 ? (
+                                    ) : isBBVAFilter && c.tipo !== 'corte_parrot' && tarjetaTotalBBVA > 0 ? (
                                       <div>
                                         <span className="text-sky-600 dark:text-sky-400 block">{formatCurrency(tarjetaTotalBBVA)}</span>
                                         <span className="text-[9px] text-gray-400 font-mono block font-normal">({formatCurrency(tarjetaTotalBBVA)} Tarjetas BBVA / {formatCurrency(c.monto)} Corte)</span>
@@ -4872,7 +5103,36 @@ export default function BancoTab({
                                     )}
                                   </td>
                                   <td className="p-3 text-right">
-                                    <div className="flex justify-end gap-1.5 flex-wrap">
+                                    <div className="flex justify-end gap-1.5 flex-wrap items-center">
+                                      {/* Quick toggle botón: Venta Mes Anterior */}
+                                      <button
+                                        type="button"
+                                        onClick={async () => {
+                                          const nextVal = !isVentaMesAnt;
+                                          let nextDesc = c.descripcion || '';
+                                          if (nextVal && !nextDesc.includes('[VENTA_MES_ANTERIOR]')) {
+                                            nextDesc = `[VENTA_MES_ANTERIOR] ${nextDesc}`.trim();
+                                          } else if (!nextVal) {
+                                            nextDesc = nextDesc.replace(/\[VENTA_MES_ANTERIOR\]/g, '').replace(/\[VENTA_MES:[^\]]+\]/g, '').trim();
+                                          }
+                                          await onActualizarComprobante?.(c.id, {
+                                            ...c,
+                                            descripcion: nextDesc,
+                                            es_venta_mes_anterior: nextVal,
+                                            mes_venta: nextVal ? (c.mes_venta || null) : null
+                                          });
+                                        }}
+                                        className={`px-1.5 py-1 rounded font-bold text-[10px] flex items-center gap-1 transition-all cursor-pointer ${
+                                          isVentaMesAnt
+                                            ? 'bg-amber-100 dark:bg-amber-955/50 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-700 shadow-2xs'
+                                            : 'text-gray-400 hover:text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-955/20 border border-transparent'
+                                        }`}
+                                        title={isVentaMesAnt ? 'Marcado como Venta de Mes Anterior (Excluido de Factura Global). Clic para quitar marca.' : 'Marcar como Venta de Mes Anterior (Excluir de Factura Global)'}
+                                      >
+                                        <Clock size={11} className={isVentaMesAnt ? 'text-amber-600 dark:text-amber-400' : ''} />
+                                        <span>{isVentaMesAnt ? 'Mes Ant. ✓' : 'Marcar Mes Ant.'}</span>
+                                      </button>
+
                                       {Array.isArray(c.desglose_tickets) && c.desglose_tickets.length > 0 && (
                                         <button
                                           type="button"
@@ -4917,7 +5177,9 @@ export default function BancoTab({
                                             comisionTransacciones: String(c.comision_transacciones || ''),
                                             ivaTransacciones: String(c.iva_transacciones || ''),
                                             otrosCargos: String(c.otros_cargos || ''),
-                                            desgloseTickets: c.desglose_tickets || []
+                                            desgloseTickets: c.desglose_tickets || [],
+                                            esVentaMesAnterior: isVentaMesAnt,
+                                            mesVenta: c.mes_venta || ''
                                           });
                                         }}
                                         className="p-1 text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-955/20 rounded font-bold text-[10px] flex items-center gap-0.5"
@@ -4976,7 +5238,23 @@ export default function BancoTab({
                   {(() => {
                     const unconciliados = movimientos.filter((m) => {
                       if (m.tipo_movimiento !== 'Deposito') return false;
-                      if (selectedCuentaId && m.cuenta_bancaria_id !== selectedCuentaId) return false;
+                      if (selectedCuentaId) {
+                        const directMatch = m.cuenta_bancaria_id === selectedCuentaId || (m as any).cuentas_bancarias?.id === selectedCuentaId;
+                        if (!directMatch) {
+                          const selCuenta = cuentasBancarias?.find(cb => cb.id === selectedCuentaId);
+                          const selName = (selCuenta?.nombre || '').toUpperCase();
+                          const hasNoAccount = !m.cuenta_bancaria_id && !(m as any).cuentas_bancarias?.id;
+                          const concept = (m.concepto || '').toUpperCase();
+                          const matchesFallback = hasNoAccount && (
+                            (selName.includes('BBVA') && (concept.includes('BBVA') || concept.includes('BANCOMER'))) ||
+                            (selName.includes('CAJA') && (concept.includes('CAJA') || concept.includes('EFECTIVO'))) ||
+                            (selName.includes('PARROT') && concept.includes('PARROT')) ||
+                            (!selName.includes('CAJA') && !selName.includes('PARROT') && !concept.includes('CAJA') && !concept.includes('PARROT')) ||
+                            (cuentasBancarias.length <= 1)
+                          );
+                          if (!matchesFallback) return false;
+                        }
+                      }
                       const clave = m.estatus_conciliacion_bancaria?.clave || 'pendiente';
                       if (clave === 'conciliado') return false;
                       const isLinked = comprobantes.some(c => c.comprobantes_deposito_movimientos?.some(rel => rel.movimiento_id === m.id));
@@ -4994,21 +5272,16 @@ export default function BancoTab({
                             <h4 className="text-xs font-extrabold uppercase text-amber-500 flex items-center gap-1.5">
                               <CreditCard size={14} /> 1. Depósitos Bancarios
                             </h4>
-                            <select
-                              value={selectedCuentaId}
-                              onChange={(e) => {
-                                setSelectedCuentaId(e.target.value);
+                            <AccountSelectorDropdown
+                              selectedCuentaId={selectedCuentaId}
+                              onSelect={(id) => {
+                                setSelectedCuentaId(id);
                                 setSelectedGlobalDepositIds([]);
                                 setSelectedGlobalComprobanteIds([]);
                                 setSelectedGlobalDepositId(null);
                               }}
-                              className="bg-white dark:bg-gray-950 border border-amber-300 dark:border-amber-700 px-2 py-0.5 rounded text-[11px] font-bold text-gray-900 dark:text-white outline-none focus:ring-1 focus:ring-amber-500 cursor-pointer shadow-sm"
-                            >
-                              <option value="">Todas las Cuentas</option>
-                              {cuentasBancarias?.map(c => (
-                                <option key={c.id} value={c.id}>{c.nombre} ({c.moneda})</option>
-                              ))}
-                            </select>
+                              cuentasBancarias={cuentasBancarias}
+                            />
                             {selectedMovs.length > 0 && (
                               <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-500 text-white shadow-sm">
                                 {selectedMovs.length} seleccionado{selectedMovs.length > 1 ? 's' : ''} (+{formatCurrency(selectedSum)})
@@ -5108,6 +5381,7 @@ export default function BancoTab({
                     const selCuenta = cuentasBancarias?.find(cb => cb.id === selectedCuentaId);
                     const isCajaChicaFilter = selCuenta?.nombre?.toUpperCase().includes('CAJA CHICA') || selCuenta?.nombre?.toUpperCase().includes('EFECTIVO');
                     const isParrotPayFilter = selCuenta?.nombre?.toUpperCase().includes('PARROT');
+                    const isBBVAFilter = selCuenta?.nombre?.toUpperCase().includes('BBVA');
 
                     const isCajaChicaTarget = selectedMovs.some(m => {
                       const conceptUpper = (m.concepto || '').toUpperCase();
@@ -5128,7 +5402,7 @@ export default function BancoTab({
                       );
                     });
 
-                    const getCompReconciliationAmount = (item: typeof comprobantes[0], isParrot: boolean, isCaja: boolean) => {
+                    const getCompReconciliationAmount = (item: typeof comprobantes[0], isParrot: boolean, isCaja: boolean, isBBVA = false) => {
                       if (isCaja) {
                         const efecSum = Number(item.monto_efectivo || 0) + Number(item.propina_efectivo || 0);
                         return efecSum;
@@ -5144,33 +5418,35 @@ export default function BancoTab({
 
                         return 0;
                       }
+                      if (isBBVA) {
+                        const tarjetaTotalBBVA = Number(item.monto_debito || 0) + Number(item.propina_debito || 0) + Number(item.monto_credito || 0) + Number(item.propina_credito || 0) + Number(item.monto_amex || 0) + Number(item.propina_amex || 0);
+                        if (tarjetaTotalBBVA > 0) return tarjetaTotalBBVA;
+                        return Number(item.monto || 0);
+                      }
                       return Number(item.monto || 0);
                     };
 
-                    const getCompPendingAmount = (item: typeof comprobantes[0], isParrot: boolean, isCaja: boolean) => {
-                      const effectiveMonto = getCompReconciliationAmount(item, isParrot, isCaja);
+                    const getCompPendingAmount = (item: typeof comprobantes[0], isParrot: boolean, isCaja: boolean, isBBVA = false) => {
+                      const effectiveMonto = getCompReconciliationAmount(item, isParrot, isCaja, isBBVA);
                       const sumAsoc = item.comprobantes_deposito_movimientos?.reduce((s, r) => s + Number(r.monto_asociado || 0), 0) || 0;
                       return Math.max(0, effectiveMonto - sumAsoc);
                     };
 
                     const unlinkedComprobantes = comprobantes.filter(c => {
+                      // Excluir comprobantes marcados como ventas de mes anterior de la Factura Global
+                      if (isComprobanteVentaMesAnterior(c, selectedMonth)) return false;
+
                       if (selectedCuentaId && c.cuenta_bancaria_id && c.cuenta_bancaria_id !== selectedCuentaId) {
-                        if (isCajaChicaFilter && (Number(c.monto_efectivo || 0) > 0 || Number(c.propina_efectivo || 0) > 0)) {
-                          // Incluir comprobante si tiene desglose de efectivo para Caja Chica
-                        } else if (isParrotPayFilter && (Number(c.monto_parrotpay || 0) > 0 || Number(c.propina_parrotpay || 0) > 0)) {
-                          // Incluir para ParrotPay
-                        } else {
-                          return false;
-                        }
+                        return false;
                       }
-                      const effectiveMonto = getCompReconciliationAmount(c, isPlatformWithCommission || isParrotPayFilter, isCajaChicaTarget);
-                      if ((isPlatformWithCommission || isParrotPayFilter || isCajaChicaTarget) && effectiveMonto === 0) return false;
-                      const pending = getCompPendingAmount(c, isPlatformWithCommission || isParrotPayFilter, isCajaChicaTarget);
+                      const effectiveMonto = getCompReconciliationAmount(c, isPlatformWithCommission || isParrotPayFilter, isCajaChicaTarget, isBBVAFilter);
+                      if ((isPlatformWithCommission || isParrotPayFilter || isCajaChicaTarget || isBBVAFilter) && effectiveMonto === 0) return false;
+                      const pending = getCompPendingAmount(c, isPlatformWithCommission || isParrotPayFilter, isCajaChicaTarget, isBBVAFilter);
                       return pending >= 0.05;
                     });
 
                     const selectedComps = unlinkedComprobantes.filter(c => (selectedGlobalComprobanteIds || []).includes(c.id));
-                    const selectedCompsSum = selectedComps.reduce((acc, c) => acc + getCompPendingAmount(c, isPlatformWithCommission, isCajaChicaTarget), 0);
+                    const selectedCompsSum = selectedComps.reduce((acc, c) => acc + getCompPendingAmount(c, isPlatformWithCommission, isCajaChicaTarget, isBBVAFilter), 0);
                     const allCompsSelected = unlinkedComprobantes.length > 0 && selectedComps.length === unlinkedComprobantes.length;
 
                     const handleVincularComprobantes = async (targetComps: typeof unlinkedComprobantes) => {
@@ -5574,16 +5850,12 @@ export default function BancoTab({
                     />
                   </div>
 
-                  <select
-                    value={selectedCuentaId}
-                    onChange={(e) => { setSelectedCuentaId(e.target.value); setPageAtemporal(0); }}
-                    className="bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 px-3 py-2 rounded-lg text-xs outline-none focus:ring-1 focus:ring-amber-500 transition-all text-gray-900 dark:text-gray-100 font-sans cursor-pointer font-semibold"
-                  >
-                    <option value="">-- Seleccionar Cuenta --</option>
-                    {cuentasBancarias?.map(c => (
-                      <option key={c.id} value={c.id}>{c.nombre} ({c.moneda})</option>
-                    ))}
-                  </select>
+                  <AccountSelectorDropdown
+                    selectedCuentaId={selectedCuentaId}
+                    onSelect={(id) => { setSelectedCuentaId(id); setPageAtemporal(0); }}
+                    cuentasBancarias={cuentasBancarias}
+                    placeholder="-- Seleccionar Cuenta --"
+                  />
 
                   <select
                     value={filtroMesAtemporal}
@@ -6099,9 +6371,15 @@ export default function BancoTab({
               const effectiveAmount = priorOtherPayments > 0 ? Math.min(movMonto, pendBalance) : totalGasto;
               return s + effectiveAmount;
             }, 0)
-          : pedidosPendientes
-              .filter((p) => reconcileModal.pedidosSeleccionados.includes(p.id))
-              .reduce((s, p) => s + Number(p.precio_total), 0);
+          : (() => {
+              const selPeds = pedidosPendientes.filter((p) => reconcileModal.pedidosSeleccionados.includes(p.id));
+              const realPeds = selPeds.filter((p) => !p._esFacturaSuelta && !p.id?.startsWith('suelta_'));
+              const sueltas = selPeds.filter((p) => p._esFacturaSuelta || p.id?.startsWith('suelta_'));
+              if (realPeds.length > 0 && sueltas.length > 0) {
+                return realPeds.reduce((s, p) => s + Number(p.precio_total || 0), 0);
+              }
+              return selPeds.reduce((s, p) => s + Number(p.precio_total || 0), 0);
+            })()
 
         const selectedPedidosList = pedidosPendientes.filter((p: any) => reconcileModal.pedidosSeleccionados.includes(p.id));
 
@@ -6227,12 +6505,29 @@ export default function BancoTab({
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <label className="text-xs font-bold text-gray-500">
-                    {isOutflow ? 'Egresos del Sistema (Facturas / Gastos)' : 'Facturas de Ingresos / Ventas del Sistema'}
+                    {isOutflow ? 'Egresos del Sistema (Facturas / Gastos)' : 'Facturas de Ingresos y Pedidos (Tríada: Pedido + Factura + Depósito)'}
                   </label>
                   <span className="text-xs font-extrabold text-emerald-600 dark:text-emerald-400 font-mono">
-                    Acumulado: {formatCurrency(totalEgresosSistema)} ({isOutflow ? reconcileModal.gastosSeleccionados.length : reconcileModal.pedidosSeleccionados.length} facturas)
+                    Acumulado: {formatCurrency(totalEgresosSistema)} ({isOutflow ? reconcileModal.gastosSeleccionados.length : reconcileModal.pedidosSeleccionados.length} {isOutflow ? 'facturas' : 'ítems'})
                   </span>
                 </div>
+                {!isOutflow && (() => {
+                  const selPedidos = pedidosPendientes.filter((p) => reconcileModal.pedidosSeleccionados.includes(p.id));
+                  const realPeds = selPedidos.filter((p) => !p._esFacturaSuelta && !p.id?.startsWith('suelta_'));
+                  const sueltas = selPedidos.filter((p) => p._esFacturaSuelta || p.id?.startsWith('suelta_'));
+                  if (realPeds.length > 0 && sueltas.length > 0) {
+                    return (
+                      <div className="bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 p-2.5 rounded-xl text-xs text-emerald-800 dark:text-emerald-200 flex items-center gap-2 mb-2 font-medium">
+                        <span className="text-base shrink-0">✨</span>
+                        <div className="flex-1">
+                          <strong className="block text-emerald-900 dark:text-emerald-100">¡Tríada detectada!</strong>
+                          <span>Has seleccionado un Pedido y una Factura suelta. Al guardar la conciliación, se vincularán entre sí y ambos quedarán asignados a este depósito bancario en un solo movimiento.</span>
+                        </div>
+                      </div>
+                    );
+                  }
+                  return null;
+                })()}
                 <div className="space-y-1 max-h-80 overflow-y-auto border border-gray-200 dark:border-gray-800 rounded-xl">
                   {isOutflow ? (
                     gastosReconciliables
@@ -6346,10 +6641,21 @@ export default function BancoTab({
                       })
                       .map((p) => {
                         const clienteNombre = p.clientes?.nombre_local || p.clientes?.razon_social || p.cliente_nombre || p.nombreReceptor || '';
-                        const clienteRfc = p.clientes?.rfc || p.rfcReceptor || p.rfc || '';
-                        const hasFactura = !!p.folio_factura || (p.facturas_clientes && p.facturas_clientes.length > 0);
-                        const folioText = p.folio_factura || p.facturas_clientes?.[0]?.serie_folio || '';
-                        const titleText = p.numero_pedido ? `Pedido #${p.numero_pedido}` : (folioText ? `Factura: ${folioText}` : 'Venta');
+                        const clienteRfc = p.clientes?.rfc || p.rfcReceptor || p.rfc || p.cliente_rfc || '';
+                        const isSuelta = Boolean(p._esFacturaSuelta || p.id?.startsWith('suelta_'));
+                        const hasPedido = Boolean(p.numero_pedido);
+                        const fcObj = Array.isArray(p.facturas_clientes) ? p.facturas_clientes[0] : p.facturas_clientes;
+                        const hasFactura = Boolean(p.has_factura || p.folio_factura || fcObj || isSuelta);
+                        const folioText = p.folio_factura || fcObj?.serie_folio || (p.uuid_fiscal ? `UUID:${p.uuid_fiscal.substring(0, 8)}` : '');
+
+                        // Estados de la Tríada:
+                        const isTriada = hasPedido && hasFactura;
+                        const isPedidoSolo = hasPedido && !hasFactura;
+                        const isFacturaSola = !hasPedido && isSuelta;
+
+                        const titleText = isFacturaSola 
+                          ? `Factura: ${folioText || 'CFDI Emitido'}` 
+                          : `Pedido #${p.numero_pedido}`;
 
                         return (
                           <div key={p.id} className="flex items-center justify-between gap-3 p-3 hover:bg-gray-50 dark:hover:bg-gray-900/30 border-b border-gray-100 dark:border-gray-900 last:border-0 font-sans">
@@ -6367,9 +6673,14 @@ export default function BancoTab({
                                     const pdfList: string[] = prev.pdfFacturaUrl ? prev.pdfFacturaUrl.split(',') : [];
 
                                     pedidosPendientes.filter(item => sel.includes(item.id)).forEach(item => {
-                                      const inv = item.facturas_clientes?.[0];
-                                      if (inv?.xml_url) xmlList.push(inv.xml_url);
-                                      if (inv?.pdf_url) pdfList.push(inv.pdf_url);
+                                      if (item.xml_url) xmlList.push(...item.xml_url.split(','));
+                                      if (item.pdf_url) pdfList.push(...item.pdf_url.split(','));
+                                      if (item.facturas_clientes) {
+                                        (Array.isArray(item.facturas_clientes) ? item.facturas_clientes : [item.facturas_clientes]).forEach((inv: any) => {
+                                          if (inv?.xml_url) xmlList.push(...inv.xml_url.split(','));
+                                          if (inv?.pdf_url) pdfList.push(...inv.pdf_url.split(','));
+                                        });
+                                      }
                                     });
 
                                     const newXmlUrl = Array.from(new Set(xmlList.map(s => s.trim()).filter(Boolean))).join(',');
@@ -6388,13 +6699,19 @@ export default function BancoTab({
                               <div className="flex-1 min-w-0 space-y-1">
                                 <div className="flex items-center gap-2 flex-wrap">
                                   <span className="text-xs font-bold text-gray-900 dark:text-white">{titleText}</span>
-                                  {hasFactura ? (
-                                    <span className="bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 px-1.5 py-0.5 rounded text-[9px] font-bold border border-blue-200 dark:border-blue-800">
-                                      Factura: {folioText || 'Vinculada'}
+                                  {isTriada && (
+                                    <span className="bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 px-2 py-0.5 rounded text-[10px] font-bold border border-emerald-200 dark:border-emerald-800 flex items-center gap-1 shadow-xs">
+                                      <span>✨ Tríada Lista: Factura {folioText || 'Vinculada'}</span>
                                     </span>
-                                  ) : (
+                                  )}
+                                  {isPedidoSolo && (
                                     <span className="bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400 px-1.5 py-0.5 rounded text-[9px] font-bold border border-amber-200 dark:border-amber-800">
                                       Pend. Facturar
+                                    </span>
+                                  )}
+                                  {isFacturaSola && (
+                                    <span className="bg-purple-50 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 px-1.5 py-0.5 rounded text-[9px] font-bold border border-purple-200 dark:border-purple-800">
+                                      🧾 CFDI sin Pedido Asignado
                                     </span>
                                   )}
                                 </div>
@@ -6417,6 +6734,11 @@ export default function BancoTab({
                                         {getMetodoPagoLabel(p.metodo_pago)}
                                       </span>
                                     </>
+                                  )}
+                                  {isTriada && (
+                                    <span className="text-[9px] text-emerald-600 dark:text-emerald-400 font-medium">
+                                      (Pedido + Factura + Depósito se asignarán juntos)
+                                    </span>
                                   )}
                                 </div>
                               </div>
@@ -7324,22 +7646,46 @@ export default function BancoTab({
       {/* MODAL DE VINCULACIÓN DE MOVIMIENTOS A UN COMPROBANTE (TICKET) */}
       {activeCompToLink && currentCompToLink && (() => {
         const compMonto = Number(currentCompToLink.monto);
-        const associatedMovs = movimientos.filter(m => 
+        // Determinar el conjunto de movimientos base a buscar (del mes actual, mes siguiente o todos)
+        const compMonthStr = currentCompToLink.fecha ? String(currentCompToLink.fecha).substring(0, 7) : selectedMonth;
+        let nextMonthStr = '';
+        if (compMonthStr) {
+          const [y, m] = compMonthStr.split('-').map(Number);
+          const nextDate = new Date(Date.UTC(y, m, 1)); // mes 1-indexed pasa a m
+          nextMonthStr = nextDate.toISOString().substring(0, 7);
+        }
+
+        const baseMovPool = linkScopeMonth === 'all'
+          ? (allMovimientos && allMovimientos.length > 0 ? allMovimientos : movimientos)
+          : linkScopeMonth === 'next'
+          ? (allMovimientos && allMovimientos.length > 0
+              ? allMovimientos.filter(m => (m.mes_conciliacion || m.fecha?.substring(0, 7)) === nextMonthStr)
+              : movimientos)
+          : movimientos;
+
+        const effectiveComprobantesPool = allComprobantes && allComprobantes.length > 0 ? allComprobantes : comprobantes;
+
+        const associatedMovs = (allMovimientos && allMovimientos.length > 0 ? allMovimientos : movimientos).filter(m => 
           currentCompToLink.comprobantes_deposito_movimientos?.some(rel => rel.movimiento_id === m.id)
         );
-        const movsSum = movimientos.reduce((acc, m) => {
+        const movsSum = (allMovimientos && allMovimientos.length > 0 ? allMovimientos : movimientos).reduce((acc, m) => {
           const rel = currentCompToLink.comprobantes_deposito_movimientos?.find(r => r.movimiento_id === m.id);
           return acc + (rel ? Number(rel.monto_asociado) : 0);
         }, 0);
 
-        // Filtrar movimientos disponibles: EXCLUSIVAMENTE de la misma cuenta bancaria del comprobante
-        const targetCuentaId = currentCompToLink.cuenta_bancaria_id || selectedCuentaId;
-        const availableMovs = movimientos.filter(m => 
+        // Filtrar movimientos disponibles: Para cortes con tarjetas (Débito/Crédito/AMEX) permitir depósitos de BBVA
+        const bbvaCuenta = cuentasBancarias?.find(cb => (cb.nombre || '').toUpperCase().includes('BBVA'));
+        const tarjetaTotalBBVA = Number(currentCompToLink.monto_debito || 0) + Number(currentCompToLink.propina_debito || 0) + Number(currentCompToLink.monto_credito || 0) + Number(currentCompToLink.propina_credito || 0) + Number(currentCompToLink.monto_amex || 0) + Number(currentCompToLink.propina_amex || 0);
+        const hasCardPaymentsForBBVA = tarjetaTotalBBVA > 0 || currentCompToLink.tipo === 'corte_bbva' || currentCompToLink.tipo === 'deposito_ventanilla';
+
+        const effectiveTargetCuentaId = (hasCardPaymentsForBBVA && bbvaCuenta) ? bbvaCuenta.id : (currentCompToLink.cuenta_bancaria_id || selectedCuentaId);
+
+        const availableMovs = baseMovPool.filter(m => 
           m.tipo_movimiento === 'Deposito' && 
           !associatedMovs.some(am => am.id === m.id) && 
-          !comprobantes.some(c => c.id !== currentCompToLink.id && c.comprobantes_deposito_movimientos?.some(rel => rel.movimiento_id === m.id)) &&
+          !effectiveComprobantesPool.some(c => c.id !== currentCompToLink.id && c.comprobantes_deposito_movimientos?.some(rel => rel.movimiento_id === m.id)) &&
           m.estatus_conciliacion_bancaria?.clave !== 'conciliado' &&
-          (!targetCuentaId || m.cuenta_bancaria_id === targetCuentaId)
+          (!effectiveTargetCuentaId || m.cuenta_bancaria_id === effectiveTargetCuentaId || !m.cuenta_bancaria_id)
         );
 
         // Suma de movimientos seleccionados (calculada before totalSum)
@@ -7481,6 +7827,46 @@ export default function BancoTab({
                         className="bg-transparent border border-gray-300 dark:border-gray-700 px-2 py-0.5 rounded text-[10px] w-40 text-gray-900 dark:text-white"
                       />
                     </div>
+                    {/* Selector de Mes / Alcance (Mes actual vs Mes entrante) */}
+                    <div className="flex items-center gap-1.5 p-1 bg-gray-100 dark:bg-gray-900 rounded-lg text-[10px] font-bold">
+                      <span className="text-gray-400 px-1">Buscar en:</span>
+                      <button
+                        type="button"
+                        onClick={() => setLinkScopeMonth('current')}
+                        className={`px-2 py-0.5 rounded transition ${
+                          linkScopeMonth === 'current'
+                            ? 'bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 shadow-2xs font-extrabold'
+                            : 'text-gray-500 hover:text-gray-800 dark:hover:text-gray-200'
+                        }`}
+                      >
+                        Este Período
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setLinkScopeMonth('next')}
+                        className={`px-2 py-0.5 rounded transition flex items-center gap-1 ${
+                          linkScopeMonth === 'next'
+                            ? 'bg-amber-500 text-white shadow-2xs font-extrabold'
+                            : 'text-gray-500 hover:text-amber-600 dark:hover:text-amber-400'
+                        }`}
+                        title="Buscar depósitos en el estado de cuenta del mes siguiente (ej. ventas de fin de mes acreditadas los días 1 o 2)"
+                      >
+                        <span>Mes Siguiente 📅</span>
+                        {nextMonthStr && <span className="opacity-80 font-mono">({nextMonthStr})</span>}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setLinkScopeMonth('all')}
+                        className={`px-2 py-0.5 rounded transition ${
+                          linkScopeMonth === 'all'
+                            ? 'bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 shadow-2xs font-extrabold'
+                            : 'text-gray-500 hover:text-gray-800 dark:hover:text-gray-200'
+                        }`}
+                      >
+                        Todos
+                      </button>
+                    </div>
+
                     {/* Filtro por fechas */}
                     <div className="flex items-center gap-2">
                       <label className="text-[10px] text-gray-500 font-semibold">Desde:</label>
@@ -8044,18 +8430,37 @@ export default function BancoTab({
           </div>
         </div>
       )}
-
       {/* MODAL DE CONCILIACIÓN MASIVA (M TICKETS vs N DEPÓSITOS) */}
       {conciliacionMasivaModal.open && (() => {
+        const selCuentaMasiva = cuentasBancarias?.find(cb => cb.id === selectedCuentaId);
+        const isBBVAMasiva = selCuentaMasiva?.nombre?.toUpperCase().includes('BBVA');
+        const isCajaMasiva = selCuentaMasiva?.nombre?.toUpperCase().includes('CAJA CHICA') || selCuentaMasiva?.nombre?.toUpperCase().includes('EFECTIVO');
+        const isParrotMasiva = selCuentaMasiva?.nombre?.toUpperCase().includes('PARROT');
+
         const availableTickets = (comprobantes || []).filter(c => {
-          if (selectedCuentaId && c.cuenta_bancaria_id && c.cuenta_bancaria_id !== selectedCuentaId) return false;
+          if (selectedCuentaId && c.cuenta_bancaria_id && c.cuenta_bancaria_id !== selectedCuentaId) {
+            return false;
+          }
           const linkedSum = (c.comprobantes_deposito_movimientos || []).reduce((acc, rel) => acc + Number(rel.monto_asociado), 0);
           return Number(c.monto) > linkedSum + 0.05;
         });
 
         const availableDeposits = (movimientos || []).filter(m => {
           if (m.tipo_movimiento !== 'Deposito') return false;
-          if (selectedCuentaId && m.cuenta_bancaria_id !== selectedCuentaId) return false;
+          if (selectedCuentaId) {
+            const directMatch = m.cuenta_bancaria_id === selectedCuentaId || (m as any).cuentas_bancarias?.id === selectedCuentaId;
+            if (!directMatch) {
+              const selName = (selCuentaMasiva?.nombre || '').toUpperCase();
+              const hasNoAccount = !m.cuenta_bancaria_id && !(m as any).cuentas_bancarias?.id;
+              const concept = (m.concepto || '').toUpperCase();
+              const matchesFallback = hasNoAccount && (
+                (selName.includes('BBVA') && (concept.includes('BBVA') || concept.includes('BANCOMER'))) ||
+                (selName.includes('CAJA') && (concept.includes('CAJA') || concept.includes('EFECTIVO'))) ||
+                (selName.includes('PARROT') && concept.includes('PARROT'))
+              );
+              if (!matchesFallback) return false;
+            }
+          }
           if (m.estatus_conciliacion_bancaria?.clave === 'conciliado') return false;
           const linkedSum = comprobantes.reduce((acc, c) => {
             const rel = c.comprobantes_deposito_movimientos?.find(r => r.movimiento_id === m.id);

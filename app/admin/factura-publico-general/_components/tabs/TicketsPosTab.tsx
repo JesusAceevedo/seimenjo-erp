@@ -78,7 +78,7 @@ export const TicketsPosTab: React.FC<TicketsPosTabProps> = ({
             className="bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 px-2.5 py-1 rounded-lg text-xs text-gray-900 dark:text-white font-sans font-semibold outline-none focus:ring-1 focus:ring-emerald-500"
           >
             <option value="">Todas las Cuentas</option>
-            {cuentasBancarias.map(c => (
+            {(cuentasBancarias || []).map(c => (
               <option key={c.id} value={c.id}>{c.nombre} ({c.moneda})</option>
             ))}
           </select>
@@ -141,7 +141,7 @@ export const TicketsPosTab: React.FC<TicketsPosTabProps> = ({
               <th className="p-3">Descripción / Folio</th>
               <th className="p-3 text-right text-emerald-600 dark:text-emerald-400 font-black">💵 Efectivo (Facturable)</th>
               <th className="p-3 text-right text-purple-600 dark:text-purple-400 font-black">🦜 ParrotPay (Facturable)</th>
-              <th className="p-3 text-right text-blue-600 dark:text-blue-400">💳 Tarjetas BBVA (Informativo)</th>
+              <th className="p-3 text-right text-blue-600 dark:text-blue-400 font-black">💳 Tarjetas BBVA (Facturable)</th>
               <th className="p-3 text-right text-gray-400">Propinas (Excluidas)</th>
               <th className="p-3 text-center">Factura de Terceros</th>
               <th className="p-3 text-center">Destino Factura</th>

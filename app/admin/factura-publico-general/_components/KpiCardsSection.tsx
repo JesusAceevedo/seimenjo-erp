@@ -13,6 +13,7 @@ interface KpiCardsSectionProps {
   totalFacturaPublicoGeneral: number;
   totalEfectivoParrot: number;
   totalParrotPayParrot: number;
+  totalPropinasExcluidas: number;
   totalTercerosDeducibles: number;
   controlEfectivo: any;
   comparativoTarjetas: any;
@@ -20,7 +21,7 @@ interface KpiCardsSectionProps {
   userCargasMes: any[];
   formatCurrency: (val: number | string | null | undefined) => string;
   formatPeriodoCarga: (c: any) => string;
-  setTabActiva: (tab: 'facturas' | 'tickets' | 'comparativos' | 'depositos') => void;
+  setTabActiva: (tab: 'cierre' | 'facturas' | 'tickets' | 'comparativos' | 'depositos') => void;
   setSubTabComparativo: (subTab: 'efectivo' | 'tarjetas' | 'bbva_banco' | 'desfase_mes') => void;
 }
 
@@ -28,6 +29,7 @@ export const KpiCardsSection: React.FC<KpiCardsSectionProps> = ({
   totalFacturaPublicoGeneral,
   totalEfectivoParrot,
   totalParrotPayParrot,
+  totalPropinasExcluidas,
   totalTercerosDeducibles,
   controlEfectivo,
   comparativoTarjetas,
@@ -41,13 +43,13 @@ export const KpiCardsSection: React.FC<KpiCardsSectionProps> = ({
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
       
-      {/* 1. FACTURA PÚBLICO EN GENERAL (BASE PARROT: SOLO EFECTIVO + PARROTPAY) */}
+      {/* 1. FACTURA PÚBLICO EN GENERAL */}
       <div className="p-5 rounded-2xl bg-white dark:bg-gray-900 border border-emerald-200 dark:border-emerald-900/50 shadow-sm flex flex-col justify-between">
         <div>
           <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400 flex items-center justify-between">
-            <span className="flex items-center gap-1.5"><Globe size={14} /> Base Factura PG (Parrot)</span>
+            <span className="flex items-center gap-1.5"><Globe size={14} /> Base Factura Global</span>
             <span className="text-[9px] font-black bg-emerald-100 dark:bg-emerald-955 text-emerald-700 dark:text-emerald-300 px-2 py-0.5 rounded-full">
-              Solo Efec + ParrotPay
+              Incluye BBVA
             </span>
           </span>
           <h3 className="text-2xl font-black font-mono text-emerald-700 dark:text-emerald-300 mt-2">
@@ -64,15 +66,23 @@ export const KpiCardsSection: React.FC<KpiCardsSectionProps> = ({
                 <span className="font-mono font-bold text-purple-600 dark:text-purple-400">{formatCurrency(totalParrotPayParrot)}</span>
               </div>
             )}
+            <div className="flex justify-between">
+              <span>Tarjetas BBVA:</span>
+              <span className="font-mono font-bold text-blue-600 dark:text-blue-400">+{formatCurrency(comparativoTarjetas.totalTarjetasBbva)}</span>
+            </div>
             <div className="flex justify-between text-purple-600 dark:text-purple-400">
               <span>Deducción Terceros:</span>
               <span className="font-mono font-bold">-{formatCurrency(totalTercerosDeducibles)}</span>
+            </div>
+            <div className="flex justify-between text-gray-500 dark:text-gray-400">
+              <span>Propinas:</span>
+              <span className="font-mono font-bold">-{formatCurrency(totalPropinasExcluidas)}</span>
             </div>
           </div>
         </div>
         <div className="mt-3 pt-2 border-t border-gray-100 dark:border-gray-800 text-[9px] text-gray-400 flex items-center gap-1">
           <CheckCircle2 size={11} className="text-emerald-500" />
-          <span>Tarjetas excluidas por regla de facturación</span>
+          <span>BBVA incluye tickets pendientes de depósito</span>
         </div>
       </div>
 
