@@ -89,6 +89,7 @@ export async function notificarNuevoPedidoTelegram(pedidoId: string): Promise<{ 
         precio_total,
         comentarios,
         creado_en,
+        fecha_entrega,
         cliente_nombre,
         cliente_telefono,
         clientes (
@@ -182,8 +183,18 @@ export async function notificarNuevoPedidoTelegram(pedidoId: string): Promise<{ 
     if (emailCliente) {
       mensaje += `📧 <b>Email:</b> ${escapeTgHtml(emailCliente)}\n`;
     }
-    mensaje += `📅 <b>Fecha:</b> ${escapeTgHtml(fechaFormateada)}\n\n`;
-    mensaje += `📦 <b>Productos:</b>\n${itemsTexto}\n`;
+    mensaje += `📅 <b>Fecha:</b> ${escapeTgHtml(fechaFormateada)}\n`;
+    if (pedido.fecha_entrega) {
+      let fEntregaStr = pedido.fecha_entrega;
+      try {
+        const [y, m, d] = String(pedido.fecha_entrega).split('-');
+        if (y && m && d) fEntregaStr = `${d}/${m}/${y}`;
+      } catch {
+        fEntregaStr = pedido.fecha_entrega;
+      }
+      mensaje += `🚚 <b>Fecha de Entrega:</b> <b>${escapeTgHtml(fEntregaStr)}</b>\n`;
+    }
+    mensaje += `\n📦 <b>Productos:</b>\n${itemsTexto}\n`;
     mensaje += `━━━━━━━━━━━━━━━━━━━━━━\n`;
     mensaje += `💰 <b>TOTAL:</b> <b>${escapeTgHtml(totalStr)} MXN</b>\n`;
 

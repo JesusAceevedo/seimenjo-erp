@@ -9,7 +9,7 @@ import {
   ShoppingCart, LogOut, Plus, Minus, Send, CheckCircle2, AlertTriangle,
   FileText, FileCode, RefreshCw, Lock, Sparkles, Sun, Moon,
   Package, Clock, Truck, ChevronDown, ChevronUp, CheckCircle, Eye,
-  Building2
+  Building2, Calendar, X
 } from 'lucide-react';
 import Image from 'next/image';
 import { useProtectedRoute } from '../../lib/useProtectedRoute';
@@ -78,6 +78,39 @@ export default function Tienda() {
 
   const [carrito, setCarrito] = useState<ItemCarrito[]>([]);
   const [comentarios, setComentarios] = useState('');
+  const [fechaEntrega, setFechaEntrega] = useState('');
+  const [ultimoPedidoFechaEntrega, setUltimoPedidoFechaEntrega] = useState('');
+
+  // Helpers para fechas de entrega
+  const getFechaOffsetStr = (diasOffset: number = 0) => {
+    const d = new Date();
+    d.setDate(d.getDate() + diasOffset);
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  const fechaHoyStr = getFechaOffsetStr(0);
+  const fechaMananaStr = getFechaOffsetStr(1);
+  const fechaPasadoStr = getFechaOffsetStr(2);
+
+  const formatearFechaEntrega = (fechaIso?: string) => {
+    if (!fechaIso) return '';
+    try {
+      const [y, m, d] = fechaIso.split('-').map(Number);
+      if (!y || !m || !d) return fechaIso;
+      const dateObj = new Date(y, m - 1, d);
+      return dateObj.toLocaleDateString('es-MX', {
+        weekday: 'short',
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric'
+      });
+    } catch {
+      return fechaIso;
+    }
+  };
 
   const [loading, setLoading] = useState(true);
   const [errorCritico, setErrorCritico] = useState('');
@@ -418,6 +451,7 @@ export default function Tienda() {
           cliente_id: sesionInfo?.tipo === 'b2b' ? sesionInfo.id : null,
           empresa_id: pedidoEmpresaId,
           precio_total: totalCarrito,
+          fecha_entrega: fechaEntrega || null,
           comentarios: comentarios || null
         })
         .select('id')
@@ -452,9 +486,11 @@ export default function Tienda() {
       }
 
       // Éxito
+      setUltimoPedidoFechaEntrega(fechaEntrega);
       setPedidoExitoso(true);
       setCarrito([]);
       setComentarios('');
+      setFechaEntrega('');
       if (sesionInfo?.id) {
         cargarMisPedidos(sesionInfo.id);
       }
@@ -524,9 +560,15 @@ export default function Tienda() {
       <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-3xl p-8 sm:p-12 max-w-md w-full shadow-2xl flex flex-col items-center">
         <CheckCircle2 className="w-20 h-20 text-emerald-500 mb-4 animate-bounce" />
         <h2 className="text-3xl font-extrabold text-gray-900 dark:text-white mb-2 font-sans">¡Pedido Recibido!</h2>
-        <p className="text-gray-600 dark:text-gray-300 mb-6 font-sans text-sm">
+        <p className="text-gray-600 dark:text-gray-300 mb-4 font-sans text-sm">
           Tu solicitud fue registrada con éxito en estatus <strong className="text-amber-600 dark:text-amber-400">Pendiente</strong>. Nuestro equipo de cocina la procesará a la brevedad.
         </p>
+        {ultimoPedidoFechaEntrega && (
+          <div className="mb-6 p-3 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/60 rounded-xl text-xs text-amber-900 dark:text-amber-200 flex items-center justify-center gap-2 w-full">
+            <Calendar className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+            <span>Fecha de entrega programada: <strong className="capitalize">{formatearFechaEntrega(ultimoPedidoFechaEntrega)}</strong></span>
+          </div>
+        )}
         <div className="flex flex-col sm:flex-row gap-3 w-full">
           <button
             onClick={() => {
@@ -833,6 +875,78 @@ export default function Tienda() {
               </div>
 
               <div className="p-6 border-t border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-900/30">
+                {/* Selector de Fecha de Entrega */}
+                <div className="mb-4">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase flex items-center gap-1.5">
+                      <Calendar className="w-3.5 h-3.5 text-amber-500" />
+                      Fecha de Entrega Deseada
+                    </label>
+                    {fechaEntrega && (
+                      <button
+                        type="button"
+                        onClick={() => setFechaEntrega('')}
+                        className="text-[11px] text-gray-400 hover:text-red-500 transition flex items-center gap-0.5 font-medium"
+                        title="Quitar fecha"
+                      >
+                        <X className="w-3 h-3" /> Quitar
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Acceso rápido a fechas frecuentes */}
+                  <div className="grid grid-cols-3 gap-1.5 mb-2">
+                    <button
+                      type="button"
+                      onClick={() => setFechaEntrega(fechaHoyStr)}
+                      className={`py-1.5 px-2 text-xs font-bold rounded-lg border transition ${
+                        fechaEntrega === fechaHoyStr
+                          ? 'bg-amber-600 text-white border-amber-600 shadow-sm'
+                          : 'bg-white dark:bg-gray-900 text-gray-700 dark:text-gray-300 border-gray-200 dark:border-gray-800 hover:border-amber-400'
+                      }`}
+                    >
+                      Hoy
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setFechaEntrega(fechaMananaStr)}
+                      className={`py-1.5 px-2 text-xs font-bold rounded-lg border transition ${
+                        fechaEntrega === fechaMananaStr
+                          ? 'bg-amber-600 text-white border-amber-600 shadow-sm'
+                          : 'bg-white dark:bg-gray-900 text-gray-700 dark:text-gray-300 border-gray-200 dark:border-gray-800 hover:border-amber-400'
+                      }`}
+                    >
+                      Mañana
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setFechaEntrega(fechaPasadoStr)}
+                      className={`py-1.5 px-2 text-xs font-bold rounded-lg border transition ${
+                        fechaEntrega === fechaPasadoStr
+                          ? 'bg-amber-600 text-white border-amber-600 shadow-sm'
+                          : 'bg-white dark:bg-gray-900 text-gray-700 dark:text-gray-300 border-gray-200 dark:border-gray-800 hover:border-amber-400'
+                      }`}
+                    >
+                      Pasado mñn
+                    </button>
+                  </div>
+
+                  <input
+                    type="date"
+                    min={fechaHoyStr}
+                    value={fechaEntrega}
+                    onChange={(e) => setFechaEntrega(e.target.value)}
+                    className="w-full text-xs border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white rounded-lg shadow-sm focus:ring-1 focus:ring-amber-500 focus:border-amber-500 outline-none p-2 cursor-pointer"
+                    style={{ colorScheme: isDarkMode ? 'dark' : 'light' }}
+                  />
+
+                  {fechaEntrega && (
+                    <p className="text-[11px] text-amber-700 dark:text-amber-400 font-medium mt-1 flex items-center gap-1">
+                      <span>🚚</span> Solicitado para: <strong className="capitalize">{formatearFechaEntrega(fechaEntrega)}</strong>
+                    </p>
+                  )}
+                </div>
+
                 <div className="mb-4">
                   <label className="block text-xs font-bold text-gray-450 dark:text-gray-500 uppercase mb-1">Instrucciones</label>
                   <textarea rows={2} className="w-full text-sm border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white rounded-md shadow-sm focus:ring-amber-500 focus:border-amber-500 outline-none p-2" placeholder="Ej. Entregar por la puerta..." value={comentarios} onChange={(e) => setComentarios(e.target.value)}></textarea>
@@ -936,9 +1050,17 @@ export default function Tienda() {
                                 • {fechaStr}
                               </span>
                             </div>
-                            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                              {totalItems} {totalItems === 1 ? 'artículo' : 'artículos'} solicitados
-                            </p>
+                            <div className="flex flex-wrap items-center gap-2 mt-0.5">
+                              <span className="text-xs text-gray-500 dark:text-gray-400">
+                                {totalItems} {totalItems === 1 ? 'artículo' : 'artículos'} solicitados
+                              </span>
+                              {pedido.fecha_entrega && (
+                                <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/50 px-2 py-0.5 rounded border border-amber-200 dark:border-amber-900/40">
+                                  <Calendar className="w-3 h-3 text-amber-500" />
+                                  Entrega: {formatearFechaEntrega(pedido.fecha_entrega)}
+                                </span>
+                              )}
+                            </div>
                           </div>
                         </div>
 
@@ -1061,6 +1183,16 @@ export default function Tienda() {
                                     </button>
                                   ) : null}
                                 </div>
+                              </div>
+                            </div>
+                          )}
+
+                          {pedido.fecha_entrega && (
+                            <div className="mb-3 p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl text-xs text-amber-900 dark:text-amber-200 flex items-center gap-2">
+                              <Calendar className="w-4 h-4 text-amber-600 dark:text-amber-400 flex-shrink-0" />
+                              <div>
+                                <span className="font-bold">Fecha programada de entrega: </span>
+                                <span className="capitalize">{formatearFechaEntrega(pedido.fecha_entrega)}</span>
                               </div>
                             </div>
                           )}
