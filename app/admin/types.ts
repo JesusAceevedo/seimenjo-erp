@@ -5,38 +5,8 @@
 // Entidades base
 // ---------------------------------------------------------------------------
 
-export interface Cliente {
-  id: string;
-  nombre_local?: string;
-  razon_social?: string;
-  telefono?: string;
-  rfc?: string;
-  codigo_postal?: string;
-  regimen_fiscal?: string;
-  uso_cfdi?: string;
-  email_facturacion?: string;
-  es_anonimo?: boolean;
-  facturar_publico_general?: boolean;
-}
-
-export interface Proveedor {
-  id: string;
-  nombre_comercial?: string;
-  rfc?: string;
-  razon_social?: string;
-  telefono?: string;
-  email?: string;
-  alias?: string | null;
-  portal_facturacion?: string | null;
-  sitio_web?: string | null;
-  direccion?: string | null;
-  comentarios?: string | null;
-  banco_nombre?: string | null;
-  cuenta_clabe?: string | null;
-  cuenta_numero?: string | null;
-  convenio_numero?: string | null;
-  referencia_bancaria?: string | null;
-}
+import type { Cliente, Proveedor } from '@/lib/types/common';
+export type { Cliente, Proveedor };
 
 export interface ProductoVariante {
   id: string;
@@ -75,6 +45,7 @@ export interface Pedido {
   comentarios?: string;
   comentarios_generales?: string;
   folio_factura?: string;
+  facturas_clientes?: any;
   movimiento_bancario_id?: string | null;
 }
 
@@ -281,6 +252,8 @@ export interface MovimientoBancario {
   comentarios?: string | null;
   soporte_reembolso_url?: string | null;
   movimiento_reembolso_id?: string | null;
+  creado_en?: string | null;
+  [key: string]: any;
 }
 
 // Catálogo estandarizado de claves — basado en SAP/Odoo/QuickBooks/CONTPAQi

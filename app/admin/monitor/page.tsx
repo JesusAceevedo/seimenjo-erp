@@ -8,11 +8,12 @@ import { supabase } from '../../../lib/supabase';
 import { Plus, Filter, Soup, ShoppingCart, Truck, FileCheck, Search, Sun, Moon, FileText, ChevronLeft, ChevronRight, Users, LayoutDashboard, Printer, Mail, FileCode, Edit3, Trash2, DollarSign, AlertTriangle, UploadCloud, Loader2, RefreshCw } from 'lucide-react';
 import { useThemeMode } from '../../../lib/useThemeMode';
 import { enviarFacturaPorCorreo, obtenerSignedUrl } from '../gastos/actions';
-import { eliminarDetallesPedido } from './actions';
+import { eliminarDetallesPedido, recuperarDetalleDeFacturaXml, ConceptoRecuperado } from './actions';
 import { Pedido, Cliente, ProductoVariante, Repartidor, FormaPago, PrecioEspecialMap, DetallePedido } from '../types';
 import { SAT_FORMAS_PAGO, getMetodoPagoLabel } from '../../../lib/constants/sat';
 import { useEmpresaId } from '../../../lib/hooks/useEmpresaId';
 import SubirFacturaPedidoModal from './_components/SubirFacturaPedidoModal';
+import CompletarDetallePedidoModal from './_components/CompletarDetallePedidoModal';
 
 // --- ESTADOS INICIALES (Optimizados fuera del componente para no recrearlos en cada render) ---
 const getPedidoInicial = () => ({
@@ -161,6 +162,15 @@ export default function AdminMonitor() {
   const [emailModal, setEmailModal] = useState<{ open: boolean; details: any | null }>({ open: false, details: null });
   const [isSendingEmail, setIsSendingEmail] = useState(false);
   const [idPedidoEditar, setIdPedidoEditar] = useState<string | null>(null);
+
+  // Modal para completar información faltante de pedidos
+  const [completarModal, setCompletarModal] = useState<{
+    open: boolean;
+    pedido: Pedido | null;
+    initialNotice?: { type: 'success' | 'warning' | 'error'; message: string };
+    recoveredItems?: ConceptoRecuperado[];
+  }>({ open: false, pedido: null });
+  const [cargandoRecuperacionId, setCargandoRecuperacionId] = useState<string | null>(null);
 
   // Formulario
   const [nuevoPedido, setNuevoPedido] = useState(getPedidoInicial());
@@ -667,9 +677,75 @@ export default function AdminMonitor() {
     }
   };
 
+  const handleAbrirModalCompletarInfo = async (p: Pedido) => {
+    setCargandoRecuperacionId(p.id);
+    try {
+      const token = await getSessionToken();
+      const tieneFolioOFactura = !!(
+        p.folio_factura ||
+        (p.facturas_clientes && (Array.isArray(p.facturas_clientes) ? p.facturas_clientes.length > 0 : true))
+      );
+
+      if (tieneFolioOFactura) {
+        const res = await recuperarDetalleDeFacturaXml(p.id, token);
+        if (res.success && res.conceptos && res.conceptos.length > 0) {
+          setCompletarModal({
+            open: true,
+            pedido: p,
+            initialNotice: {
+              type: 'success',
+              message: `Se recuperaron ${res.conceptos.length} conceptos desde la factura ${res.folioFactura || ''}. Revisa los productos y completa las fechas y logística faltantes.`
+            },
+            recoveredItems: res.conceptos
+          });
+          return;
+        } else {
+          // Cuando no se pueda recuperar el detalle del pedido desde la factura XML -> abrir modal para completar información faltante
+          setCompletarModal({
+            open: true,
+            pedido: p,
+            initialNotice: {
+              type: 'warning',
+              message: res.error || 'No se pudo recuperar el detalle del pedido automáticamente desde la factura XML. Por favor completa la información faltante a continuación:'
+            },
+            recoveredItems: []
+          });
+          return;
+        }
+      }
+
+      setCompletarModal({
+        open: true,
+        pedido: p,
+        initialNotice: {
+          type: 'warning',
+          message: 'El pedido no cuenta con detalle de productos registrado ni factura XML. Completa la información faltante a continuación:'
+        },
+        recoveredItems: []
+      });
+    } catch (err: any) {
+      setCompletarModal({
+        open: true,
+        pedido: p,
+        initialNotice: {
+          type: 'warning',
+          message: 'No se pudo recuperar el detalle del pedido automáticamente (' + (err?.message || 'Error de conexión') + '). Completa la información faltante a continuación:'
+        },
+        recoveredItems: []
+      });
+    } finally {
+      setCargandoRecuperacionId(null);
+    }
+  };
+
   const abrirModalEditarPedido = (p: Pedido) => {
     if (p.estatus_pago === 'Liquidado') {
-      alert("No se puede editar un pedido que ya ha sido liquidado.");
+      const deseaCompletar = confirm(
+        "Este pedido ya ha sido liquidado y sus importes contables están protegidos.\n\n¿Deseas abrir el modal para completar los detalles de carga, fechas operativas o repartidor faltantes?"
+      );
+      if (deseaCompletar) {
+        handleAbrirModalCompletarInfo(p);
+      }
       return;
     }
     setIdPedidoEditar(p.id);
@@ -715,6 +791,16 @@ export default function AdminMonitor() {
 
   const imprimirTicketPOS = async (pedido: Pedido) => {
     try {
+      if (!pedido.pedido_detalles || pedido.pedido_detalles.length === 0) {
+        const deseaCompletar = confirm(
+          `El pedido #${pedido.numero_pedido || pedido.id.split('-')[0]} no cuenta con detalle de productos cargados.\n\n¿Deseas recuperar o completar la información faltante antes de imprimir el ticket?`
+        );
+        if (deseaCompletar) {
+          handleAbrirModalCompletarInfo(pedido);
+          return;
+        }
+      }
+
       // 1. Obtener la configuración actual del ticket
       const { data: config, error } = await supabase
         .from('configuracion_ticket')
@@ -1047,17 +1133,21 @@ export default function AdminMonitor() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100 dark:divide-gray-800/50 text-xs">
-                  {paginatedPedidos.map((p) => (
+                  {paginatedPedidos.map((p) => {
+                    const facRel = Array.isArray(p.facturas_clientes) ? p.facturas_clientes[0] : p.facturas_clientes;
+                    const folioFactura = p.folio_factura || facRel?.serie_folio || null;
+
+                    return (
                     <tr key={p.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/20 transition-colors">
                       <td className="p-4">
                         <div className="text-amber-600 dark:text-amber-500 font-mono font-bold text-sm">
                           # {p.numero_pedido || p.id.split('-')[0]}
                         </div>
                         <div className="font-semibold mt-0.5 text-gray-900 dark:text-white">{p.clientes?.nombre_local || p.cliente_nombre || 'Ocasional'}</div>
-                        {p.folio_factura && (
+                        {folioFactura && (
                           <div className="mt-1 flex items-center gap-1 text-[10px] text-blue-600 dark:text-blue-400 font-mono">
                             <FileText size={11} className="shrink-0" />
-                            <span className="truncate max-w-[130px]" title={p.folio_factura}>Factura: {p.folio_factura}</span>
+                            <span className="truncate max-w-[130px]" title={folioFactura}>Factura: {folioFactura}</span>
                           </div>
                         )}
                       </td>
@@ -1068,7 +1158,25 @@ export default function AdminMonitor() {
                       </td>
                       <td className="p-4 space-y-1">
                         {(!p.pedido_detalles || p.pedido_detalles.length === 0) ? (
-                          <span className="text-gray-400 italic text-[11px]">Sin productos</span>
+                          <div className="flex flex-col gap-1.5 items-start">
+                            <span className="text-amber-600 dark:text-amber-500 italic text-[11px] font-medium flex items-center gap-1">
+                              <AlertTriangle size={12} className="shrink-0" /> Sin productos
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => handleAbrirModalCompletarInfo(p)}
+                              disabled={cargandoRecuperacionId === p.id}
+                              className="px-2 py-0.5 bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/40 dark:hover:bg-amber-900/60 text-amber-700 dark:text-amber-400 border border-amber-300 dark:border-amber-700/60 rounded text-[10px] font-bold flex items-center gap-1 transition-all cursor-pointer shadow-xs disabled:opacity-50"
+                              title="Recuperar detalle desde factura o completar información faltante"
+                            >
+                              {cargandoRecuperacionId === p.id ? (
+                                <Loader2 size={10} className="animate-spin text-amber-600" />
+                              ) : (
+                                <RefreshCw size={10} className="text-amber-600 dark:text-amber-400" />
+                              )}
+                              <span>{cargandoRecuperacionId === p.id ? 'Recuperando...' : 'Completar Detalle'}</span>
+                            </button>
+                          </div>
                         ) : (
                           <div className="bg-gray-50 dark:bg-gray-900/60 p-2 rounded border border-gray-200 dark:border-gray-800 space-y-1 text-gray-900 dark:text-white">
                             {p.pedido_detalles.map((d: any) => {
@@ -1111,7 +1219,7 @@ export default function AdminMonitor() {
                         ) : (
                           <div className="text-emerald-600 dark:text-emerald-400 font-medium bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20 rounded py-1 px-2 text-[10px] flex items-center justify-center gap-1"><FileCheck className="w-3 h-3" /> Cobro Listo</div>
                         )}
-                        {p.folio_factura ? (
+                        {folioFactura ? (
                           <div className="space-y-1">
                             <div className="grid grid-cols-2 gap-1">
                               <button
@@ -1178,7 +1286,7 @@ export default function AdminMonitor() {
                         >
                           <Printer size={12} /> Ticket
                         </button>
-                        {p.estatus_pago !== 'Liquidado' && (
+                        {p.estatus_pago !== 'Liquidado' ? (
                           <div className="flex gap-2 mt-1">
                             <button
                               onClick={() => abrirModalEditarPedido(p)}
@@ -1195,10 +1303,28 @@ export default function AdminMonitor() {
                               <Trash2 size={10} /> Eliminar
                             </button>
                           </div>
+                        ) : (
+                          (!p.pedido_detalles || p.pedido_detalles.length === 0 || !p.fecha_produccion || !p.fecha_entrega) && (
+                            <button
+                              type="button"
+                              onClick={() => handleAbrirModalCompletarInfo(p)}
+                              disabled={cargandoRecuperacionId === p.id}
+                              className="w-full mt-1 px-2 py-1 bg-amber-500 hover:bg-amber-600 text-white font-medium rounded shadow transition-colors text-[10px] flex items-center justify-center gap-1 uppercase font-sans font-semibold cursor-pointer disabled:opacity-50"
+                              title="Completar información faltante de este pedido"
+                            >
+                              {cargandoRecuperacionId === p.id ? (
+                                <Loader2 size={11} className="animate-spin" />
+                              ) : (
+                                <Plus size={11} />
+                              )}
+                              <span>Completar Info</span>
+                            </button>
+                          )
                         )}
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -1586,7 +1712,24 @@ export default function AdminMonitor() {
           />
         )}
 
-
+        {/* MODAL COMPLETAR INFORMACIÓN FALTANTE */}
+        {completarModal.open && completarModal.pedido && (
+          <CompletarDetallePedidoModal
+            isOpen={completarModal.open}
+            pedido={completarModal.pedido}
+            initialNotice={completarModal.initialNotice}
+            recoveredItems={completarModal.recoveredItems}
+            productos={productos}
+            repartidores={repartidoresList}
+            preciosEspecialesCliente={preciosEspecialesCliente}
+            getSessionToken={getSessionToken}
+            onClose={() => setCompletarModal({ open: false, pedido: null })}
+            onSuccess={() => {
+              setCompletarModal({ open: false, pedido: null });
+              fetchPedidos();
+            }}
+          />
+        )}
 
       </div>
     </div>

@@ -12,6 +12,7 @@ import {
   ChevronRight, Clock, HelpCircle, Receipt, ExternalLink, Plus
 } from 'lucide-react';
 import { supabase } from '../../../../lib/supabase';
+import type { MovimientoBancario } from '../../types';
 import { useCfdiViewer } from '../../_components/CfdiViewerContext';
 import {
   actualizarAuditoriaMovimientoAction,
@@ -21,11 +22,11 @@ import {
 interface HistorialConciliacionModalProps {
   open: boolean;
   onClose: () => void;
-  movimiento: any | null;
-  allMovimientos?: any[];
+  movimiento: MovimientoBancario | null;
+  allMovimientos?: MovimientoBancario[];
   onRefresh?: () => void;
   onDownloadFile: (url: string) => void;
-  onOpenReconcileModal?: (m: any) => void;
+  onOpenReconcileModal?: (m: MovimientoBancario) => void;
   token?: string;
 }
 

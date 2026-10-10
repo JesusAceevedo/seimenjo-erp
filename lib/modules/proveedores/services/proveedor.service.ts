@@ -28,6 +28,10 @@ export class ProveedorService {
       throw new Error('El RFC del proveedor es obligatorio.');
     }
 
+    const bancoNombre = input.banco_nombre?.trim() || input.banco?.trim() || null;
+    const clabe = input.cuenta_clabe?.trim() || input.clabe?.trim() || null;
+    const cuentaNumero = input.cuenta_numero?.trim() || input.cuenta_bancaria?.trim() || null;
+
     const payload = {
       rfc,
       nombre_comercial: nombreComercial,
@@ -36,12 +40,21 @@ export class ProveedorService {
       telefono: input.telefono?.trim() || null,
       email: input.email?.trim() || null,
       contacto: input.contacto?.trim() || null,
+      portal_facturacion: input.portal_facturacion?.trim() || null,
+      sitio_web: input.sitio_web?.trim() || null,
+      direccion: input.direccion?.trim() || null,
+      comentarios: input.comentarios?.trim() || null,
       dias_credito: input.dias_credito !== undefined && input.dias_credito !== null ? Number(input.dias_credito) : 0,
       limite_credito: input.limite_credito !== undefined && input.limite_credito !== null ? Number(input.limite_credito) : 0,
-      banco: input.banco?.trim() || null,
-      cuenta_bancaria: input.cuenta_bancaria?.trim() || null,
-      clabe: input.clabe?.trim() || null,
+      banco_nombre: bancoNombre,
+      banco: bancoNombre,
+      cuenta_numero: cuentaNumero,
+      cuenta_bancaria: cuentaNumero,
+      cuenta_clabe: clabe,
+      clabe: clabe,
       titular_cuenta: input.titular_cuenta?.trim() || null,
+      convenio_numero: input.convenio_numero?.trim() || null,
+      referencia_bancaria: input.referencia_bancaria?.trim() || null,
       empresa_id: input.empresa_id || null
     };
 

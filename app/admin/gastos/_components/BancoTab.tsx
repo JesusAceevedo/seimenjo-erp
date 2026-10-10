@@ -1417,6 +1417,17 @@ export default function BancoTab({
               totalPago += parseFloat(pagoNodes[i].getAttribute('Monto') || pagoNodes[i].getAttribute('monto') || '0');
             }
             total = totalPago;
+          } else if (tipoDeComprobante === 'N' || xmlDoc.getElementsByTagName('nomina12:Nomina').length > 0 || xmlDoc.getElementsByTagName('Nomina').length > 0) {
+            // Recibo de Nómina (Tipo N): si Total es 0 o no viene en Comprobante, buscar en el nodo de nómina
+            if (total <= 0) {
+              const nominaNode = xmlDoc.getElementsByTagName('nomina12:Nomina')[0] || xmlDoc.getElementsByTagName('Nomina')[0];
+              if (nominaNode) {
+                const totalPercepciones = parseFloat(nominaNode.getAttribute('TotalPercepciones') || '0');
+                const totalDeducciones = parseFloat(nominaNode.getAttribute('TotalDeducciones') || '0');
+                const totalOtrosPagos = parseFloat(nominaNode.getAttribute('TotalOtrosPagos') || '0');
+                total = Math.max(0, (totalPercepciones + totalOtrosPagos) - totalDeducciones);
+              }
+            }
           }
           resolve(total);
         } catch (err) {
@@ -1455,6 +1466,16 @@ export default function BancoTab({
           totalPago += parseFloat(pagoNodes[i].getAttribute('Monto') || pagoNodes[i].getAttribute('monto') || '0');
         }
         total = totalPago;
+      } else if (tipoDeComprobante === 'N' || xmlDoc.getElementsByTagName('nomina12:Nomina').length > 0 || xmlDoc.getElementsByTagName('Nomina').length > 0) {
+        if (total <= 0) {
+          const nominaNode = xmlDoc.getElementsByTagName('nomina12:Nomina')[0] || xmlDoc.getElementsByTagName('Nomina')[0];
+          if (nominaNode) {
+            const totalPercepciones = parseFloat(nominaNode.getAttribute('TotalPercepciones') || '0');
+            const totalDeducciones = parseFloat(nominaNode.getAttribute('TotalDeducciones') || '0');
+            const totalOtrosPagos = parseFloat(nominaNode.getAttribute('TotalOtrosPagos') || '0');
+            total = Math.max(0, (totalPercepciones + totalOtrosPagos) - totalDeducciones);
+          }
+        }
       }
       return total;
     } catch (err) {
@@ -6776,7 +6797,12 @@ export default function BancoTab({
                   
                   {/* Columna XML */}
                   <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-gray-500 block">Archivo XML (CFDI)</label>
+                    <div className="flex items-center justify-between">
+                      <label className="text-[10px] font-bold text-gray-500 block">Archivo XML (CFDI / Nómina)</label>
+                      <span className="text-[8.5px] px-1 py-0.2 rounded font-semibold bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 border border-blue-200 dark:border-blue-800" title="Acepta CFDI de gastos habituales y recibos de Nómina / PTU emitidos por la empresa">
+                        Factura / Nómina
+                      </span>
+                    </div>
                     <div className="relative overflow-hidden shrink-0">
                       <input
                         type="file"

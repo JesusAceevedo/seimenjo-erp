@@ -1,22 +1,5 @@
-export interface Proveedor {
-  id: string;
-  empresa_id?: string | null;
-  rfc: string;
-  nombre_comercial: string;
-  razon_social?: string | null;
-  alias?: string | null;
-  telefono?: string | null;
-  email?: string | null;
-  contacto?: string | null;
-  dias_credito?: number | null;
-  limite_credito?: number | null;
-  banco?: string | null;
-  cuenta_bancaria?: string | null;
-  clabe?: string | null;
-  titular_cuenta?: string | null;
-  saldo_favor?: number | null;
-  created_at?: string;
-}
+export type { Proveedor } from '@/lib/types/common';
+import type { Proveedor } from '@/lib/types/common';
 
 export interface FacturaProveedor {
   id: string;
@@ -66,11 +49,20 @@ export interface GuardarProveedorInput {
   telefono?: string | null;
   email?: string | null;
   contacto?: string | null;
+  portal_facturacion?: string | null;
+  sitio_web?: string | null;
+  direccion?: string | null;
+  comentarios?: string | null;
   dias_credito?: number | null;
   limite_credito?: number | null;
   banco?: string | null;
+  banco_nombre?: string | null;
   cuenta_bancaria?: string | null;
+  cuenta_numero?: string | null;
   clabe?: string | null;
+  cuenta_clabe?: string | null;
   titular_cuenta?: string | null;
+  convenio_numero?: string | null;
+  referencia_bancaria?: string | null;
   empresa_id?: string | null;
 }

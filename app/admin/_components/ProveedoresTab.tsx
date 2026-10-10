@@ -7,38 +7,21 @@ import React, { useState, useEffect } from 'react';
 import { Plus, Search, RefreshCw, Users, ExternalLink, X, AlertTriangle, Eye, DollarSign, History, ArrowDownRight, ArrowUpRight, CheckCircle2 } from 'lucide-react';
 import { formatCurrency } from '../../../lib/formatters';
 import type { Proveedor } from '../types';
+import type { ProveedorModalState, FacturaProveedor } from '@/lib/modules/proveedores/types/proveedor.types';
 import { useCfdiViewer } from './CfdiViewerContext';
 import { obtenerHistorialSaldoFavor, registrarAbonoSaldoFavor, aplicarSaldoFavorAGasto } from '../proveedores/proveedoresActions';
 import { useSessionToken } from '../../../lib/hooks/useSessionToken';
 
-interface ProveedorModalState {
-  open: boolean;
-  proveedor: Partial<Proveedor> & { id?: string } | null;
-  loading: boolean;
-  error: string;
-}
-
-interface FacturaProveedor {
-  id: string;
-  fecha_gasto?: string;
-  concepto: string;
-  monto: number;
-  uuid_fiscal?: string;
-  gasto_padre_id?: string | null;
-  xml_url?: string;
-  pdf_url?: string;
-}
-
 export interface ProveedoresTabProps {
-  proveedores: any[];
+  proveedores: Proveedor[];
   busquedaProveedor: string;
   setBusquedaProveedor: (v: string) => void;
-  selectedProveedor: any | null;
+  selectedProveedor: Proveedor | null;
   proveedorFacturas: FacturaProveedor[];
   cargandoFacturasProveedor: boolean;
   proveedorModal: ProveedorModalState;
   setProveedorModal: React.Dispatch<React.SetStateAction<ProveedorModalState>>;
-  cargarDetallesProveedor: (p: any) => void;
+  cargarDetallesProveedor: (p: Proveedor) => void;
   handleSaveProveedor: (e: React.FormEvent) => void;
   handleDeleteProveedor: (id: string) => void;
   onDownloadFile: (url: string) => void;
@@ -322,7 +305,7 @@ export default function ProveedoresTab({
                     ].map(({ label, value, title, truncate }) => (
                       <div key={label}>
                         <span className="text-[10px] text-gray-400 block">{label}</span>
-                        <span className={`font-medium text-gray-900 dark:text-white${truncate ? ' truncate block' : ''}`} title={title}>{value || '-'}</span>
+                        <span className={`font-medium text-gray-900 dark:text-white${truncate ? ' truncate block' : ''}`} title={title || undefined}>{value || '-'}</span>
                       </div>
                     ))}
                     <div>

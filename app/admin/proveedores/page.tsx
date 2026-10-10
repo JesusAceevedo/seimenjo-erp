@@ -42,8 +42,8 @@ export default function ProveedoresPage() {
           selectedProveedor={selectedProveedor}
           proveedorFacturas={proveedorFacturas}
           cargandoFacturasProveedor={cargandoFacturasProveedor}
-          proveedorModal={proveedorModal as any}
-          setProveedorModal={setProveedorModal as any}
+          proveedorModal={proveedorModal}
+          setProveedorModal={setProveedorModal}
           cargarDetallesProveedor={cargarDetallesProveedor}
           handleSaveProveedor={handleSaveProveedor}
           handleDeleteProveedor={handleDeleteProveedor}

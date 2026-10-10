@@ -2259,6 +2259,14 @@ export async function guardarConciliacionManual(
                   const rfcEmisor = (emisor?.['@_Rfc'] || emisor?.['@_rfc'] || '').trim().toUpperCase();
                   const nombreEmisor = emisor?.['@_Nombre'] || emisor?.['@_nombre'];
 
+                  // Detectar si el CFDI es un recibo de Nómina (Tipo N o complemento de Nómina)
+                  const tipoDeComprobante = cfdi['@_TipoDeComprobante'] || cfdi['@_tipoDeComprobante'] || 'I';
+                  const isNomina = tipoDeComprobante === 'N' ||
+                    !!cfdi['cfdi:Complemento']?.['nomina12:Nomina'] ||
+                    !!cfdi['cfdi:Complemento']?.['Nomina'] ||
+                    !!cfdi['Complemento']?.['nomina12:Nomina'] ||
+                    !!cfdi['Complemento']?.['Nomina'];
+
                   // Validación por RFC de la empresa activa
                   if (empresaId) {
                     const { data: empData } = await supabaseAdmin
@@ -2269,97 +2277,102 @@ export async function guardarConciliacionManual(
 
                     const currentEmpresaRfc = empData?.rfc?.trim().toUpperCase();
 
-                    // CASO A: Si el EMISOR es la empresa activa, es una FACTURA EMITIDA (Venta / Ingreso)
+                    // CASO A: Si el EMISOR es la empresa activa
                     if (currentEmpresaRfc && rfcEmisor === currentEmpresaRfc) {
-                      const { data: existingFc } = await supabaseAdmin
-                        .from('facturas_clientes')
-                        .select('id')
-                        .eq('uuid_fiscal', uuid.toLowerCase())
-                        .maybeSingle();
-
-                      if (!existingFc) {
-                        let clienteId = null;
-                        if (rfcReceptor) {
-                          const cleanRec = rfcReceptor.trim().toUpperCase();
-                          let { data: cli } = await supabaseAdmin
-                            .from('clientes')
-                            .select('id')
-                            .eq('rfc', cleanRec)
-                            .eq('empresa_id', empresaId)
-                            .maybeSingle();
-
-                          if (!cli) {
-                            const nombreRec = receptor?.['@_Nombre'] || receptor?.['@_nombre'] || `CLIENTE ${cleanRec}`;
-                            const { data: newCli } = await supabaseAdmin
-                              .from('clientes')
-                              .insert({
-                                rfc: cleanRec,
-                                nombre_local: nombreRec,
-                                razon_social: nombreRec,
-                                empresa_id: empresaId,
-                                es_anonimo: false
-                              })
-                              .select('id')
-                              .single();
-                            cli = newCli;
-                          }
-                          clienteId = cli?.id || null;
-                        }
-
-                        const totalV = parseFloat(cfdi['@_Total'] || cfdi['@_total'] || '0');
-                        const subtotalV = parseFloat(cfdi['@_SubTotal'] || cfdi['@_subtotal'] || '0') || totalV;
-                        const fechaV = cfdi['@_Fecha'] || cfdi['@_fecha'] || '';
-                        const fechaEmisionV = fechaV ? fechaV.split('T')[0] : new Date().toISOString().split('T')[0];
-                        const serieV = (cfdi['@_Serie'] || cfdi['@_serie'] || '').trim();
-                        const folioV = (cfdi['@_Folio'] || cfdi['@_folio'] || '').trim();
-                        const folioStrV = folioV ? `${serieV}${folioV}` : serieV || 'FAC';
-                        const formaPagoCodeV = (cfdi['@_FormaPago'] || cfdi['@_formaPago'] || '').trim();
-
-                        const { data: fpList } = await supabaseAdmin
-                          .from('formas_pago')
-                          .select('id')
-                          .eq('codigo', formaPagoCodeV)
-                          .limit(1);
-
-                        const { data: estList } = await supabaseAdmin
-                          .from('estatus_factura')
-                          .select('id')
-                          .ilike('nombre', 'Facturado')
-                          .limit(1);
-
-                        let globalIvaV = 0;
-                        const impV = cfdi['cfdi:Impuestos'] || cfdi['Impuestos'];
-                        const trasV = impV?.['cfdi:Traslados']?.['cfdi:Traslado'] || impV?.['Traslados']?.['Traslado'];
-                        if (trasV) {
-                          const trasArrV = Array.isArray(trasV) ? trasV : [trasV];
-                          for (const t of trasArrV) {
-                            if (t['@_Impuesto'] === '002') globalIvaV += parseFloat(t['@_Importe'] || '0');
-                          }
-                        }
-
-                        await supabaseAdmin
+                      if (!isNomina) {
+                        // Es una FACTURA EMITIDA de venta / ingreso regular
+                        const { data: existingFc } = await supabaseAdmin
                           .from('facturas_clientes')
-                          .insert({
-                            empresa_id: empresaId,
-                            cliente_id: clienteId,
-                            uuid_fiscal: uuid.toLowerCase(),
-                            serie_folio: folioStrV,
-                            total: totalV,
-                            subtotal: subtotalV,
-                            iva_trasladado: globalIvaV,
-                            fecha_emision: fechaEmisionV,
-                            forma_pago_id: fpList?.[0]?.id || null,
-                            estatus_factura_id: estList?.[0]?.id || null,
-                            uso_cfdi_clave: receptor?.['@_UsoCFDI'] || 'G03',
-                            xml_url: path,
-                            pdf_url: payload.pdfFacturaUrl || null
-                          });
+                          .select('id')
+                          .eq('uuid_fiscal', uuid.toLowerCase())
+                          .maybeSingle();
+
+                        if (!existingFc) {
+                          let clienteId = null;
+                          if (rfcReceptor) {
+                            const cleanRec = rfcReceptor.trim().toUpperCase();
+                            let { data: cli } = await supabaseAdmin
+                              .from('clientes')
+                              .select('id')
+                              .eq('rfc', cleanRec)
+                              .eq('empresa_id', empresaId)
+                              .maybeSingle();
+
+                            if (!cli) {
+                              const nombreRec = receptor?.['@_Nombre'] || receptor?.['@_nombre'] || `CLIENTE ${cleanRec}`;
+                              const { data: newCli } = await supabaseAdmin
+                                .from('clientes')
+                                .insert({
+                                  rfc: cleanRec,
+                                  nombre_local: nombreRec,
+                                  razon_social: nombreRec,
+                                  empresa_id: empresaId,
+                                  es_anonimo: false
+                                })
+                                .select('id')
+                                .single();
+                              cli = newCli;
+                            }
+                            clienteId = cli?.id || null;
+                          }
+
+                          const totalV = parseFloat(cfdi['@_Total'] || cfdi['@_total'] || '0');
+                          const subtotalV = parseFloat(cfdi['@_SubTotal'] || cfdi['@_subtotal'] || '0') || totalV;
+                          const fechaV = cfdi['@_Fecha'] || cfdi['@_fecha'] || '';
+                          const fechaEmisionV = fechaV ? fechaV.split('T')[0] : new Date().toISOString().split('T')[0];
+                          const serieV = (cfdi['@_Serie'] || cfdi['@_serie'] || '').trim();
+                          const folioV = (cfdi['@_Folio'] || cfdi['@_folio'] || '').trim();
+                          const folioStrV = folioV ? `${serieV}${folioV}` : serieV || 'FAC';
+                          const formaPagoCodeV = (cfdi['@_FormaPago'] || cfdi['@_formaPago'] || '').trim();
+
+                          const { data: fpList } = await supabaseAdmin
+                            .from('formas_pago')
+                            .select('id')
+                            .eq('codigo', formaPagoCodeV)
+                            .limit(1);
+
+                          const { data: estList } = await supabaseAdmin
+                            .from('estatus_factura')
+                            .select('id')
+                            .ilike('nombre', 'Facturado')
+                            .limit(1);
+
+                          let globalIvaV = 0;
+                          const impV = cfdi['cfdi:Impuestos'] || cfdi['Impuestos'];
+                          const trasV = impV?.['cfdi:Traslados']?.['cfdi:Traslado'] || impV?.['Traslados']?.['Traslado'];
+                          if (trasV) {
+                            const trasArrV = Array.isArray(trasV) ? trasV : [trasV];
+                            for (const t of trasArrV) {
+                              if (t['@_Impuesto'] === '002') globalIvaV += parseFloat(t['@_Importe'] || '0');
+                            }
+                          }
+
+                          await supabaseAdmin
+                            .from('facturas_clientes')
+                            .insert({
+                              empresa_id: empresaId,
+                              cliente_id: clienteId,
+                              uuid_fiscal: uuid.toLowerCase(),
+                              serie_folio: folioStrV,
+                              total: totalV,
+                              subtotal: subtotalV,
+                              iva_trasladado: globalIvaV,
+                              fecha_emision: fechaEmisionV,
+                              forma_pago_id: fpList?.[0]?.id || null,
+                              estatus_factura_id: estList?.[0]?.id || null,
+                              uso_cfdi_clave: receptor?.['@_UsoCFDI'] || 'G03',
+                              xml_url: path,
+                              pdf_url: payload.pdfFacturaUrl || null
+                            });
+                        }
+                        continue;
                       }
-                      continue;
+                      // Si ES NÓMINA (isNomina === true), el Emisor es la empresa pero es un Egreso/Gasto para los empleados.
+                      // Permitir que continúe el flujo hacia abajo como registro de Gasto.
                     }
 
-                    // CASO B: Si es un gasto (egreso), validar que el RECEPTOR sea la empresa activa
-                    if (currentEmpresaRfc && rfcReceptor && rfcReceptor.trim().toUpperCase() !== currentEmpresaRfc) {
+                    // CASO B: Si es un gasto general (no nómina), validar que el RECEPTOR sea la empresa activa
+                    if (!isNomina && currentEmpresaRfc && rfcReceptor && rfcReceptor.trim().toUpperCase() !== currentEmpresaRfc) {
                       console.warn(`Saltando registro automático de gasto: RFC receptor del XML (${rfcReceptor}) no coincide con el RFC de la empresa activa (${currentEmpresaRfc}).`);
                       continue;
                     }
@@ -2387,13 +2400,18 @@ export async function guardarConciliacionManual(
                     }
                   }
 
-                  // Obtener o registrar proveedor
+                  // Si es nómina, el "proveedor/personal" es el receptor (empleado), y el concepto es Nómina
+                  const targetRfc = isNomina ? rfcReceptor : rfcEmisor;
+                  const targetNombre = isNomina ? (receptor?.['@_Nombre'] || receptor?.['@_nombre'] || 'Personal Nómina') : (nombreEmisor || rfcEmisor);
+
+                  // Obtener o registrar proveedor/personal
                   let proveedorId = null;
-                  if (rfcEmisor) {
+                  if (targetRfc) {
+                    const cleanTargetRfc = targetRfc.trim().toUpperCase();
                     const { data: prov } = await supabaseAdmin
                       .from('proveedores')
                       .select('id')
-                      .eq('rfc', rfcEmisor.toUpperCase())
+                      .eq('rfc', cleanTargetRfc)
                       .eq('empresa_id', empresaId)
                       .maybeSingle();
 
@@ -2403,9 +2421,9 @@ export async function guardarConciliacionManual(
                       const { data: newProv, error: errP } = await supabaseAdmin
                         .from('proveedores')
                         .insert({
-                          rfc: rfcEmisor.toUpperCase(),
-                          nombre_comercial: nombreEmisor || rfcEmisor,
-                          razon_social: nombreEmisor || rfcEmisor,
+                          rfc: cleanTargetRfc,
+                          nombre_comercial: targetNombre || cleanTargetRfc,
+                          razon_social: targetNombre || cleanTargetRfc,
                           empresa_id: empresaId
                         })
                         .select('id')
@@ -2415,6 +2433,18 @@ export async function guardarConciliacionManual(
                         proveedorId = newProv.id;
                       }
                     }
+                  }
+
+                  // Buscar categoría de gasto para Nómina si aplica
+                  let categoriaGastoId = null;
+                  if (isNomina) {
+                    const { data: catGasto } = await supabaseAdmin
+                      .from('categorias_gasto')
+                      .select('id')
+                      .ilike('nombre', '%nomina%')
+                      .limit(1)
+                      .maybeSingle();
+                    categoriaGastoId = catGasto?.id || null;
                   }
 
                   // Mapear método de pago y ID de forma_pago
@@ -2450,6 +2480,10 @@ export async function guardarConciliacionManual(
                     defaultEstatusId = firstE?.id;
                   }
 
+                  const gastoConcepto = isNomina
+                    ? `Nómina - ${targetNombre}`
+                    : `Gasto por factura XML (UUID: ${uuid.substring(0, 8)})`;
+
                   // Insertar nuevo Gasto en Egresos
                   const { data: newGastoData, error: insertGastoErr } = await supabaseAdmin
                     .from('gastos')
@@ -2462,9 +2496,10 @@ export async function guardarConciliacionManual(
                       xml_url: path,
                       fecha_gasto: fecha_emision,
                       empresa_id: empresaId,
-                      concepto: `Gasto por factura XML (UUID: ${uuid.substring(0, 8)})`,
+                      concepto: gastoConcepto,
                       registrado_por: staffId,
                       proveedor_id: proveedorId,
+                      categoria_id: categoriaGastoId,
                       forma_pago_id: formaPagoId,
                       estatus_factura_id: defaultEstatusId,
                       estatus_facturado: true,
@@ -2907,6 +2942,28 @@ export async function guardarConciliacionManual(
       finalComentarios = finalComentarios ? `${finalComentarios.trim()}\n${postCloseTag}` : postCloseTag;
     }
     updatePayload.comentarios = finalComentarios || null;
+
+    // Si es nómina y los movimientos bancarios no tienen categoría asignada, asignar categoría bancaria 'NOMINA'
+    if (primaryMov.tipo_movimiento === 'Retiro' && payload.gastosIds.length > 0) {
+      const { data: gastosConNomina } = await supabaseAdmin
+        .from('gastos')
+        .select('concepto')
+        .in('id', payload.gastosIds)
+        .ilike('concepto', 'Nómina%')
+        .limit(1);
+
+      if (gastosConNomina && gastosConNomina.length > 0) {
+        const { data: catNomina } = await supabaseAdmin
+          .from('categorias_movimiento_bancario')
+          .select('id')
+          .eq('clave', 'NOMINA')
+          .maybeSingle();
+
+        if (catNomina?.id) {
+          updatePayload.categoria_movimiento_id = catNomina.id;
+        }
+      }
+    }
 
     const { error: updateMovErr } = await supabaseAdmin
       .from('movimientos_bancarios')
