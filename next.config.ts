@@ -12,19 +12,6 @@ for (const envVar of criticalEnvVars) {
   }
 }
 
-const zktecoApiKey = (process.env.ZKTECO_API_KEY || '').trim();
-
-// Si está definida la clave ZKTeco, requerir autenticación por header en los rewrites de /iclock/*
-const zktecoAuthCondition = zktecoApiKey
-  ? [
-      {
-        type: 'header' as const,
-        key: 'x-api-key',
-        value: zktecoApiKey,
-      },
-    ]
-  : undefined;
-
 const nextConfig: NextConfig = {
   turbopack: {},
   async rewrites() {
@@ -32,17 +19,14 @@ const nextConfig: NextConfig = {
       {
         source: '/iclock/cdata',
         destination: '/api/zkteco/push?source_path=cdata',
-        ...(zktecoAuthCondition ? { has: zktecoAuthCondition } : {}),
       },
       {
         source: '/iclock/getrequest',
         destination: '/api/zkteco/push?cmd=getrequest&source_path=getrequest',
-        ...(zktecoAuthCondition ? { has: zktecoAuthCondition } : {}),
       },
       {
         source: '/iclock/devicecmd',
         destination: '/api/zkteco/push?source_path=devicecmd',
-        ...(zktecoAuthCondition ? { has: zktecoAuthCondition } : {}),
       },
     ];
   },

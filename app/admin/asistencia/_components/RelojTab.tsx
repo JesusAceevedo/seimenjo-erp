@@ -95,6 +95,47 @@ export default function RelojTab({ empresaId, empleados, checadasRaw, onSyncTime
     if (sns.length > 0) setSn(sns[0]);
   }, [checadasRaw]);
 
+  // Obtener la checada más reciente y calcular estado real
+  const latestPunch = checadasRaw.length > 0 ? checadasRaw[0] : null;
+  const lastPunchDate = latestPunch?.timestamp ? new Date(latestPunch.timestamp) : null;
+  const minutesSinceLastPunch = lastPunchDate ? (Date.now() - lastPunchDate.getTime()) / (1000 * 60) : Infinity;
+
+  // Estado del reloj:
+  // - En línea (Verde): checada en las últimas 4 horas
+  // - Inactivo (Amarillo): entre 4 y 24 horas
+  // - Desconectado (Rojo): más de 24 horas sin checadas
+  const statusConfig = (() => {
+    if (!sn) {
+      return {
+        color: 'bg-gray-400',
+        text: 'Esperando conexión...',
+        badge: 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300'
+      };
+    }
+    if (minutesSinceLastPunch <= 240) {
+      return {
+        color: 'bg-emerald-500 animate-pulse',
+        text: 'En línea',
+        badge: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-400'
+      };
+    }
+    if (minutesSinceLastPunch <= 1440) {
+      const hrs = Math.floor(minutesSinceLastPunch / 60);
+      return {
+        color: 'bg-amber-500',
+        text: `Inactivo (última checada hace ${hrs}h)`,
+        badge: 'bg-amber-100 text-amber-700 dark:bg-amber-950/50 dark:text-amber-400'
+      };
+    }
+    const dateStr = lastPunchDate ? lastPunchDate.toLocaleDateString('es-MX', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'Desconocida';
+    const days = Math.floor(minutesSinceLastPunch / 1440);
+    return {
+      color: 'bg-rose-500',
+      text: `Desconectado (última actividad hace ${days}d: ${dateStr})`,
+      badge: 'bg-rose-100 text-rose-700 dark:bg-rose-950/50 dark:text-rose-400'
+    };
+  })();
+
   const loadHistory = useCallback(async () => {
     if (!empresaId) return;
     const cmds = await loadComandosPendientes(empresaId, 30);
@@ -131,9 +172,14 @@ export default function RelojTab({ empresaId, empleados, checadasRaw, onSyncTime
       {/* Status Bar */}
       <div className="bg-white dark:bg-gray-950 p-5 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-sm flex items-center justify-between">
         <div className="flex items-center gap-4">
-          <div className={`w-3 h-3 rounded-full ${sn ? 'bg-emerald-500 animate-pulse' : 'bg-gray-400'}`} />
+          <div className={`w-3.5 h-3.5 rounded-full ${statusConfig.color}`} />
           <div>
-            <h3 className="text-sm font-bold text-gray-900 dark:text-white">Reloj Checador ADMS</h3>
+            <div className="flex items-center gap-2">
+              <h3 className="text-sm font-bold text-gray-900 dark:text-white">Reloj Checador ADMS</h3>
+              <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${statusConfig.badge}`}>
+                {statusConfig.text}
+              </span>
+            </div>
             <p className="text-[10px] text-gray-500">
               {sn ? `SN: ${sn}` : 'Esperando conexión del dispositivo...'} 
               <span className="ml-2 text-gray-400">| ZKTeco MB10-VL</span>

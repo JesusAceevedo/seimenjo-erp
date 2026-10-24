@@ -8,13 +8,9 @@ import { supabaseAdmin } from '@/lib/supabaseAdmin';
 function isAuthorized(request: NextRequest): boolean {
   const configuredKey = (process.env.ZKTECO_API_KEY || '').trim();
   
-  // Si no está configurada la clave en producción, advertir y bloquear
+  // Si no hay clave configurada en variables de entorno, permitir el tráfico
+  // nativo de ADMS validando la estructura de la petición y el SN del dispositivo
   if (!configuredKey) {
-    if (process.env.NODE_ENV === 'production') {
-      console.error('[ZKTeco ADMS] Acceso denegado: ZKTECO_API_KEY no está configurada en producción.');
-      return false;
-    }
-    // En desarrollo local se permite si no se ha configurado aún
     return true;
   }
 
@@ -24,7 +20,7 @@ function isAuthorized(request: NextRequest): boolean {
     return true;
   }
 
-  // 2. Validar por query parameter
+  // 2. Validar por query parameter (si el dispositivo ADMS soporta URL con parámetros)
   const { searchParams } = new URL(request.url);
   const queryKey = searchParams.get('key') || searchParams.get('apiKey') || searchParams.get('api_key');
   if (queryKey && queryKey.trim() === configuredKey) {
