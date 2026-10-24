@@ -17,6 +17,7 @@ import {
 import ProductosTab from './ProductosTab';
 import TicketConfigTab from './TicketConfigTab';
 import { crearBucketsAlmacenamiento, provisionarAdminEmpresa } from '../actions/adminAuth';
+import { formatDate } from '../../../lib/formatters';
 
 
 export default function ConfigPage() {
@@ -2328,7 +2329,7 @@ export default function ConfigPage() {
                             </span>
                           </td>
                           <td className="p-3 text-gray-500 font-mono">
-                            {new Date(c.creado_en).toLocaleDateString()}
+                            {formatDate(c.creado_en)}
                           </td>
                           <td className="p-3 text-right">
                             <div className="flex justify-end gap-1.5">

@@ -10,6 +10,7 @@ import {
   desvincularComprobanteDeMovimiento
 } from '@/app/admin/gastos/reconciliationActions';
 import { fetchCuentasBancarias } from '@/lib/cuentasBancarias';
+import { formatDate } from '@/lib/formatters';
 
 export function useFacturaPublicoGeneralData() {
   const getEmpresaId = useEmpresaId();
@@ -2137,7 +2138,7 @@ export function useFacturaPublicoGeneralData() {
 
       const facturasRows = todasLasFacturasMes.map(f => ({
         'Folio': f.serie_folio || 'S/F',
-        'Fecha': f.fecha_emision ? new Date(f.fecha_emision).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : '',
+        'Fecha': f.fecha_emision ? formatDate(f.fecha_emision) : '',
         'Cliente / Receptor': f._clienteNombre,
         'RFC Receptor': f._clienteRfc,
         'Tipo': f._isPG ? 'Público en General' : 'Cliente Tercero (Individual)',
@@ -2156,7 +2157,7 @@ export function useFacturaPublicoGeneralData() {
         const isTercero = !!facturadosTerceros[c.id];
 
         return {
-          'Fecha': c.fecha ? new Date(c.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : '',
+          'Fecha': c.fecha ? formatDate(c.fecha) : '',
           'Tipo Comprobante': c.tipo || 'Corte POS',
           'Descripción / Folio': c.descripcion || `Corte POS ${c.fecha}`,
           'Venta Efectivo (Base)': efec,
@@ -2171,7 +2172,7 @@ export function useFacturaPublicoGeneralData() {
       });
 
       const depositosRows = depositosMes.map(d => ({
-        'Fecha': d.fecha ? new Date(d.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : '',
+        'Fecha': d.fecha ? formatDate(d.fecha) : '',
         'Concepto': d.concepto || '',
         'Cuenta Bancaria': d.cuentas_bancarias?.nombre || '',
         'Tipo': esMovimientoEfectivo(d.concepto) ? 'Efectivo / Practicaja' : 'Tarjetas / TPV / Otros',
@@ -2186,7 +2187,7 @@ export function useFacturaPublicoGeneralData() {
         const ticketFecha = cdms.map((c: any) => c.comprobantes_deposito?.fecha || '').join(', ');
 
         return {
-          'Fecha Banco': d.fecha ? new Date(d.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : '',
+          'Fecha Banco': d.fecha ? formatDate(d.fecha) : '',
           'Concepto Banco': d.concepto || '',
           'Cuenta Bancaria': d.cuentas_bancarias?.nombre || 'BBVA',
           'Tipo': esMovimientoEfectivo(d.concepto) ? 'Efectivo / Practicaja' : 'Tarjetas / TPV',

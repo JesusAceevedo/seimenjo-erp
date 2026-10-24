@@ -22,6 +22,7 @@ import {
   X,
   CreditCard
 } from 'lucide-react';
+import { formatDate } from '@/lib/formatters';
 
 interface DesfaseMesSubTabProps {
   movimientosOtroMes: any[];
@@ -553,7 +554,7 @@ export const DesfaseMesSubTab: React.FC<DesfaseMesSubTabProps> = ({
                     }`}
                   >
                     <td className="p-3 font-mono font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">
-                      {m.fecha ? new Date(m.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : ''}
+                      {formatDate(m.fecha)}
                     </td>
                     <td className="p-3 font-bold text-gray-800 dark:text-gray-200 max-w-xs truncate" title={m.concepto}>
                       {m.concepto || 'Depósito bancario'}
@@ -790,7 +791,7 @@ export const DesfaseMesSubTab: React.FC<DesfaseMesSubTabProps> = ({
                     }`}
                   >
                     <td className="p-3 font-mono font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">
-                      {t.fecha ? new Date(t.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : ''}
+                      {formatDate(t.fecha)}
                     </td>
                     <td className="p-3 font-bold text-gray-800 dark:text-gray-200 max-w-xs truncate" title={t.descripcion}>
                       {t.descripcion || 'Ticket de venta'}
@@ -916,7 +917,7 @@ export const DesfaseMesSubTab: React.FC<DesfaseMesSubTabProps> = ({
                   return (
                     <tr key={m.id} className="hover:bg-gray-50/80 dark:hover:bg-gray-800/40 transition-colors">
                       <td className="p-3 font-mono font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">
-                        {m.fecha ? new Date(m.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : ''}
+                        {formatDate(m.fecha)}
                       </td>
                       <td className="p-3 font-bold text-gray-800 dark:text-gray-200 max-w-xs truncate" title={m.concepto}>
                         {m.concepto || 'Depósito bancario'}
@@ -930,7 +931,7 @@ export const DesfaseMesSubTab: React.FC<DesfaseMesSubTabProps> = ({
                             {cdms.map((c: any, idx: number) => {
                               const comp = c.comprobantes_deposito;
                               const title = comp?.descripcion || `Ticket ${c.comprobante_id?.substring(0, 6)}`;
-                              const fechaComp = comp?.fecha ? new Date(comp.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : '';
+                              const fechaComp = formatDate(comp?.fecha);
                               return (
                                 <span key={idx} className="font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950 px-2 py-0.5 rounded border border-indigo-200 dark:border-indigo-800 text-[10px] inline-flex items-center gap-1 max-w-[200px] truncate" title={`${title} (${fechaComp})`}>
                                   🎫 {title} {fechaComp ? `(${fechaComp})` : ''}
@@ -1006,7 +1007,7 @@ export const DesfaseMesSubTab: React.FC<DesfaseMesSubTabProps> = ({
                   {ticketsOtroMes.map((t: any) => (
                     <tr key={t.id} className="hover:bg-gray-50/80 dark:hover:bg-gray-800/40 transition-colors">
                       <td className="p-3 font-mono font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">
-                        {t.fecha ? new Date(t.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : ''}
+                        {formatDate(t.fecha)}
                       </td>
                       <td className="p-3 font-bold text-gray-800 dark:text-gray-200 max-w-xs truncate" title={t.descripcion}>
                         {t.descripcion || 'Ticket de venta'}
@@ -1074,7 +1075,7 @@ export const DesfaseMesSubTab: React.FC<DesfaseMesSubTabProps> = ({
                   {comparativoBbvaBanco.entrantesProximoMesTickets.map((t: any) => (
                     <tr key={t.id} className="hover:bg-gray-50/80 dark:hover:bg-gray-800/40 transition-colors bg-purple-50/30 dark:bg-purple-950/10">
                       <td className="p-3 font-mono font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">
-                        {t.fecha ? new Date(t.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : ''}
+                        {formatDate(t.fecha)}
                       </td>
                       <td className="p-3 font-bold text-gray-800 dark:text-gray-200 max-w-xs truncate" title={t.descripcion}>
                         {t.descripcion || 'Ticket BBVA'}
@@ -1156,7 +1157,7 @@ export const DesfaseMesSubTab: React.FC<DesfaseMesSubTabProps> = ({
                       {activeCompToLink.descripcion || 'Ticket de Venta'}
                     </h5>
                     <span className="text-xs text-gray-500 font-mono">
-                      Fecha: {activeCompToLink.fecha ? new Date(activeCompToLink.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : 'Sin fecha'}
+                      Fecha: {activeCompToLink.fecha ? formatDate(activeCompToLink.fecha) : 'Sin fecha'}
                     </span>
                   </div>
 
@@ -1280,7 +1281,7 @@ export const DesfaseMesSubTab: React.FC<DesfaseMesSubTabProps> = ({
                                 {m.concepto}
                               </p>
                               <span className="text-[10px] text-gray-400 font-mono">
-                                {m.fecha ? new Date(m.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : ''}
+                                {formatDate(m.fecha)}
                               </span>
                             </div>
                           </div>

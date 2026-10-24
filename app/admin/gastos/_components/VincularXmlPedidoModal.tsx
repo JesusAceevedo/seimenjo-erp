@@ -2,7 +2,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import React, { useState, useEffect } from 'react';
 import { X, Link as LinkIcon, FileCode, Search, RefreshCw, AlertTriangle, CheckCircle, Mail } from 'lucide-react';
-import { formatCurrency } from '../../../../lib/formatters';
+import { formatCurrency, formatDate } from '../../../../lib/formatters';
 import { useSessionToken } from '../../../../lib/hooks/useSessionToken';
 import { obtenerFacturasClientesSinVincular, vincularFacturaAPedido, enviarFacturaPorCorreo } from '../actions';
 
@@ -181,7 +181,7 @@ export default function VincularXmlPedidoModal({
                           {formatCurrency(f.total)}
                         </div>
                         <div className="text-[10px] text-gray-400 font-mono">
-                          {f.fecha_emision ? new Date(f.fecha_emision).toLocaleDateString('es-MX') : '—'}
+                          {f.fecha_emision ? formatDate(f.fecha_emision) : '—'}
                         </div>
                       </div>
                     </div>

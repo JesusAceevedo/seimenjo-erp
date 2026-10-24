@@ -5,7 +5,7 @@ import {
   X, CheckCircle, Clock, AlertTriangle, FileCode, FileText,
   CreditCard, Landmark, ArrowRight, RefreshCw, Link as LinkIcon, Unlink, Eye, User, Calendar, Tag, Mail
 } from 'lucide-react';
-import { formatCurrency } from '../../../../lib/formatters';
+import { formatCurrency, formatDate } from '../../../../lib/formatters';
 import { useSessionToken } from '../../../../lib/hooks/useSessionToken';
 import {
   obtenerTrayectoriaPedido,
@@ -267,7 +267,7 @@ export default function TrayectoriaPedidoModal({
                       <div>
                         <span className="text-gray-400 font-medium block">Fecha del Pedido</span>
                         <span className="font-bold text-gray-800 dark:text-gray-200 font-mono">
-                          {pedido?.fecha_pedido ? new Date(pedido.fecha_pedido).toLocaleDateString('es-MX') : '—'}
+                          {pedido?.fecha_pedido ? formatDate(pedido.fecha_pedido) : '—'}
                         </span>
                       </div>
 
@@ -350,7 +350,7 @@ export default function TrayectoriaPedidoModal({
                               <div>
                                 <span className="text-gray-400 block">Fecha Emisión</span>
                                 <span className="font-mono text-gray-700 dark:text-gray-300">
-                                  {f.fecha_emision ? new Date(f.fecha_emision).toLocaleDateString('es-MX') : '—'}
+                                  {f.fecha_emision ? formatDate(f.fecha_emision) : '—'}
                                 </span>
                               </div>
                               <div className="flex items-center justify-end gap-1.5">
@@ -461,7 +461,7 @@ export default function TrayectoriaPedidoModal({
                         <div>
                           <span className="text-gray-400 font-medium block">Fecha del Depósito</span>
                           <span className="font-bold text-gray-800 dark:text-gray-200 font-mono">
-                            {movimiento.fecha ? new Date(movimiento.fecha).toLocaleDateString('es-MX') : '—'}
+                            {movimiento.fecha ? formatDate(movimiento.fecha) : '—'}
                           </span>
                         </div>
 

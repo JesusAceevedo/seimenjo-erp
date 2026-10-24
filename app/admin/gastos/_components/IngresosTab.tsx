@@ -5,7 +5,7 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
 import { UploadCloud, Plus, FileCode, FileText, CreditCard, Mail, Search, ChevronLeft, ChevronRight, CheckCircle, Clock, Eye, Edit3, Trash2, Activity, Link as LinkIcon, SlidersHorizontal, Globe, X, RefreshCw, AlertTriangle } from 'lucide-react';
-import { formatCurrency } from '../../../../lib/formatters';
+import { formatCurrency, formatDate } from '../../../../lib/formatters';
 import { getMetodoPagoLabel } from '../../../../lib/constants/sat';
 import CargaXmlMasivaModal from './CargaXmlMasivaModal';
 import CargaManualModal from './CargaManualModal';
@@ -533,9 +533,9 @@ export default function IngresosTab({
                   {/* Fecha */}
                   <td className="p-3 font-mono text-gray-500 dark:text-gray-400 whitespace-nowrap">
                     {invoice?.fecha_emision
-                      ? new Date(invoice.fecha_emision).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: '2-digit' })
+                      ? formatDate(invoice.fecha_emision)
                       : v.fecha_pedido
-                        ? new Date(v.fecha_pedido).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: '2-digit' })
+                        ? formatDate(v.fecha_pedido)
                         : '—'}
                   </td>
 
@@ -1039,7 +1039,7 @@ function VincularSueltaAPedidoModal({ factura, onClose, onSuccess }: {
                           {formatCurrency(Number(p.precio_total || 0))}
                         </div>
                         <div className="text-[10px] text-gray-400 font-mono">
-                          {p.fecha_pedido ? new Date(p.fecha_pedido).toLocaleDateString('es-MX') : '—'}
+                          {p.fecha_pedido ? formatDate(p.fecha_pedido) : '—'}
                         </div>
                       </div>
                     </div>

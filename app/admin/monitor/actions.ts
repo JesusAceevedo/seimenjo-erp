@@ -330,3 +330,121 @@ export async function guardarDetallePedidoFaltante(
     };
   }
 }
+
+export async function eliminarPedidoAdmin(
+  pedidoId: string,
+  token: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    if (!pedidoId) throw new Error('El ID del pedido es requerido.');
+    const caller = await verifyStaffUser(token);
+
+    // 1. Obtener pedido a eliminar
+    const { data: pedido, error: pedErr } = await supabaseAdmin
+      .from('pedidos')
+      .select('id, empresa_id, fecha_pedido, creado_en, folio_factura, estatus_pago, movimiento_bancario_id')
+      .eq('id', pedidoId)
+      .single();
+
+    if (pedErr || !pedido) throw new Error('Pedido no encontrado.');
+
+    if (!caller.esSuperusuario && pedido.empresa_id && pedido.empresa_id !== caller.empresaId) {
+      throw new Error('Acceso denegado: El pedido no pertenece a tu empresa.');
+    }
+
+    if (!caller.esSuperusuario && pedido.estatus_pago === 'Liquidado') {
+      throw new Error('Solo los superusuarios tienen autorización para eliminar pedidos ya liquidados.');
+    }
+
+    // 2. Comprobar si el periodo contable está cerrado de forma definitiva
+    const opDate = pedido.fecha_pedido || (pedido.creado_en ? pedido.creado_en.substring(0, 10) : null);
+    let mesCierreId: string | null = null;
+
+    if (opDate && pedido.empresa_id) {
+      const mesStr = opDate.substring(0, 7); // YYYY-MM
+      const { data: cierre } = await supabaseAdmin
+        .from('cierres_mensuales')
+        .select('id, estatus')
+        .eq('empresa_id', pedido.empresa_id)
+        .eq('mes', mesStr)
+        .maybeSingle();
+
+      if (cierre && cierre.estatus === 'cerrado_definitivo') {
+        if (!caller.esSuperusuario) {
+          throw new Error(`El periodo contable ${mesStr} está cerrado de manera definitiva. Solo los superusuarios pueden realizar modificaciones o eliminaciones.`);
+        }
+        mesCierreId = cierre.id;
+        // Superusuario: abrir temporalmente el cierre para permitir el DELETE sin violar el trigger
+        await supabaseAdmin
+          .from('cierres_mensuales')
+          .update({ estatus: 'abierto' })
+          .eq('id', mesCierreId);
+      }
+    }
+
+    try {
+      // 3. Desvincular o eliminar facturas_clientes vinculadas
+      await supabaseAdmin
+        .from('facturas_clientes')
+        .delete()
+        .eq('pedido_id', pedidoId);
+
+      // Si tiene folio_factura registrado, también verificar si quedó huérfana por serie_folio
+      if (pedido.folio_factura) {
+        let facQuery = supabaseAdmin
+          .from('facturas_clientes')
+          .delete()
+          .or(`serie_folio.eq.${pedido.folio_factura},uuid_fiscal.eq.${pedido.folio_factura}`);
+        if (pedido.empresa_id) facQuery = facQuery.eq('empresa_id', pedido.empresa_id);
+        await facQuery;
+      }
+
+      // 4. Limpiar conciliaciones bancarias asociadas
+      await supabaseAdmin
+        .from('conciliaciones_bancarias')
+        .delete()
+        .eq('pedido_id', pedidoId);
+
+      // 5. Si tenía movimiento bancario vinculado, desvincular y ocultar de ingresos
+      if (pedido.movimiento_bancario_id) {
+        await supabaseAdmin
+          .from('movimientos_bancarios')
+          .update({
+            visible_ingresos: false
+          })
+          .eq('id', pedido.movimiento_bancario_id);
+      }
+
+      // 6. Eliminar detalles de pedido
+      await supabaseAdmin
+        .from('pedido_detalles')
+        .delete()
+        .eq('pedido_id', pedidoId);
+
+      // 7. Eliminar el pedido
+      const { error: delErr } = await supabaseAdmin
+        .from('pedidos')
+        .delete()
+        .eq('id', pedidoId);
+
+      if (delErr) throw delErr;
+
+      return { success: true };
+    } finally {
+      // Si se abrió temporalmente el cierre mensual, restaurar el estado cerrado_definitivo
+      if (mesCierreId) {
+        await supabaseAdmin
+          .from('cierres_mensuales')
+          .update({ estatus: 'cerrado_definitivo' })
+          .eq('id', mesCierreId);
+      }
+    }
+  } catch (err: any) {
+    console.error('Error al eliminar pedido admin:', err);
+    return {
+      success: false,
+      error: err.message || 'Error al eliminar pedido'
+    };
+  }
+}
+

@@ -5,7 +5,7 @@
 
 import React, { useState, useMemo } from 'react';
 import { UploadCloud, Plus, FileCode, FileText, CreditCard, Search, ChevronLeft, ChevronRight, Tag, Filter, Eye, Trash2, Edit3, Link as LinkIcon, SlidersHorizontal } from 'lucide-react';
-import { formatCurrency } from '../../../../lib/formatters';
+import { formatCurrency, formatDate as formatSharedDate } from '../../../../lib/formatters';
 import CargaXmlMasivaModal from './CargaXmlMasivaModal';
 import CargaManualModal from './CargaManualModal';
 import type { GastoFacturado, CategoriaGasto } from '../../types';
@@ -101,9 +101,8 @@ export default function EgresosTab({
   const formatDate = (dateVal?: string | null) => {
     if (!dateVal) return 'S/F';
     try {
-      const d = new Date(dateVal);
-      if (isNaN(d.getTime())) return 'S/F';
-      return d.toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: '2-digit' });
+      const res = formatSharedDate(dateVal);
+      return res === '—' ? 'S/F' : res;
     } catch (e) {
       return 'S/F';
     }
@@ -321,7 +320,8 @@ export default function EgresosTab({
 
       // Generar string de fecha legible para buscar por fecha
       const dateVal = g.fecha_timbrado || g.fecha_gasto || '';
-      const dateStr = dateVal ? new Date(dateVal).toLocaleDateString('es-MX', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '';
+      const dateStr = dateVal ? formatDate(dateVal) : '';
+      const dateStrFull = dateVal ? new Date(dateVal).toLocaleDateString('es-MX', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '';
       const dateStrLtr = dateVal ? new Date(dateVal).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' }).toLowerCase() : '';
 
       const matchSearch = !q || (
@@ -332,6 +332,7 @@ export default function EgresosTab({
         g.monto?.toString().includes(q) ||
         g.subtotal?.toString().includes(q) ||
         dateStr.includes(q) ||
+        dateStrFull.includes(q) ||
         dateStrLtr.includes(q)
       );
       const matchMetodo = !filtroMetodo || g.metodo_pago === filtroMetodo;
@@ -763,7 +764,7 @@ export default function EgresosTab({
                                   className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[9px] font-black bg-indigo-100 dark:bg-indigo-950/80 text-indigo-800 dark:text-indigo-200 border border-indigo-300 dark:border-indigo-800 shadow-2xs"
                                   title={concs.map((c: any) => {
                                     const m = c.movimiento || c.movimiento_bancario || c.movimientos_bancarios;
-                                    const fStr = m?.fecha ? new Date(m.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : '';
+                                    const fStr = m?.fecha ? formatSharedDate(m.fecha) : '';
                                     return `${fStr}: -${formatCurrency(c.monto_asociado || m?.monto || 0)}`;
                                   }).join(' | ')}
                                 >
@@ -773,7 +774,7 @@ export default function EgresosTab({
                                 <span className="text-[9px] font-mono font-bold text-gray-500 dark:text-gray-400">
                                   ({concs.map((c: any) => {
                                     const m = c.movimiento || c.movimiento_bancario || c.movimientos_bancarios;
-                                    const fStr = m?.fecha ? new Date(m.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : '';
+                                    const fStr = m?.fecha ? formatSharedDate(m.fecha) : '';
                                     return `${fStr ? `${fStr}: ` : ''}-${formatCurrency(c.monto_asociado || m?.monto || 0)}`;
                                   }).join(' + ')})
                                 </span>

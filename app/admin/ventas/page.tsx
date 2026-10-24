@@ -823,6 +823,7 @@ export default function VentasFacturadasModule() {
                         alert('Error al descargar archivo: ' + err.message);
                       }
                     }}
+                    onViewCfdi={setCfdiViewerUrl}
                     onEditMovimiento={(mov) => setEditingMovimiento(mov)}
                     handleUpdateCategoria={handleUpdateCategoriaMovimiento}
                     onReloadMovimientos={fetchData}

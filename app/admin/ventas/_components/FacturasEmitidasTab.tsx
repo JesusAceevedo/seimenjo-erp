@@ -27,9 +27,10 @@ import {
   ExternalLink,
   Receipt,
   X,
-  Sparkles
+  Sparkles,
+  ArrowRightLeft
 } from 'lucide-react';
-import { formatCurrency } from '../../../../lib/formatters';
+import { formatCurrency, formatDate as formatSharedDate } from '../../../../lib/formatters';
 import { getMetodoPagoLabel } from '../../../../lib/constants/sat';
 import CargaXmlMasivaModal from '../../gastos/_components/CargaXmlMasivaModal';
 import CargaManualModal from '../../gastos/_components/CargaManualModal';
@@ -37,7 +38,8 @@ import { useCfdiViewer } from '../../_components/CfdiViewerContext';
 import { useSessionToken } from '../../../../lib/hooks/useSessionToken';
 import {
   vincularFacturaClientePorRfc,
-  autoVincularFacturasEmitidasPorRfc
+  autoVincularFacturasEmitidasPorRfc,
+  reclasificarFacturaIntercompaniaAction
 } from '../../gastos/actions';
 
 interface FacturasEmitidasTabProps {
@@ -107,6 +109,7 @@ export default function FacturasEmitidasTab({
   // Estado de auto-vinculación en lote
   const [isAutoLinking, setIsAutoLinking] = useState(false);
   const [autoLinkMessage, setAutoLinkMessage] = useState<string | null>(null);
+  const [isReclassifying, setIsReclassifying] = useState<string | null>(null);
 
   const copyToClipboard = (text: string, id: string) => {
     navigator.clipboard.writeText(text);
@@ -117,9 +120,8 @@ export default function FacturasEmitidasTab({
   const formatDate = (dateStr?: string | null) => {
     if (!dateStr) return 'S/F';
     try {
-      const d = new Date(dateStr);
-      if (isNaN(d.getTime())) return 'S/F';
-      return d.toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' });
+      const res = formatSharedDate(dateStr);
+      return res === '—' ? 'S/F' : res;
     } catch {
       return dateStr.substring(0, 10);
     }
@@ -304,6 +306,28 @@ export default function FacturasEmitidasTab({
       setTimeout(() => setAutoLinkMessage(null), 6000);
     }
   };
+
+  // Reclasificar factura intercompañía (Sakura <-> Seimenjo)
+  const handleReclasificarIntercompania = async (facturaId: string) => {
+    if (!confirm('¿Deseas reclasificar esta factura? Se registrará como un Gasto en Sakura Ramen y se moverá a Facturas Emitidas (Venta) de Playa Seimenjo.')) return;
+    setIsReclassifying(facturaId);
+    try {
+      const token = await getSessionToken();
+      if (!token) throw new Error('Sesión no disponible.');
+      const res = await reclasificarFacturaIntercompaniaAction(facturaId, token);
+      if (res.success) {
+        alert(res.mensaje || 'Factura reclasificada con éxito.');
+        onRefresh();
+      } else {
+        alert(res.error || 'Error al reclasificar la factura');
+      }
+    } catch (err: any) {
+      alert('Error: ' + err.message);
+    } finally {
+      setIsReclassifying(null);
+    }
+  };
+
 
   return (
     <div className="flex flex-col h-full overflow-hidden text-gray-900 dark:text-gray-100 font-sans">
@@ -650,6 +674,14 @@ export default function FacturasEmitidasTab({
                             <Link2 size={12} />
                           </button>
                         </div>
+
+                        {/* Alerta si el cliente es la misma empresa emisora (Intercompañía) */}
+                        {clientRfc && empresaRfc && clientRfc === empresaRfc.trim().toUpperCase() && (
+                          <div className="mt-1 flex items-center gap-1 text-[9px] font-bold text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/40 px-1.5 py-0.5 rounded border border-amber-200 dark:border-amber-800">
+                            <ArrowRightLeft size={10} className="shrink-0" />
+                            <span>Intercompañía (Gasto Sakura / Ingreso Seimenjo)</span>
+                          </div>
+                        )}
                       </div>
                     </td>
 
@@ -758,6 +790,17 @@ export default function FacturasEmitidasTab({
                             <Mail size={13} />
                           </button>
                         )}
+
+                        {/* Reclasificar Intercompañía */}
+                        <button
+                          type="button"
+                          onClick={() => handleReclasificarIntercompania(f.id)}
+                          disabled={isReclassifying === f.id}
+                          className="p-1.5 rounded-lg text-amber-500 hover:text-amber-700 dark:hover:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/40 transition-colors cursor-pointer disabled:opacity-50"
+                          title="Reclasificar: Registrar como Gasto de Sakura y transferir a Ingresos de Seimenjo"
+                        >
+                          <ArrowRightLeft size={13} className={isReclassifying === f.id ? 'animate-spin' : ''} />
+                        </button>
 
                         {/* Eliminar */}
                         {onDeleteFactura && (

@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { toggleMovimientoVisibilidad, conciliarGastoEfectivoAutomatico } from '../gastos/reconciliationActions';
 import { SAT_FORMAS_PAGO, getMetodoPagoLabel } from '../../../lib/constants/sat';
+import { formatDate } from '../../../lib/formatters';
 
 export const dynamic = 'force-dynamic';
 
@@ -805,7 +806,7 @@ export default function AdminGastos() {
                                 </button>
                               )}
                               <span>
-                                {new Date(g.fecha_gasto).toLocaleDateString('es-MX', { timeZone: 'UTC' })}
+                                {formatDate(g.fecha_gasto)}
                               </span>
                             </div>
                           </td>
@@ -921,7 +922,7 @@ export default function AdminGastos() {
                           <tr key={h.id} className="bg-indigo-50/10 dark:bg-indigo-950/5 border-l-4 border-indigo-400 dark:border-indigo-600 transition-colors">
                             {/* Fecha */}
                             <td className="p-4 compact-table-th-td pl-8 font-mono text-gray-500 dark:text-gray-400 whitespace-nowrap">
-                              {new Date(h.fecha_gasto).toLocaleDateString('es-MX', { timeZone: 'UTC' })}
+                              {formatDate(h.fecha_gasto)}
                             </td>
 
                             {/* Proveedor */}
@@ -1222,7 +1223,7 @@ export default function AdminGastos() {
                     </div>
                     <div className="text-right">
                       <span className="text-xs font-black text-red-500 dark:text-red-400 block">-{formatCurrency(associationModal.childGasto.monto)}</span>
-                      <span className="text-[10px] text-gray-400 font-mono block mt-0.5">{new Date(associationModal.childGasto.fecha_gasto).toLocaleDateString('es-MX', { timeZone: 'UTC' })}</span>
+                      <span className="text-[10px] text-gray-400 font-mono block mt-0.5">{formatDate(associationModal.childGasto.fecha_gasto)}</span>
                     </div>
                   </div>
                 </div>
@@ -1264,7 +1265,7 @@ export default function AdminGastos() {
                           </div>
                           <div className="text-right">
                             <p className="font-black text-gray-900 dark:text-white">-{formatCurrency(p.monto)}</p>
-                            <p className="text-[10px] text-gray-400 font-mono">{new Date(p.fecha_gasto).toLocaleDateString('es-MX', { timeZone: 'UTC' })}</p>
+                            <p className="text-[10px] text-gray-400 font-mono">{formatDate(p.fecha_gasto)}</p>
                           </div>
                         </div>
                       );

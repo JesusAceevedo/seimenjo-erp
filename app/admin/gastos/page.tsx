@@ -41,7 +41,7 @@ import BancoTab from './_components/BancoTab';
 import CfdiViewerModal from './_components/CfdiViewerModal';
 import GastoConciliacionDrawer from './_components/GastoConciliacionDrawer';
 import PeriodSelector from '../_components/PeriodSelector';
-import { formatCurrency } from '../../../lib/formatters';
+import { formatCurrency, formatDate } from '../../../lib/formatters';
 
 export const dynamic = 'force-dynamic';
 
@@ -883,6 +883,7 @@ export default function EgresosModule() {
                       if (res.success) fetchData();
                       return res;
                     }}
+                    onViewCfdi={setCfdiViewerUrl}
                   />
                 )}
               </>
@@ -956,7 +957,7 @@ export default function EgresosModule() {
                     <option value="">-- Selecciona el Gasto Principal --</option>
                     {gastosPendientes.map(g => (
                       <option key={g.id} value={g.id}>
-                        {g.fecha_gasto ? new Date(g.fecha_gasto).toLocaleDateString() : 'Sin fecha'} - {g.concepto} - {formatCurrency(g.monto)}
+                        {g.fecha_gasto ? formatDate(g.fecha_gasto) : 'Sin fecha'} - {g.concepto} - {formatCurrency(g.monto)}
                       </option>
                     ))}
                   </select>
@@ -998,7 +999,7 @@ export default function EgresosModule() {
                                 <div>
                                   <span className="font-bold text-gray-800 dark:text-gray-200">{f.concepto || 'Sin concepto'}</span>
                                   <span className="text-[10px] text-gray-400 dark:text-gray-500 block">
-                                    {f.fecha_gasto ? new Date(f.fecha_gasto).toLocaleDateString() : 'Sin fecha'} - RFC: {f.proveedores?.rfc || 'Sin RFC'}
+                                    {f.fecha_gasto ? formatDate(f.fecha_gasto) : 'Sin fecha'} - RFC: {f.proveedores?.rfc || 'Sin RFC'}
                                   </span>
                                 </div>
                               </div>

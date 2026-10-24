@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { List, Search, ChevronLeft, ChevronRight } from 'lucide-react';
+import { formatDate } from '@/lib/formatters';
 
 interface TicketsPosTabProps {
   displayedTickets: any[];
@@ -159,7 +160,7 @@ export const TicketsPosTab: React.FC<TicketsPosTabProps> = ({
               return (
                 <tr key={c.id} className={`hover:bg-gray-50/80 dark:hover:bg-gray-900/50 transition-colors ${isTercero ? 'bg-purple-50/30 dark:bg-purple-955/10' : ''}`}>
                   <td className="p-3 font-mono font-medium text-gray-600 dark:text-gray-400">
-                    {c.fecha ? new Date(c.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : ''}
+                    {formatDate(c.fecha)}
                   </td>
                   <td className="p-3 font-bold text-gray-800 dark:text-gray-200">
                     <div className="flex items-center gap-1.5 flex-wrap">

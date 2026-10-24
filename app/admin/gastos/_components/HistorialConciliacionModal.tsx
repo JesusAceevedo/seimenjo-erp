@@ -18,6 +18,7 @@ import {
   actualizarAuditoriaMovimientoAction,
   adjuntarArchivoDirectoAction
 } from '../reconciliationActions';
+import { formatDate } from '../../../../lib/formatters';
 
 interface HistorialConciliacionModalProps {
   open: boolean;
@@ -967,7 +968,7 @@ export default function HistorialConciliacionModal({
                             >
                               <div className="flex items-center justify-between text-[10px] mb-1 opacity-90">
                                 <span>{hm.isCurrent ? '👉 Pago Actual' : `🔗 Pago #${hidx + 1}`}</span>
-                                <span className="font-mono">{new Date(hm.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })}</span>
+                                <span className="font-mono">{formatDate(hm.fecha)}</span>
                               </div>
                               <div className="text-[11px] truncate" title={hm.concepto}>
                                 {hm.concepto}
@@ -1087,7 +1088,7 @@ export default function HistorialConciliacionModal({
                                     </span>
                                     {hermanos.map((h, hidx) => (
                                       <span key={hidx} className="text-[9px] font-mono font-semibold text-indigo-600 dark:text-indigo-400">
-                                        Pago hermano: {new Date(h.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })} (-{formatCurrency(h.montoAsociado || h.monto)})
+                                        Pago hermano: {formatDate(h.fecha)} (-{formatCurrency(h.montoAsociado || h.monto)})
                                       </span>
                                     ))}
                                   </div>
@@ -1119,7 +1120,7 @@ export default function HistorialConciliacionModal({
 
                             {fechaDoc && (
                               <div className="text-[11px] text-gray-500 dark:text-gray-400">
-                                Fecha Factura: <strong className="text-gray-700 dark:text-gray-300 font-mono">{new Date(fechaDoc).toLocaleDateString('es-MX', { timeZone: 'UTC' })}</strong>
+                                Fecha Factura: <strong className="text-gray-700 dark:text-gray-300 font-mono">{formatDate(fechaDoc)}</strong>
                               </div>
                             )}
                           </div>
@@ -1230,7 +1231,7 @@ export default function HistorialConciliacionModal({
                     </span>
                   </div>
                   <p className="text-gray-700 dark:text-gray-300 text-[11px]">
-                    Movimiento par: <strong className="text-gray-900 dark:text-white">{reembolsoMov.concepto}</strong> ({new Date(reembolsoMov.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })})
+                    Movimiento par: <strong className="text-gray-900 dark:text-white">{reembolsoMov.concepto}</strong> ({formatDate(reembolsoMov.fecha)})
                   </p>
                 </div>
               )}

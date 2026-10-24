@@ -1381,7 +1381,10 @@ export async function eliminarFacturaCliente(
       .single();
 
     if (factura?.pedido_id) {
-      throw new Error('No se puede eliminar una factura que ya está vinculada a un pedido.');
+      await supabaseAdmin
+        .from('pedidos')
+        .update({ folio_factura: null })
+        .eq('id', factura.pedido_id);
     }
 
     const { error } = await supabaseAdmin
@@ -1395,6 +1398,172 @@ export async function eliminarFacturaCliente(
   } catch (err: any) {
     const message = err?.message || (typeof err === 'string' ? err : JSON.stringify(err));
     return { success: false, error: message || 'Error al eliminar la factura' };
+  }
+}
+
+/**
+ * Reclasifica una factura emitida erróneamente en Sakura Ramen que pertenece
+ * en realidad a Playa Seimenjo (venta a Sakura Ramen).
+ * 1. Crea el Gasto correspondiente en Sakura Ramen (proveedor Playa Seimenjo).
+ * 2. Mueve la factura a Playa Seimenjo (cliente Sakura Ramen / RPL231122S52).
+ * 3. Desvincula el pedido de Sakura para que no duplique ventas en Sakura.
+ */
+export async function reclasificarFacturaIntercompaniaAction(
+  facturaId: string,
+  token: string
+): Promise<{ success: boolean; error?: string; mensaje?: string }> {
+  try {
+    const { empresaId } = await getUserEmpresaId(token);
+    if (!empresaId) throw new Error('Sesión no válida.');
+
+    // 1. Obtener la factura completa
+    const { data: factura, error: facErr } = await supabaseAdmin
+      .from('facturas_clientes')
+      .select('*, pedidos(*)')
+      .eq('id', facturaId)
+      .single();
+
+    if (facErr || !factura) throw new Error('No se encontró la factura a reclasificar.');
+
+    // 2. Obtener empresas: Sakura y Seimenjo
+    const { data: empresas, error: empErr } = await supabaseAdmin
+      .from('empresas')
+      .select('id, nombre, rfc');
+
+    if (empErr || !empresas || empresas.length < 2) {
+      throw new Error('No se pudieron identificar las empresas del sistema.');
+    }
+
+    const sakuraEmpresa = empresas.find(e => 
+      e.nombre.toLowerCase().includes('sakura') || (e.rfc && e.rfc.toUpperCase().includes('RPL231122S52'))
+    );
+    const seimenjoEmpresa = empresas.find(e => 
+      e.nombre.toLowerCase().includes('seimenjo') && !e.nombre.toLowerCase().includes('sakura')
+    );
+
+    if (!sakuraEmpresa || !seimenjoEmpresa) {
+      throw new Error('No se encontraron las empresas Sakura Ramen y Playa Seimenjo en la base de datos.');
+    }
+
+    // 3. Crear Gasto en Sakura Ramen
+    let proveedorId = null;
+    const { data: provExist } = await supabaseAdmin
+      .from('proveedores')
+      .select('id')
+      .eq('empresa_id', sakuraEmpresa.id)
+      .ilike('nombre_comercial', '%seimenjo%')
+      .maybeSingle();
+
+    if (provExist) {
+      proveedorId = provExist.id;
+    } else {
+      const { data: nuevoProv } = await supabaseAdmin
+        .from('proveedores')
+        .insert({
+          empresa_id: sakuraEmpresa.id,
+          nombre_comercial: 'Playa Seimenjo',
+          razon_social: seimenjoEmpresa.nombre || 'Playa Seimenjo',
+          rfc: seimenjoEmpresa.rfc || null,
+        })
+        .select('id')
+        .maybeSingle();
+      if (nuevoProv) proveedorId = nuevoProv.id;
+    }
+
+    // Buscar si ya existe el gasto por UUID para evitar duplicar
+    if (factura.uuid_fiscal) {
+      const { data: gastoExist } = await supabaseAdmin
+        .from('gastos')
+        .select('id')
+        .eq('empresa_id', sakuraEmpresa.id)
+        .ilike('uuid_fiscal', factura.uuid_fiscal)
+        .maybeSingle();
+
+      if (!gastoExist) {
+        await supabaseAdmin
+          .from('gastos')
+          .insert({
+            empresa_id: sakuraEmpresa.id,
+            fecha_gasto: factura.fecha_emision ? String(factura.fecha_emision).slice(0, 10) : new Date().toISOString().slice(0, 10),
+            fecha_timbrado: factura.fecha_timbrado || null,
+            concepto: `Compra de Ramen / Insumos Seimenjo (${factura.serie_folio || 'CFDI'})`,
+            monto: Number(factura.total || 0),
+            subtotal: Number(factura.subtotal || factura.total || 0),
+            iva_acreditable: Number(factura.iva_trasladado || 0),
+            proveedor_id: proveedorId,
+            uuid_fiscal: factura.uuid_fiscal,
+            folio_factura: factura.serie_folio,
+            forma_pago_id: factura.forma_pago_id,
+            metodo_pago: factura.metodo_pago || '03',
+            xml_url: factura.xml_url,
+            pdf_url: factura.pdf_url,
+            estatus_facturado: true
+          });
+      }
+    }
+
+    // 4. Mover la factura de venta a Playa Seimenjo
+    let clienteIdSeimenjo = null;
+    const { data: cliSakura } = await supabaseAdmin
+      .from('clientes')
+      .select('id')
+      .eq('empresa_id', seimenjoEmpresa.id)
+      .or(`rfc.ilike.%RPL231122S52%,nombre_local.ilike.%sakura%`)
+      .maybeSingle();
+
+    if (cliSakura) {
+      clienteIdSeimenjo = cliSakura.id;
+    }
+
+    // Desvincular de pedido en Sakura si estaba vinculado
+    if (factura.pedido_id) {
+      await supabaseAdmin
+        .from('pedidos')
+        .update({ folio_factura: null })
+        .eq('id', factura.pedido_id);
+    }
+
+    // Buscar si existe un pedido en Seimenjo
+    let pedidoIdSeimenjo = null;
+    const numPed = factura.pedidos?.numero_pedido;
+    if (numPed) {
+      const { data: pedSeimenjo } = await supabaseAdmin
+        .from('pedidos')
+        .select('id')
+        .eq('empresa_id', seimenjoEmpresa.id)
+        .eq('numero_pedido', numPed)
+        .maybeSingle();
+      if (pedSeimenjo) pedidoIdSeimenjo = pedSeimenjo.id;
+    }
+
+    // Actualizar la factura para que pertenezca a Seimenjo
+    const { error: updErr } = await supabaseAdmin
+      .from('facturas_clientes')
+      .update({
+        empresa_id: seimenjoEmpresa.id,
+        cliente_id: clienteIdSeimenjo,
+        pedido_id: pedidoIdSeimenjo,
+        rfc_receptor: sakuraEmpresa.rfc || 'RPL231122S52',
+        razon_social_receptor: sakuraEmpresa.nombre || 'RAMEN DE PLAYA S.A. DE C.V.'
+      })
+      .eq('id', facturaId);
+
+    if (updErr) throw updErr;
+
+    if (pedidoIdSeimenjo) {
+      await supabaseAdmin
+        .from('pedidos')
+        .update({ folio_factura: factura.serie_folio || (factura.uuid_fiscal ? `UUID:${factura.uuid_fiscal}` : null) })
+        .eq('id', pedidoIdSeimenjo);
+    }
+
+    return {
+      success: true,
+      mensaje: 'Factura reclasificada exitosamente: registrada como Gasto en Sakura Ramen y trasladada a Facturas Emitidas (Venta) de Playa Seimenjo.'
+    };
+  } catch (err: any) {
+    console.error('Error al reclasificar factura intercompañía:', err);
+    return { success: false, error: err.message || 'Error al reclasificar la factura' };
   }
 }
 

@@ -14,9 +14,9 @@ import {
   ArrowRightLeft, Play, RefreshCw, FileSpreadsheet, Plus, Trash2, Edit3,
   Layers, Check, X, UploadCloud, Paperclip, AlertTriangle, Filter, Eye, Link, Ticket, Landmark,
   Tag, Lock, Unlock, ChevronDown, ChevronRight, Users, Receipt, SlidersHorizontal, TrendingUp, TrendingDown,
-  History, Sparkles, ShieldAlert, Banknote, Clock
+  History, Sparkles, ShieldAlert, Banknote, Clock, Calendar, Globe
 } from 'lucide-react';
-import { formatCurrency } from '../../../../lib/formatters';
+import { formatCurrency, formatDate } from '../../../../lib/formatters';
 import type { MovimientoBancario, EstatusConciliacion, GastoReconciliable, FormaPago, ComprobanteDeposito } from '../../types';
 import { supabase } from '../../../../lib/supabase';
 import { getMetodoPagoLabel } from '../../../../lib/constants/sat';
@@ -32,6 +32,7 @@ import {
   depurarMovimientosDuplicadosAction,
   obtenerPropuestasAutoConciliacion,
   aplicarPropuestasConciliacion,
+  eliminarCortesParrotDuplicadosSinTicket,
   type PropuestaConciliacionItem
 } from '../reconciliationActions';
 import AutoConciliacionModal from './AutoConciliacionModal';
@@ -740,6 +741,16 @@ export default function BancoTab({
     result: any
   }>({ open: false, comprobantes: [], movimientos: [], loading: false, error: '', result: null });
 
+  const [reconcilePeriodFilter, setReconcilePeriodFilter] = React.useState<'mes' | 'anio' | 'todos'>('mes');
+  const [customReconcileMonth, setCustomReconcileMonth] = React.useState<string>('');
+
+  React.useEffect(() => {
+    if (reconcileModal.open) {
+      setReconcilePeriodFilter('mes');
+      setCustomReconcileMonth('');
+    }
+  }, [reconcileModal.open, reconcileModal.movimiento?.id]);
+
   const [depurandoDuplicados, setDepurandoDuplicados] = React.useState<boolean>(false);
 
   const handleDepurarDuplicados = async () => {
@@ -1099,7 +1110,7 @@ export default function BancoTab({
         const hasPostCloseNote = m.comentarios?.includes('Conciliado después del periodo de cierre');
         const isOutflow = m.tipo_movimiento === 'Retiro' || Number(m.retiro || 0) > 0;
         return {
-          'Fecha': m.fecha ? new Date(m.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : '',
+          'Fecha': m.fecha ? formatDate(m.fecha) : '',
           'Mes (Periodo)': m.fecha ? m.fecha.substring(0, 7) : '',
           'Estado Ciclo': pInfo.label,
           'Cuenta Bancaria': m.cuentas_bancarias?.nombre || 'BBVA',
@@ -1348,6 +1359,60 @@ export default function BancoTab({
   });
 
   const [viewingTicketsComp, setViewingTicketsComp] = React.useState<any | null>(null);
+  const [isCleaningDuplicates, setIsCleaningDuplicates] = React.useState(false);
+
+  // Detección de registros duplicados de Corte Parrot (mismo día)
+  const parrotDuplicates = React.useMemo(() => {
+    const list = (comprobantes || []).filter(c => 
+      c.tipo === 'corte_parrot' || (c.descripcion || '').toLowerCase().includes('corte parrot')
+    );
+    const byFecha = new Map<string, typeof list>();
+    for (const c of list) {
+      const f = c.fecha ? String(c.fecha).substring(0, 10) : '';
+      if (!f) continue;
+      if (!byFecha.has(f)) byFecha.set(f, []);
+      byFecha.get(f)!.push(c);
+    }
+    const dupMap = new Map<string, typeof list>();
+    for (const [f, items] of byFecha.entries()) {
+      if (items.length > 1) {
+        dupMap.set(f, items);
+      }
+    }
+    return dupMap;
+  }, [comprobantes]);
+
+  const parrotDuplicatesCount = React.useMemo(() => {
+    let count = 0;
+    parrotDuplicates.forEach(items => {
+      count += (items.length - 1);
+    });
+    return count;
+  }, [parrotDuplicates]);
+
+  const handleCleanParrotDuplicates = async () => {
+    if (!confirm(`Se detectaron ${parrotDuplicatesCount} registro(s) duplicado(s) de Corte Parrot.\n\nEsta acción conservará el registro con el ticket cargado (o el que tenga el desglose de ventas) y eliminará los registros duplicados que están "Sin Ticket".\n\n¿Deseas continuar?`)) {
+      return;
+    }
+    try {
+      setIsCleaningDuplicates(true);
+      const token = await getSessionToken();
+      const res = await eliminarCortesParrotDuplicadosSinTicket(token);
+      if (res.success) {
+        alert(res.message || 'Duplicados eliminados correctamente.');
+        if (onReloadMovimientos) {
+          await onReloadMovimientos();
+        }
+      } else {
+        alert('Error: ' + res.error);
+      }
+    } catch (err: any) {
+      console.error(err);
+      alert('Error al depurar duplicados: ' + (err.message || 'Error desconocido'));
+    } finally {
+      setIsCleaningDuplicates(false);
+    }
+  };
 
   React.useEffect(() => {
     if (selectedMonth && !editingCompId) {
@@ -1777,7 +1842,7 @@ export default function BancoTab({
         const links = (m as any).conciliaciones_bancarias || [];
         const estatus = m.estatus_conciliacion_bancaria?.nombre || 'Pendiente';
         const categoria = m.categorias_movimiento_bancario?.nombre || 'Sin Categoría';
-        const fechaMov = m.fecha ? new Date(m.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : '';
+        const fechaMov = m.fecha ? formatDate(m.fecha) : '';
         const importeMov = m.tipo_movimiento === 'Retiro' ? -Math.abs(Number(m.monto)) : Math.abs(Number(m.monto));
 
         if (links.length === 0) {
@@ -1917,7 +1982,7 @@ export default function BancoTab({
         const isVentanilla = c.tipo === 'deposito_ventanilla';
         const linkedSum = (c.comprobantes_deposito_movimientos || []).reduce((acc, rel) => acc + Number(rel.monto_asociado), 0);
         const estatus = isCompCuadrado(c) ? 'Conciliado' : 'Pendiente';
-        const fechaComp = c.fecha ? new Date(c.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : '';
+        const fechaComp = c.fecha ? formatDate(c.fecha) : '';
         
         return {
           'Fecha': fechaComp,
@@ -2371,164 +2436,276 @@ export default function BancoTab({
     const file = e.target.files?.[0];
     if (!file) return;
 
+    // Resetear valor para que seleccionar el mismo archivo vuelva a disparar onChange
+    e.target.value = '';
+
     try {
-      const reader = new FileReader();
-      reader.onload = async (evt) => {
-        try {
-          const bstr = evt.target?.result;
-          const XLSX = await import('xlsx');
-          const workbook = XLSX.read(bstr, { type: 'binary', cellDates: true, dateNF: 'dd/mm/yyyy' });
-          const sheetName = workbook.SheetNames[0];
-          const worksheet = workbook.Sheets[sheetName];
-          const rawData = XLSX.utils.sheet_to_json(worksheet, { defval: '', raw: false, dateNF: 'dd/mm/yyyy' }) as any[];
+      setIsParrotUploading(true);
+      const buffer = await file.arrayBuffer();
+      const XLSX = await import('xlsx');
+      const workbook = XLSX.read(buffer, { type: 'array', cellDates: true, dateNF: 'yyyy-mm-dd' });
 
-          if (rawData.length === 0) {
-            alert('El archivo está vacío.');
-            return;
-          }
+      if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
+        alert('El archivo no contiene hojas de cálculo válidas.');
+        setIsParrotUploading(false);
+        return;
+      }
 
-          const groups = new Map<string, any>();
-
-          rawData.forEach(row => {
-            const keys = Object.keys(row);
-            const getVal = (possibleKeys: string[]) => {
-              // 1. Coincidencia exacta primero
-              for (const pk of possibleKeys) {
-                const target = pk.toLowerCase().trim();
-                for (const k of keys) {
-                  if (k.toLowerCase().trim() === target) {
-                    return row[k];
-                  }
-                }
-              }
-              // 2. Coincidencia parcial si no hubo exacta
-              for (const pk of possibleKeys) {
-                const target = pk.toLowerCase().trim();
-                for (const k of keys) {
-                  if (k.toLowerCase().trim().includes(target)) {
-                    return row[k];
-                  }
-                }
-              }
-              return '';
-            };
-
-            const rawFecha = getVal(['fecha', 'date']);
-            if (!rawFecha) return;
-
-            let yyyyMmDd = '';
-            if (rawFecha instanceof Date) {
-              yyyyMmDd = rawFecha.toISOString().substring(0, 10);
-            } else {
-              const str = String(rawFecha).trim().split(' ')[0];
-              if (str.includes('/')) {
-                const parts = str.split('/');
-                if (parts.length === 3) {
-                  if (parts[2].length === 4) {
-                    yyyyMmDd = `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
-                  } else if (parts[0].length === 4) {
-                    yyyyMmDd = `${parts[0]}-${parts[1].padStart(2, '0')}-${parts[2].padStart(2, '0')}`;
-                  }
-                }
-              } else if (str.includes('-')) {
-                const parts = str.split('-');
-                if (parts.length === 3) {
-                  if (parts[0].length === 4) {
-                    yyyyMmDd = `${parts[0]}-${parts[1].padStart(2, '0')}-${parts[2].padStart(2, '0')}`;
-                  } else if (parts[2].length === 4) {
-                    yyyyMmDd = `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
-                  }
-                }
-              } else {
-                yyyyMmDd = str;
-              }
-            }
-
-            if (!yyyyMmDd || yyyyMmDd.length < 8) return;
-
-            const rawTipoPago = String(getVal(['tipo de pago', 'tipo de pa', 'type', 'metodo de pago']) || 'Pago').trim();
-            const tipoPago = rawTipoPago.toLowerCase();
-            const numeroPedido = String(getVal(['número de pedido', 'numero de pedido', 'número de', 'numero de', 'pedido', 'ticket', 'folio', 'orden']) || '').trim();
-            const usuario = String(getVal(['usuario', 'mesero', 'cajero', 'staff']) || '').trim();
-            const marca = String(getVal(['marca']) || '').trim();
-            const canal = String(getVal(['canal', 'sucursal']) || '').trim();
-
-            const parseNum = (val: any) => {
-              if (typeof val === 'number') return isNaN(val) ? 0 : val;
-              if (!val) return 0;
-              const clean = String(val).replace(/[^0-9.-]/g, '');
-              const n = parseFloat(clean);
-              return isNaN(n) ? 0 : n;
-            };
-
-            const propina = parseNum(getVal(['propina', 'tip']));
-            const totalSinPropina = parseNum(getVal(['total sin propina', 'total sin p', 'subtotal']));
-            const rawTotal = parseNum(getVal(['total']));
-            const total = rawTotal > 0 ? rawTotal : (totalSinPropina + propina);
-
-            if (!groups.has(yyyyMmDd)) {
-              groups.set(yyyyMmDd, {
-                fecha: yyyyMmDd,
-                montoCredito: 0,
-                propinaCredito: 0,
-                montoDebito: 0,
-                propinaDebito: 0,
-                montoEfectivo: 0,
-                propinaEfectivo: 0,
-                montoParrotpay: 0,
-                propinaParrotpay: 0,
-                totalAgrupado: 0,
-                tickets: []
-              });
-            }
-
-            const g = groups.get(yyyyMmDd);
-            g.tickets.push({
-              numero_pedido: numeroPedido,
-              usuario: usuario,
-              marca: marca,
-              canal: canal,
-              tipo_pago: rawTipoPago,
-              propina: propina,
-              total_sin_propina: totalSinPropina,
-              total: total
-            });
-            
-            if (tipoPago.includes('crédito') || tipoPago.includes('credito')) {
-              g.montoCredito += totalSinPropina;
-              g.propinaCredito += propina;
-            } else if (tipoPago.includes('débito') || tipoPago.includes('debito')) {
-              g.montoDebito += totalSinPropina;
-              g.propinaDebito += propina;
-            } else if (tipoPago.includes('efectivo')) {
-              g.montoEfectivo += totalSinPropina;
-              g.propinaEfectivo += propina;
-            } else if (tipoPago.includes('terminal') || tipoPago.includes('tarjeta') || tipoPago.includes('pos') || tipoPago.includes('card')) {
-              // "Pago Terminal" en Parrot POS representa cobro con tarjeta física en la terminal
-              g.montoDebito += totalSinPropina;
-              g.propinaDebito += propina;
-            } else if (tipoPago.includes('parrot') || tipoPago.includes('qr') || tipoPago.includes('transferencia')) {
-              g.montoParrotpay += totalSinPropina;
-              g.propinaParrotpay += propina;
-            } else {
-              // Si no especifica, agrupar como tarjeta/terminal
-              g.montoDebito += totalSinPropina;
-              g.propinaDebito += propina;
-            }
-            g.totalAgrupado += total;
-          });
-
-          const sortedGroups = Array.from(groups.values()).sort((a, b) => b.fecha.localeCompare(a.fecha));
-          setParrotGroups(sortedGroups);
-        } catch (innerErr: any) {
-          console.error(innerErr);
-          alert('Error analizando archivo Parrot: ' + innerErr.message);
+      // Buscar la hoja más relevante (órdenes, ventas, pagos, transacciones o la primera con datos)
+      let targetSheetName = workbook.SheetNames[0];
+      for (const sName of workbook.SheetNames) {
+        const norm = sName.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+        if (norm.includes('orden') || norm.includes('order') || norm.includes('venta') || norm.includes('pago') || norm.includes('ticket') || norm.includes('transacc')) {
+          targetSheetName = sName;
+          break;
         }
-      };
-      reader.readAsBinaryString(file);
+      }
+
+      const worksheet = workbook.Sheets[targetSheetName];
+      const sheetRows = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: '', raw: false }) as any[][];
+
+      if (!sheetRows || sheetRows.length === 0) {
+        alert('La hoja de cálculo está vacía.');
+        setIsParrotUploading(false);
+        return;
+      }
+
+      // Auto-detectar fila de encabezados buscando palabras clave
+      let headerRowIdx = -1;
+      for (let i = 0; i < Math.min(25, sheetRows.length); i++) {
+        const row = sheetRows[i];
+        if (!row || !Array.isArray(row)) continue;
+        const rowText = row.map(c => String(c || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim()).join(' ');
+        if ((rowText.includes('fecha') || rowText.includes('date')) && (rowText.includes('pago') || rowText.includes('total') || rowText.includes('monto') || rowText.includes('pedido') || rowText.includes('orden') || rowText.includes('subtotal'))) {
+          headerRowIdx = i;
+          break;
+        }
+      }
+
+      if (headerRowIdx === -1) {
+        for (let i = 0; i < Math.min(25, sheetRows.length); i++) {
+          const row = sheetRows[i];
+          if (!row || !Array.isArray(row)) continue;
+          const rowText = row.map(c => String(c || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim()).join(' ');
+          if (rowText.includes('fecha') || rowText.includes('date')) {
+            headerRowIdx = i;
+            break;
+          }
+        }
+      }
+
+      if (headerRowIdx === -1) {
+        headerRowIdx = 0;
+      }
+
+      const headerCols = (sheetRows[headerRowIdx] || []).map(c => String(c || '').trim());
+      const dataRows = sheetRows.slice(headerRowIdx + 1);
+
+      if (dataRows.length === 0) {
+        alert('No se encontraron filas de datos después de la fila de encabezados.');
+        setIsParrotUploading(false);
+        return;
+      }
+
+      const groups = new Map<string, any>();
+      const seenTickets = new Set<string>();
+      let duplicateTicketsCount = 0;
+
+      dataRows.forEach(row => {
+        if (!row || !Array.isArray(row) || row.every(cell => String(cell || '').trim() === '')) return;
+
+        const getVal = (possibleKeys: string[]) => {
+          for (const pk of possibleKeys) {
+            const target = pk.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+            for (let c = 0; c < headerCols.length; c++) {
+              const col = headerCols[c].toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+              if (col === target) {
+                return row[c] ?? '';
+              }
+            }
+          }
+          for (const pk of possibleKeys) {
+            const target = pk.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+            for (let c = 0; c < headerCols.length; c++) {
+              const col = headerCols[c].toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+              if (col.includes(target) || target.includes(col)) {
+                return row[c] ?? '';
+              }
+            }
+          }
+          return '';
+        };
+
+        const rawFecha = getVal(['fecha', 'date', 'fecha de la orden', 'fecha del pedido', 'fecha de venta', 'fecha de pago', 'fecha y hora', 'fecha/hora', 'dia', 'day', 'created at', 'fecha de cobro', 'fecha creacion', 'fecha creación']);
+        if (!rawFecha) return;
+
+        let yyyyMmDd = '';
+        if (rawFecha instanceof Date) {
+          const y = rawFecha.getFullYear();
+          const m = String(rawFecha.getMonth() + 1).padStart(2, '0');
+          const d = String(rawFecha.getDate()).padStart(2, '0');
+          yyyyMmDd = `${y}-${m}-${d}`;
+        } else if (typeof rawFecha === 'number' || (!isNaN(Number(rawFecha)) && !String(rawFecha).includes('-') && !String(rawFecha).includes('/'))) {
+          const serial = Number(rawFecha);
+          if (serial > 25000 && serial < 75000) {
+            const dateObj = new Date(Math.round((serial - 25569) * 86400 * 1000));
+            const y = dateObj.getUTCFullYear();
+            const m = String(dateObj.getUTCMonth() + 1).padStart(2, '0');
+            const d = String(dateObj.getUTCDate()).padStart(2, '0');
+            yyyyMmDd = `${y}-${m}-${d}`;
+          }
+        }
+
+        if (!yyyyMmDd) {
+          const str = String(rawFecha).trim().split(' ')[0].split('T')[0];
+          if (str.includes('/')) {
+            const parts = str.split('/');
+            if (parts.length === 3) {
+              if (parts[2].length === 4) {
+                yyyyMmDd = `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+              } else if (parts[0].length === 4) {
+                yyyyMmDd = `${parts[0]}-${parts[1].padStart(2, '0')}-${parts[2].padStart(2, '0')}`;
+              } else if (parts[2].length === 2) {
+                const yr = parseInt(parts[2], 10) > 50 ? `19${parts[2]}` : `20${parts[2]}`;
+                yyyyMmDd = `${yr}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+              }
+            }
+          } else if (str.includes('-')) {
+            const parts = str.split('-');
+            if (parts.length === 3) {
+              if (parts[0].length === 4) {
+                yyyyMmDd = `${parts[0]}-${parts[1].padStart(2, '0')}-${parts[2].padStart(2, '0')}`;
+              } else if (parts[2].length === 4) {
+                yyyyMmDd = `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+              } else if (parts[2].length === 2) {
+                const yr = parseInt(parts[2], 10) > 50 ? `19${parts[2]}` : `20${parts[2]}`;
+                yyyyMmDd = `${yr}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+              }
+            }
+          }
+        }
+
+        if (!yyyyMmDd || yyyyMmDd.length !== 10) return;
+
+        const rawTipoPago = String(getVal(['tipo de pago', 'tipo de pa', 'type', 'metodo de pago', 'método de pago', 'forma de pago', 'payment method', 'pago']) || 'Pago').trim();
+        const tipoPago = rawTipoPago.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+        const numeroPedido = String(getVal(['numero de pedido', 'número de pedido', 'numero de orden', 'número de orden', 'numero de', 'número de', 'pedido', 'ticket', 'folio', 'orden', 'order', 'id']) || '').trim();
+        const usuario = String(getVal(['usuario', 'mesero', 'cajero', 'staff', 'servidor', 'server', 'empleado']) || '').trim();
+        const marca = String(getVal(['marca', 'brand']) || '').trim();
+        const canal = String(getVal(['canal', 'sucursal', 'channel', 'branch']) || '').trim();
+
+        const parseNum = (val: any) => {
+          if (typeof val === 'number') return isNaN(val) ? 0 : val;
+          if (!val) return 0;
+          const clean = String(val).replace(/[^0-9.-]/g, '');
+          const n = parseFloat(clean);
+          return isNaN(n) ? 0 : n;
+        };
+
+        const propina = parseNum(getVal(['propina', 'propinas', 'tip', 'tips']));
+        const totalSinPropina = parseNum(getVal(['total sin propina', 'total sin p', 'subtotal', 'total sin propinas', 'monto sin propina']));
+        const rawTotal = parseNum(getVal(['total', 'monto total', 'importe total', 'gran total', 'gross total', 'monto', 'importe']));
+        const total = rawTotal > 0 ? rawTotal : (totalSinPropina + propina);
+        const baseSinPropina = totalSinPropina > 0 ? totalSinPropina : Math.max(0, total - propina);
+
+        // Validación estricta: evitar tickets duplicados dentro del archivo Excel de Parrot
+        const ticketKey = numeroPedido
+          ? `${yyyyMmDd}_${numeroPedido}_${tipoPago}_${total.toFixed(2)}_${propina.toFixed(2)}`
+          : `${yyyyMmDd}_${tipoPago}_${total.toFixed(2)}_${propina.toFixed(2)}_${usuario}_${canal}`;
+
+        if (seenTickets.has(ticketKey)) {
+          duplicateTicketsCount++;
+          return;
+        }
+        seenTickets.add(ticketKey);
+
+        if (!groups.has(yyyyMmDd)) {
+          groups.set(yyyyMmDd, {
+            fecha: yyyyMmDd,
+            montoCredito: 0,
+            propinaCredito: 0,
+            montoDebito: 0,
+            propinaDebito: 0,
+            montoEfectivo: 0,
+            propinaEfectivo: 0,
+            montoParrotpay: 0,
+            propinaParrotpay: 0,
+            totalAgrupado: 0,
+            tickets: []
+          });
+        }
+
+        const g = groups.get(yyyyMmDd);
+        g.tickets.push({
+          numero_pedido: numeroPedido,
+          usuario: usuario,
+          marca: marca,
+          canal: canal,
+          tipo_pago: rawTipoPago,
+          propina: propina,
+          total_sin_propina: baseSinPropina,
+          total: total
+        });
+
+        if (tipoPago.includes('credito') || tipoPago.includes('credit') || tipoPago.includes('tdc')) {
+          g.montoCredito += baseSinPropina;
+          g.propinaCredito += propina;
+        } else if (tipoPago.includes('debito') || tipoPago.includes('debit') || tipoPago.includes('tdd')) {
+          g.montoDebito += baseSinPropina;
+          g.propinaDebito += propina;
+        } else if (tipoPago.includes('efectivo') || tipoPago.includes('cash')) {
+          g.montoEfectivo += baseSinPropina;
+          g.propinaEfectivo += propina;
+        } else if (tipoPago.includes('parrot') || tipoPago.includes('qr') || tipoPago.includes('transferencia') || tipoPago.includes('spei')) {
+          g.montoParrotpay += baseSinPropina;
+          g.propinaParrotpay += propina;
+        } else {
+          // Terminal POS por defecto
+          g.montoDebito += baseSinPropina;
+          g.propinaDebito += propina;
+        }
+        g.totalAgrupado += total;
+      });
+
+      const sortedGroups = Array.from(groups.values()).sort((a, b) => b.fecha.localeCompare(a.fecha));
+
+      if (sortedGroups.length === 0) {
+        alert(
+          'No se encontraron registros de ventas válidos en el archivo.\n' +
+          'Asegúrate de que contenga columnas de Fecha y Total o Tipo de Pago.\n\n' +
+          'Columnas detectadas: ' + headerCols.slice(0, 10).join(', ')
+        );
+        setIsParrotUploading(false);
+        return;
+      }
+
+      setParrotGroups(sortedGroups);
+
+      if (duplicateTicketsCount > 0) {
+        console.warn(`Se detectaron y omitieron ${duplicateTicketsCount} tickets duplicados en el archivo Excel.`);
+      }
+
+      // Auto-seleccionar primer día en el formulario para conveniencia inmediata del usuario
+      const firstGroup = sortedGroups[0];
+      setNewCompForm(p => ({
+        ...p,
+        tipo: 'corte_parrot',
+        fecha: firstGroup.fecha,
+        montoCredito: String(firstGroup.montoCredito),
+        propinaCredito: String(firstGroup.propinaCredito),
+        montoDebito: String(firstGroup.montoDebito),
+        propinaDebito: String(firstGroup.propinaDebito),
+        montoEfectivo: String(firstGroup.montoEfectivo),
+        propinaEfectivo: String(firstGroup.propinaEfectivo),
+        montoParrotpay: String(firstGroup.montoParrotpay),
+        propinaParrotpay: String(firstGroup.propinaParrotpay),
+        desgloseTickets: firstGroup.tickets || []
+      }));
     } catch (err: any) {
-      console.error(err);
-      alert('Error cargando archivo: ' + err.message);
+      console.error('Error al procesar archivo Parrot:', err);
+      alert('Error al leer el archivo de Parrot: ' + (err?.message || 'Error desconocido'));
+    } finally {
+      setIsParrotUploading(false);
     }
   };
 
@@ -2552,6 +2729,7 @@ export default function BancoTab({
 
     setIsParrotUploading(true);
     let successCount = 0;
+    let updatedCount = 0;
     let errorCount = 0;
     let lastError = '';
 
@@ -2596,13 +2774,41 @@ export default function BancoTab({
           desglose_tickets: g.tickets || []
         };
 
-        const res = await onCrearComprobante(payload);
-        if (res && res.error) {
-          console.error('Error insertando comprobante Parrot:', res.error);
-          errorCount++;
-          lastError = res.error;
+        // Buscar si ya existe un comprobante corte_parrot para esta fecha
+        const existingComp = (comprobantes || []).find(c => 
+          c.fecha === g.fecha && (c.tipo === 'corte_parrot' || (c.descripcion || '').toLowerCase().includes('corte parrot'))
+        );
+
+        if (existingComp && onActualizarComprobante) {
+          // Ya existe: actualizarlo en lugar de insertar un duplicado, conservando el ticket si ya tenía archivo cargado
+          const updatePayload = {
+            ...payload,
+            archivo_url: existingComp.archivo_url || null,
+            storage_provider: existingComp.storage_provider || 'Supabase',
+            cuenta_bancaria_id: existingComp.cuenta_bancaria_id || (parrotCuenta ? parrotCuenta.id : null),
+            desglose_tickets: g.tickets || []
+          };
+          const res = await onActualizarComprobante(existingComp.id, updatePayload);
+          if (res && res.error) {
+            console.error('Error actualizando comprobante Parrot existente:', res.error);
+            errorCount++;
+            lastError = res.error;
+          } else {
+            updatedCount++;
+          }
         } else {
-          successCount++;
+          const res = await onCrearComprobante(payload);
+          if (res && res.error) {
+            console.error('Error insertando comprobante Parrot:', res.error);
+            errorCount++;
+            lastError = res.error;
+          } else {
+            if (res && res.wasUpdated) {
+              updatedCount++;
+            } else {
+              successCount++;
+            }
+          }
         }
       }
 
@@ -2611,9 +2817,9 @@ export default function BancoTab({
       }
 
       if (errorCount > 0) {
-        alert(`Se procesaron los comprobantes:\n✓ ${successCount} guardados correctamente\n✗ ${errorCount} fallaron (${lastError})`);
+        alert(`Se procesaron los comprobantes:\n✓ ${successCount} nuevos guardados\n↻ ${updatedCount} actualizados (sin duplicar)\n✗ ${errorCount} fallaron (${lastError})`);
       } else {
-        alert(`Se registraron ${successCount} comprobantes de Parrot exitosamente.`);
+        alert(`Se procesaron los comprobantes de Parrot exitosamente:\n✓ ${successCount} nuevos creados\n↻ ${updatedCount} actualizados sin duplicar`);
       }
       setParrotGroups([]);
     } catch (err: any) {
@@ -3246,7 +3452,7 @@ export default function BancoTab({
                     ) : (() => {
                       const renderSingleMovRow = (m: MovimientoBancario, isChild = false, childTheme?: 'rose' | 'indigo' | 'purple' | 'blue' | 'amber' | 'cyan' | 'emerald') => {
                         const color = m.estatus_conciliacion_bancaria?.color || '#9CA3AF';
-                        const dateStr = new Date(m.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' });
+                        const dateStr = formatDate(m.fecha);
                         const isRetiro = isMovRetiro(m);
                         const sharedInfo = sharedInvoicesMap.get(m.id);
 
@@ -3312,7 +3518,7 @@ export default function BancoTab({
                                   </span>
                                   {sharedInfo.siblingMovs.length > 0 && (
                                     <span className="text-[9px] font-bold text-indigo-700 dark:text-indigo-300">
-                                      (Vinculado con: {sharedInfo.siblingMovs.map(s => `${new Date(s.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })} [-${formatCurrency(Math.abs(s.monto))}]`).join(', ')})
+                                      (Vinculado con: {sharedInfo.siblingMovs.map(s => `${formatDate(s.fecha)} [-${formatCurrency(Math.abs(s.monto))}]`).join(', ')})
                                     </span>
                                   )}
                                 </div>
@@ -3362,7 +3568,7 @@ export default function BancoTab({
                                             <span className="font-mono font-black text-emerald-600 dark:text-emerald-400">
                                               {formatCurrency(rel?.monto_asociado || c.monto)}
                                             </span>
-                                            <span className="font-mono text-[9px] text-gray-400">({new Date(c.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })})</span>
+                                            <span className="font-mono text-[9px] text-gray-400">({formatDate(c.fecha)})</span>
                                           </div>
                                           {Array.isArray(c.desglose_tickets) && c.desglose_tickets.length > 0 && (
                                             <button
@@ -3430,7 +3636,7 @@ export default function BancoTab({
                                         <div className="flex flex-wrap gap-1.5 pt-1">
                                           {allMovs.map((movItem: any, oidx: number) => {
                                             const isCurrent = movItem.id === m.id;
-                                            const fDate = movItem.fecha ? new Date(movItem.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : '';
+                                            const fDate = movItem.fecha ? formatDate(movItem.fecha) : '';
                                             return (
                                               <span
                                                 key={oidx}
@@ -3490,9 +3696,7 @@ export default function BancoTab({
                                       const item = isGasto ? link.gasto : link.pedido;
                                       if (!item) return null;
                                       
-                                      const dateDocStr = item.fecha_gasto || item.fecha_pedido
-                                        ? new Date(item.fecha_gasto || item.fecha_pedido).toLocaleDateString('es-MX', { timeZone: 'UTC' })
-                                        : 'Sin fecha';
+                                      const dateDocStr = formatDate(item.fecha_gasto || item.fecha_pedido);
                                         
                                       const rfc = isGasto 
                                         ? item.proveedores?.rfc 
@@ -3998,7 +4202,7 @@ export default function BancoTab({
                           const ids = group.movimientos.map(m => m.id);
                           const allChecked = ids.length > 0 && ids.every(id => selectedMovimientos.includes(id));
                           const firstMov = group.movimientos[0];
-                          const dateFormatted = firstMov?.fecha ? new Date(firstMov.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : '-';
+                          const dateFormatted = firstMov?.fecha ? formatDate(firstMov.fecha) : '-';
 
                           let IconComponent = <Tag size={16} className={st.icon} />;
                           if (group.iconType === 'tpv') IconComponent = <Layers size={16} className={st.icon} />;
@@ -4222,21 +4426,24 @@ export default function BancoTab({
                       <h4 className="text-xs font-extrabold uppercase text-amber-500 flex items-center gap-1.5">
                         <Plus size={14} /> Registrar Comprobante Independiente
                       </h4>
-                      <div className="flex gap-2">
-                        <button
-                          type="button"
-                          onClick={() => parrotFileInputRef.current?.click()}
-                          className="px-2 py-1 text-[10px] font-bold bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 rounded flex items-center gap-1 transition-colors"
+                      <div className="flex gap-2 items-center">
+                        <label
+                          htmlFor="parrotFileInput"
+                          className="px-2.5 py-1 text-[10px] font-bold bg-amber-500 hover:bg-amber-600 dark:bg-amber-600 dark:hover:bg-amber-500 text-white rounded shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer select-none"
                           title="Importar Excel/CSV de Parrot POS"
                         >
-                          <FileSpreadsheet size={12} /> Importar Parrot
-                        </button>
+                          <FileSpreadsheet size={13} /> {isParrotUploading ? 'Cargando Parrot...' : 'Importar Parrot'}
+                        </label>
                         <input
+                          id="parrotFileInput"
                           type="file"
                           ref={parrotFileInputRef}
                           accept=".csv,.xlsx,.xls"
                           className="hidden"
                           onChange={handleParrotUpload}
+                          onClick={(e) => {
+                            (e.target as HTMLInputElement).value = '';
+                          }}
                         />
                       </div>
                     </div>
@@ -4267,9 +4474,10 @@ export default function BancoTab({
                         </div>
                         <div className="max-h-32 overflow-y-auto space-y-1 pr-1 custom-scrollbar">
                           {parrotGroups.map((g, i) => (
-                            <button
+                            <div
                               key={i}
-                              type="button"
+                              role="button"
+                              tabIndex={0}
                               onClick={() => {
                                 setNewCompForm(p => ({
                                   ...p,
@@ -4286,7 +4494,26 @@ export default function BancoTab({
                                   desgloseTickets: g.tickets || []
                                 }));
                               }}
-                              className="w-full text-left px-2 py-1.5 bg-white dark:bg-gray-900 hover:bg-emerald-100 dark:hover:bg-emerald-900/40 border border-emerald-100 dark:border-emerald-800/30 rounded text-[10px] text-gray-700 dark:text-gray-300 transition-colors flex justify-between items-center"
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                  e.preventDefault();
+                                  setNewCompForm(p => ({
+                                    ...p,
+                                    tipo: 'corte_parrot',
+                                    fecha: g.fecha,
+                                    montoCredito: String(g.montoCredito),
+                                    propinaCredito: String(g.propinaCredito),
+                                    montoDebito: String(g.montoDebito),
+                                    propinaDebito: String(g.propinaDebito),
+                                    montoEfectivo: String(g.montoEfectivo),
+                                    propinaEfectivo: String(g.propinaEfectivo),
+                                    montoParrotpay: String(g.montoParrotpay),
+                                    propinaParrotpay: String(g.propinaParrotpay),
+                                    desgloseTickets: g.tickets || []
+                                  }));
+                                }
+                              }}
+                              className="w-full text-left px-2 py-1.5 bg-white dark:bg-gray-900 hover:bg-emerald-100 dark:hover:bg-emerald-900/40 border border-emerald-100 dark:border-emerald-800/30 rounded text-[10px] text-gray-700 dark:text-gray-300 transition-colors flex justify-between items-center cursor-pointer"
                             >
                               <span className="font-bold flex items-center gap-1.5">
                                 {g.fecha}
@@ -4313,7 +4540,7 @@ export default function BancoTab({
                                   <Receipt size={12} />
                                 </button>
                               </div>
-                            </button>
+                            </div>
                           ))}
                         </div>
                       </div>
@@ -4855,7 +5082,20 @@ export default function BancoTab({
                               if (!onCrearComprobante) {
                                 throw new Error('No se ha configurado la acción para crear comprobantes en esta sección.');
                               }
-                              res = await onCrearComprobante(payload);
+                              // Prevenir duplicados de corte Parrot si ya existe para esa fecha
+                              const existingParrot = payload.tipo === 'corte_parrot'
+                                ? (comprobantes || []).find(c => c.fecha === payload.fecha && (c.tipo === 'corte_parrot' || (c.descripcion || '').toLowerCase().includes('corte parrot')))
+                                : null;
+                              if (existingParrot && onActualizarComprobante) {
+                                res = await onActualizarComprobante(existingParrot.id, {
+                                  ...payload,
+                                  archivo_url: payload.archivo_url || existingParrot.archivo_url || null,
+                                  storage_provider: payload.storage_provider || existingParrot.storage_provider || 'Supabase',
+                                  cuenta_bancaria_id: payload.cuenta_bancaria_id || existingParrot.cuenta_bancaria_id || null
+                                });
+                              } else {
+                                res = await onCrearComprobante(payload);
+                              }
                             }
 
                             if (res && !res.success) {
@@ -4934,6 +5174,18 @@ export default function BancoTab({
                         <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-gray-200/70 dark:bg-gray-800 text-gray-600 dark:text-gray-300">
                           {filteredComprobantes.length} de {comprobantes.length}
                         </span>
+                        {parrotDuplicatesCount > 0 && (
+                          <button
+                            type="button"
+                            onClick={handleCleanParrotDuplicates}
+                            disabled={isCleaningDuplicates}
+                            className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white rounded-lg text-[10px] font-black flex items-center gap-1.5 shadow-xs transition-all cursor-pointer animate-pulse"
+                            title="Eliminar cortes Parrot duplicados para las mismas fechas que no tengan ticket cargado"
+                          >
+                            {isCleaningDuplicates ? <RefreshCw size={11} className="animate-spin" /> : <Trash2 size={11} />}
+                            Eliminar {parrotDuplicatesCount} Duplicado{parrotDuplicatesCount > 1 ? 's' : ''} Sin Ticket
+                          </button>
+                        )}
                       </div>
 
                       <div className="flex items-center gap-2">
@@ -4948,6 +5200,26 @@ export default function BancoTab({
                         </span>
                       </div>
                     </div>
+
+                    {parrotDuplicatesCount > 0 && (
+                      <div className="m-3 p-3 bg-rose-50 dark:bg-rose-955/40 border border-rose-200 dark:border-rose-900/50 rounded-lg flex items-center justify-between gap-3 text-xs">
+                        <div className="flex items-center gap-2 text-rose-800 dark:text-rose-200">
+                          <AlertTriangle size={16} className="shrink-0 text-rose-600 dark:text-rose-400" />
+                          <span>
+                            <strong>Se detectaron {parrotDuplicatesCount} registros duplicados de Corte Parrot</strong> en las mismas fechas. Conservaremos los comprobantes con ticket cargado y eliminaremos los registros sobrantes &ldquo;Sin Ticket&rdquo;.
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleCleanParrotDuplicates}
+                          disabled={isCleaningDuplicates}
+                          className="shrink-0 px-3 py-1.5 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white rounded-md text-[11px] font-bold flex items-center gap-1.5 shadow-sm transition-all cursor-pointer"
+                        >
+                          {isCleaningDuplicates ? <RefreshCw size={12} className="animate-spin" /> : <Trash2 size={12} />}
+                          Limpiar Duplicados
+                        </button>
+                      </div>
+                    )}
 
                     <div className="flex-1 overflow-auto">
                       <table className="w-full text-left border-collapse text-xs">
@@ -4987,7 +5259,7 @@ export default function BancoTab({
                                 <tr key={c.id} className={`hover:bg-gray-50/40 dark:hover:bg-gray-900/20 transition-all ${
                                   isVentaMesAnt ? 'border-l-4 border-l-amber-500 bg-amber-50/20 dark:bg-amber-955/10' : ''
                                 }`}>
-                                  <td className="p-3 font-mono text-gray-500">{new Date(c.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })}</td>
+                                  <td className="p-3 font-mono text-gray-500">{formatDate(c.fecha)}</td>
                                   <td className="p-3">
                                     <div className="flex items-center gap-1.5 flex-wrap">
                                       <span className={`text-[9px] font-black px-2 py-0.5 rounded uppercase ${
@@ -5101,7 +5373,22 @@ export default function BancoTab({
                                         <span className="text-[9px] text-gray-400 font-mono block font-normal">({formatCurrency(tarjetaTotalBBVA)} Tarjetas BBVA / {formatCurrency(c.monto)} Corte)</span>
                                       </div>
                                     ) : (
-                                      formatCurrency(c.monto)
+                                      <div>
+                                        <span className="block">{formatCurrency(c.monto)}</span>
+                                        {(() => {
+                                          const totProp = Number(c.propina_efectivo || 0) + Number(c.propina_parrotpay || 0) +
+                                                          Number(c.propina_debito || 0) + Number(c.propina_credito || 0) + Number(c.propina_amex || 0);
+                                          if (totProp > 0) {
+                                            const baseVenta = Math.max(0, Number(c.monto || 0) - totProp);
+                                            return (
+                                              <span className="text-[9px] text-gray-400 font-mono block font-normal" title={`Venta Neta: ${formatCurrency(baseVenta)} | Propinas: ${formatCurrency(totProp)}`}>
+                                                Venta: {formatCurrency(baseVenta)} (+Prop: {formatCurrency(totProp)})
+                                              </span>
+                                            );
+                                          }
+                                          return null;
+                                        })()}
+                                      </div>
                                     )}
                                     {sumAsoc > 0 && (
                                       <div className="text-[9px] font-normal text-emerald-500">Asoc: {formatCurrency(sumAsoc)}</div>
@@ -5369,7 +5656,7 @@ export default function BancoTab({
                                         className="w-4 h-4 text-amber-500 focus:ring-amber-500 rounded cursor-pointer accent-amber-500"
                                       />
                                     </td>
-                                    <td className="p-3 font-mono text-gray-500">{new Date(m.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })}</td>
+                                    <td className="p-3 font-mono text-gray-500">{formatDate(m.fecha)}</td>
                                     <td className="p-3">
                                       <div className="font-bold text-gray-800 dark:text-gray-200">{m.concepto}</div>
                                       {m.referencia && <span className="text-[10px] text-gray-400">Ref: {m.referencia}</span>}
@@ -5696,7 +5983,7 @@ export default function BancoTab({
                                           className="w-4 h-4 text-amber-500 focus:ring-amber-500 rounded cursor-pointer accent-amber-500"
                                         />
                                       </td>
-                                      <td className="p-3 font-mono text-gray-500">{new Date(c.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })}</td>
+                                      <td className="p-3 font-mono text-gray-500">{formatDate(c.fecha)}</td>
                                       <td className="p-3 font-bold">
                                         <span className={`text-[9px] px-1.5 py-0.5 rounded ${isVentanilla ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'}`}>
                                           {isVentanilla ? 'Ventanilla' : 'Tarjeta'}
@@ -6104,7 +6391,7 @@ export default function BancoTab({
                             <td className="p-3 font-mono">
                               <div className="font-bold text-gray-900 dark:text-gray-100">
                                 {isChild && <span className="text-gray-400 mr-1">└</span>}
-                                {m.fecha ? new Date(m.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : '—'}
+                                {m.fecha ? formatDate(m.fecha) : '—'}
                               </div>
                               <div className="text-[10px] text-gray-400 font-sans font-semibold">
                                 {m.fecha ? m.fecha.substring(0, 7) : ''}
@@ -6208,7 +6495,7 @@ export default function BancoTab({
                           renderedAtemporalRows.push(
                             <tr key="atemporal-group-tpv-global" className="bg-gradient-to-r from-rose-500/15 via-rose-500/5 to-transparent border-l-4 border-rose-500 dark:border-rose-400 border-y border-rose-200/60 dark:border-rose-900/50 font-sans font-bold shadow-xs transition-all hover:bg-rose-100/40 dark:hover:bg-rose-955/50">
                               <td className="p-3 font-mono text-xs text-rose-700 dark:text-rose-300 font-black">
-                                {allTpvAtemporal[0].fecha ? new Date(allTpvAtemporal[0].fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : '—'}
+                                {allTpvAtemporal[0].fecha ? formatDate(allTpvAtemporal[0].fecha) : '—'}
                               </td>
                               <td className="p-3">
                                 <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-rose-100/80 dark:bg-rose-955/60 text-rose-700 dark:text-rose-300 border border-rose-300/60 dark:border-rose-800/80">
@@ -6268,7 +6555,7 @@ export default function BancoTab({
                           renderedAtemporalRows.push(
                             <tr key="atemporal-group-banco-global" className="bg-gradient-to-r from-indigo-500/15 via-indigo-500/5 to-transparent border-l-4 border-indigo-500 dark:border-indigo-400 border-y border-indigo-200/60 dark:border-indigo-900/50 font-sans font-bold shadow-xs transition-all hover:bg-indigo-100/40 dark:hover:bg-indigo-955/50">
                               <td className="p-3 font-mono text-xs text-indigo-700 dark:text-indigo-300 font-black">
-                                {allBancoAtemporal[0].fecha ? new Date(allBancoAtemporal[0].fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : '—'}
+                                {allBancoAtemporal[0].fecha ? formatDate(allBancoAtemporal[0].fecha) : '—'}
                               </td>
                               <td className="p-3">
                                 <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-indigo-100/80 dark:bg-indigo-955/60 text-indigo-700 dark:text-indigo-300 border border-indigo-300/60 dark:border-indigo-800/80">
@@ -6434,6 +6721,132 @@ export default function BancoTab({
         const selectedProvRaw = selectedGastosList[0]?.proveedores;
         const selectedProv = selectedProvRaw ? (Array.isArray(selectedProvRaw) ? selectedProvRaw[0] : selectedProvRaw) : null;
         const saldoFavorProveedor = Number(selectedProv?.saldo_favor || 0);
+
+        const getDocMonthKey = (dateVal: any): string => {
+          if (!dateVal) return '';
+          const s = String(dateVal).trim();
+          if (s.length >= 7 && s.includes('-')) {
+            const parts = s.split('T')[0].split('-');
+            if (parts.length >= 2) return `${parts[0]}-${parts[1].padStart(2, '0')}`;
+          }
+          return '';
+        };
+
+        const targetMonth = (() => {
+          if (customReconcileMonth) return customReconcileMonth;
+          if (reconcileModal.movimiento?.fecha) {
+            const m = getDocMonthKey(reconcileModal.movimiento.fecha);
+            if (m) return m;
+          }
+          return selectedMonth || new Date().toISOString().substring(0, 7);
+        })();
+
+        const targetYear = targetMonth ? targetMonth.split('-')[0] : String(new Date().getFullYear());
+
+        const targetMonthLabel = (() => {
+          try {
+            const d = new Date(targetMonth + '-02');
+            const name = d.toLocaleDateString('es-MX', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+            return name.charAt(0).toUpperCase() + name.slice(1);
+          } catch {
+            return targetMonth;
+          }
+        })();
+
+        const countMes = isOutflow
+          ? gastosReconciliables.filter((g) => {
+              const m = getDocMonthKey(g.fecha_gasto || (g as any).fecha_timbrado || (g as any).created_at);
+              return m === targetMonth;
+            }).length
+          : pedidosPendientes.filter((p) => {
+              const m = getDocMonthKey(p.fecha_pedido || p.fecha || (p as any).creado_en);
+              return m === targetMonth;
+            }).length;
+
+        const countAnio = isOutflow
+          ? gastosReconciliables.filter((g) => {
+              const m = getDocMonthKey(g.fecha_gasto || (g as any).fecha_timbrado || (g as any).created_at);
+              return m && m.startsWith(targetYear);
+            }).length
+          : pedidosPendientes.filter((p) => {
+              const m = getDocMonthKey(p.fecha_pedido || p.fecha || (p as any).creado_en);
+              return m && m.startsWith(targetYear);
+            }).length;
+
+        const countTodos = isOutflow ? gastosReconciliables.length : pedidosPendientes.length;
+
+        const filteredGastos = isOutflow
+          ? gastosReconciliables.filter((g) => {
+              // Excluir egresos en efectivo a menos que ya estén seleccionados
+              const metodo = String(g.metodo_pago || '').toLowerCase();
+              if ((metodo.includes('efectivo') || metodo.includes('01')) && !reconcileModal.gastosSeleccionados.includes(g.id)) {
+                return false;
+              }
+
+              // Filtro por periodo / año fiscal
+              const isSelected = reconcileModal.gastosSeleccionados.includes(g.id);
+              if (!isSelected) {
+                const itemMonth = getDocMonthKey(g.fecha_gasto || (g as any).fecha_timbrado || (g as any).created_at);
+                if (reconcilePeriodFilter === 'mes') {
+                  if (!itemMonth || itemMonth !== targetMonth) return false;
+                } else if (reconcilePeriodFilter === 'anio') {
+                  if (!itemMonth || !itemMonth.startsWith(targetYear)) return false;
+                }
+              }
+
+              if (!manualMatchSearch.trim()) return true;
+              const s = manualMatchSearch.toLowerCase();
+              const provArr = g.proveedores;
+              const proveedor = Array.isArray(provArr) ? provArr[0] : provArr;
+              return (
+                g.concepto?.toLowerCase().includes(s) || 
+                String(g.monto).includes(s) ||
+                proveedor?.nombre_comercial?.toLowerCase().includes(s) ||
+                proveedor?.rfc?.toLowerCase().includes(s)
+              );
+            })
+          : [];
+
+        const filteredPedidos = !isOutflow
+          ? pedidosPendientes.filter((p) => {
+              // Excluir ventas/facturas en efectivo a menos que ya estén seleccionados
+              const metodo = String(p.metodo_pago || p.forma_pago || '').toLowerCase();
+              if ((metodo.includes('efectivo') || metodo === '01') && !reconcileModal.pedidosSeleccionados.includes(p.id)) {
+                return false;
+              }
+
+              // Filtro por periodo / año fiscal
+              const isSelected = reconcileModal.pedidosSeleccionados.includes(p.id);
+              if (!isSelected) {
+                const itemMonth = getDocMonthKey(p.fecha_pedido || p.fecha || (p as any).creado_en);
+                if (reconcilePeriodFilter === 'mes') {
+                  if (!itemMonth || itemMonth !== targetMonth) return false;
+                } else if (reconcilePeriodFilter === 'anio') {
+                  if (!itemMonth || !itemMonth.startsWith(targetYear)) return false;
+                }
+              }
+
+              if (!manualMatchSearch.trim()) return true;
+              const s = manualMatchSearch.toLowerCase().trim();
+              const numPed = String(p.numero_pedido ?? '').toLowerCase();
+              const folio = String(p.folio_factura ?? '').toLowerCase();
+              const cliente = String(p.cliente_nombre ?? '').toLowerCase();
+              const precioVal = Number(p.precio_total || 0);
+              const precioStr = String(p.precio_total ?? '');
+              const precioFixed = precioVal.toFixed(2);
+              const precioInt = Math.round(precioVal).toString();
+
+              return (
+                numPed.includes(s) || 
+                folio.includes(s) ||
+                cliente.includes(s) ||
+                precioStr.includes(s) ||
+                precioFixed.includes(s) ||
+                precioInt.includes(s)
+              );
+            })
+          : [];
+
         return (
           <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4"
             onClick={(e) => { if (e.target === e.currentTarget) setReconcileModal((p) => ({ ...p, open: false })); }}>
@@ -6441,13 +6854,13 @@ export default function BancoTab({
               <div className="flex items-start justify-between">
                 <div>
                   <h3 className="text-lg font-extrabold text-gray-900 dark:text-white">
-                    {isBatch ? `Conciliación de Lote (${batchMovs.length} Pagos Seleccionados)` : `Conciliación de Movimiento - ${reconcileModal.movimiento.fecha ? new Date(reconcileModal.movimiento.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : 'Sin Fecha'}`}
+                    {isBatch ? `Conciliación de Lote (${batchMovs.length} Pagos Seleccionados)` : `Conciliación de Movimiento - ${reconcileModal.movimiento.fecha ? formatDate(reconcileModal.movimiento.fecha) : 'Sin Fecha'}`}
                   </h3>
                   <p className="text-xs text-gray-500 mt-0.5">
                     {isBatch ? (
                       <>Suma acumulada de pagos: <strong className="text-emerald-600 font-mono text-sm">{formatCurrency(movMonto)}</strong></>
                     ) : (
-                      <>Movimiento: <strong>{reconcileModal.movimiento.concepto}</strong> — {formatCurrency(reconcileModal.movimiento.monto)} {reconcileModal.movimiento.fecha && `— ${new Date(reconcileModal.movimiento.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })}`}</>
+                      <>Movimiento: <strong>{reconcileModal.movimiento.concepto}</strong> — {formatCurrency(reconcileModal.movimiento.monto)} {reconcileModal.movimiento.fecha && `— ${formatDate(reconcileModal.movimiento.fecha)}`}</>
                     )}
                   </p>
                 </div>
@@ -6465,7 +6878,7 @@ export default function BancoTab({
                   <div className="flex flex-wrap gap-2 pt-1">
                     {batchMovs.map((m: any, idx: number) => (
                       <span key={idx} className="px-2.5 py-1 bg-white dark:bg-gray-900 border border-amber-200 dark:border-amber-800 rounded-lg text-[10px] font-mono shadow-sm flex items-center gap-1">
-                        <span className="text-gray-500 font-sans">{m.fecha ? new Date(m.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : ''}</span>
+                        <span className="text-gray-500 font-sans">{m.fecha ? formatDate(m.fecha) : ''}</span>
                         <span className="font-semibold text-gray-800 dark:text-gray-200 font-sans">{m.concepto}</span>
                         <span className="font-bold text-red-500 dark:text-red-400">({formatCurrency(Math.abs(Number(m.monto) || Number(m.retiro) || Number(m.deposito) || 0))})</span>
                       </span>
@@ -6522,6 +6935,96 @@ export default function BancoTab({
                   className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs text-gray-900 dark:text-white focus:ring-1 focus:ring-amber-500 outline-none transition-all" />
               </div>
 
+              {/* Filtro de Periodo / Año Fiscal */}
+              <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 bg-gray-50/80 dark:bg-gray-900/40 border border-gray-200 dark:border-gray-800 rounded-xl text-xs font-sans">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-[11px] font-bold text-gray-500 dark:text-gray-400 mr-1 flex items-center gap-1">
+                    <Calendar size={13} className="text-amber-500" />
+                    Periodo:
+                  </span>
+                  
+                  {/* Botón: Solo del mes */}
+                  <button
+                    type="button"
+                    onClick={() => setReconcilePeriodFilter('mes')}
+                    className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition-all flex items-center gap-1 cursor-pointer ${
+                      reconcilePeriodFilter === 'mes'
+                        ? 'bg-amber-500 text-white shadow-sm ring-1 ring-amber-600/20'
+                        : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-750'
+                    }`}
+                  >
+                    <span>📅 Solo de {targetMonthLabel}</span>
+                    <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono font-bold ${
+                      reconcilePeriodFilter === 'mes' ? 'bg-amber-600 text-amber-100' : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300'
+                    }`}>
+                      {countMes}
+                    </span>
+                  </button>
+
+                  {/* Botón: Todo el año fiscal */}
+                  <button
+                    type="button"
+                    onClick={() => setReconcilePeriodFilter('anio')}
+                    className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition-all flex items-center gap-1 cursor-pointer ${
+                      reconcilePeriodFilter === 'anio'
+                        ? 'bg-blue-600 text-white shadow-sm ring-1 ring-blue-700/20'
+                        : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-750'
+                    }`}
+                  >
+                    <span>📆 Año Fiscal {targetYear}</span>
+                    <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono font-bold ${
+                      reconcilePeriodFilter === 'anio' ? 'bg-blue-700 text-blue-100' : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300'
+                    }`}>
+                      {countAnio}
+                    </span>
+                  </button>
+
+                  {/* Botón: Todo el historial */}
+                  <button
+                    type="button"
+                    onClick={() => setReconcilePeriodFilter('todos')}
+                    className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition-all flex items-center gap-1 cursor-pointer ${
+                      reconcilePeriodFilter === 'todos'
+                        ? 'bg-gray-800 dark:bg-gray-200 text-white dark:text-gray-900 shadow-sm'
+                        : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-750'
+                    }`}
+                  >
+                    <Globe size={11} />
+                    <span>Todo el Historial</span>
+                    <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono font-bold ${
+                      reconcilePeriodFilter === 'todos' ? 'bg-gray-700 dark:bg-gray-300 text-white dark:text-gray-900' : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300'
+                    }`}>
+                      {countTodos}
+                    </span>
+                  </button>
+                </div>
+
+                {/* Selector de mes base si el usuario quiere inspeccionar otro mes */}
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] text-gray-400 font-medium">Mes base:</span>
+                  <input
+                    type="month"
+                    value={customReconcileMonth || targetMonth}
+                    onChange={(e) => {
+                      setCustomReconcileMonth(e.target.value);
+                      setReconcilePeriodFilter('mes');
+                    }}
+                    className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 px-2 py-0.5 rounded text-[11px] font-mono text-gray-800 dark:text-gray-200 focus:ring-1 focus:ring-amber-500 outline-none cursor-pointer"
+                    title="Cambiar el mes de referencia para el filtro"
+                  />
+                  {customReconcileMonth && (
+                    <button
+                      type="button"
+                      onClick={() => setCustomReconcileMonth('')}
+                      className="text-[10px] text-gray-400 hover:text-red-500 px-1 font-bold"
+                      title="Restablecer al mes original del movimiento"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+              </div>
+
               {/* Lista de egresos o facturas/pedidos de ingresos reconciliables */}
               <div>
                 <div className="flex items-center justify-between mb-2">
@@ -6551,241 +7054,229 @@ export default function BancoTab({
                 })()}
                 <div className="space-y-1 max-h-80 overflow-y-auto border border-gray-200 dark:border-gray-800 rounded-xl">
                   {isOutflow ? (
-                    gastosReconciliables
-                      .filter((g) => {
-                        // Excluir egresos en efectivo a menos que ya estén seleccionados
-                        const metodo = String(g.metodo_pago || '').toLowerCase();
-                        if ((metodo.includes('efectivo') || metodo.includes('01')) && !reconcileModal.gastosSeleccionados.includes(g.id)) {
-                          return false;
-                        }
-
-                        if (!manualMatchSearch.trim()) return true;
-                        const s = manualMatchSearch.toLowerCase();
-                        const provArr = g.proveedores;
-                        const proveedor = Array.isArray(provArr) ? provArr[0] : provArr;
-                        return (
-                          g.concepto?.toLowerCase().includes(s) || 
-                          String(g.monto).includes(s) ||
-                          proveedor?.nombre_comercial?.toLowerCase().includes(s) ||
-                          proveedor?.rfc?.toLowerCase().includes(s)
-                        );
-                      })
-                      .map((g) => {
-                        const provArr = g.proveedores;
-                        const proveedor = Array.isArray(provArr) ? provArr[0] : provArr;
-                        return (
-                          <div key={g.id} className="flex items-center justify-between gap-3 p-2.5 hover:bg-gray-50 dark:hover:bg-gray-900/30 border-b border-gray-100 dark:border-gray-900 last:border-0 font-sans">
-                            <label className="flex items-center gap-3 flex-1 min-w-0 cursor-pointer">
-                              <input type="checkbox" checked={reconcileModal.gastosSeleccionados.includes(g.id)}
-                                onChange={() => {
-                                  setReconcileModal((p) => {
-                                    const sel = [...p.gastosSeleccionados];
-                                    const idx = sel.indexOf(g.id);
-                                    idx > -1 ? sel.splice(idx, 1) : sel.push(g.id);
-                                    
-                                    const nextStatus = autoEstatus(sel, p.pedidosSeleccionados);
-                                    
-                                    return { 
-                                      ...p, 
-                                      gastosSeleccionados: sel,
-                                      estatusClave: nextStatus
-                                    };
-                                  });
-                                }}
-                                className="w-4 h-4 rounded text-amber-500 focus:ring-amber-500 bg-white dark:bg-gray-950 border-gray-300 dark:border-gray-700" />
-                              <div className="flex-1 min-w-0">
-                                <div className="text-xs font-semibold text-gray-800 dark:text-gray-200 truncate">{g.concepto}</div>
-                                <div className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5 flex flex-wrap gap-x-2 gap-y-0.5 items-center font-medium">
-                                  <span className="font-bold text-gray-700 dark:text-gray-300">{formatCurrency(g.monto)}</span>
-                                  <span>•</span>
-                                  <span>{g.fecha_gasto ? new Date(g.fecha_gasto).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : 'Sin fecha'}</span>
-                                  {proveedor?.nombre_comercial && (
-                                    <>
-                                      <span>•</span>
-                                      <span className="text-blue-600 dark:text-blue-400 font-semibold">{proveedor.nombre_comercial}</span>
-                                    </>
-                                  )}
-                                  {g.metodo_pago && (
-                                    <>
-                                      <span>•</span>
-                                      <span className="bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-400 px-1.5 py-0.5 rounded text-[9px] font-bold">
-                                        {getMetodoPagoLabel(g.metodo_pago)}
-                                      </span>
-                                    </>
-                                  )}
-                                </div>
-                              </div>
-                            </label>
-                            
-                            <button
-                              type="button"
-                              onClick={() => {
-                                if (handleSaveReconciliation) {
-                                  const nextStatus = autoEstatus([g.id], []);
-                                  handleSaveReconciliation([g.id], nextStatus, []);
-                                }
+                    filteredGastos.map((g) => {
+                      const provArr = g.proveedores;
+                      const proveedor = Array.isArray(provArr) ? provArr[0] : provArr;
+                      return (
+                        <div key={g.id} className="flex items-center justify-between gap-3 p-2.5 hover:bg-gray-50 dark:hover:bg-gray-900/30 border-b border-gray-100 dark:border-gray-900 last:border-0 font-sans">
+                          <label className="flex items-center gap-3 flex-1 min-w-0 cursor-pointer">
+                            <input type="checkbox" checked={reconcileModal.gastosSeleccionados.includes(g.id)}
+                              onChange={() => {
+                                setReconcileModal((p) => {
+                                  const sel = [...p.gastosSeleccionados];
+                                  const idx = sel.indexOf(g.id);
+                                  idx > -1 ? sel.splice(idx, 1) : sel.push(g.id);
+                                  
+                                  const nextStatus = autoEstatus(sel, p.pedidosSeleccionados);
+                                  
+                                  return { 
+                                    ...p, 
+                                    gastosSeleccionados: sel,
+                                    estatusClave: nextStatus
+                                  };
+                                });
                               }}
-                              className="px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-[10px] font-bold shadow transition-all shrink-0"
-                            >
-                              Conciliar
-                            </button>
-                          </div>
-                        );
-                      })
-                  ) : (
-                    pedidosPendientes
-                      .filter((p) => {
-                        // Excluir ventas/facturas en efectivo a menos que ya estén seleccionadas
-                        const metodo = String(p.metodo_pago || p.forma_pago || '').toLowerCase();
-                        if ((metodo.includes('efectivo') || metodo === '01') && !reconcileModal.pedidosSeleccionados.includes(p.id)) {
-                          return false;
-                        }
-
-                        if (!manualMatchSearch.trim()) return true;
-                        const s = manualMatchSearch.toLowerCase().trim();
-                        const numPed = String(p.numero_pedido ?? '').toLowerCase();
-                        const folio = String(p.folio_factura ?? '').toLowerCase();
-                        const cliente = String(p.cliente_nombre ?? '').toLowerCase();
-                        const precioVal = Number(p.precio_total || 0);
-                        const precioStr = String(p.precio_total ?? '');
-                        const precioFixed = precioVal.toFixed(2);
-                        const precioInt = Math.round(precioVal).toString();
-
-                        return (
-                          numPed.includes(s) || 
-                          folio.includes(s) ||
-                          cliente.includes(s) ||
-                          precioStr.includes(s) ||
-                          precioFixed.includes(s) ||
-                          precioInt.includes(s)
-                        );
-                      })
-                      .map((p) => {
-                        const clienteNombre = p.clientes?.nombre_local || p.clientes?.razon_social || p.cliente_nombre || p.nombreReceptor || '';
-                        const clienteRfc = p.clientes?.rfc || p.rfcReceptor || p.rfc || p.cliente_rfc || '';
-                        const isSuelta = Boolean(p._esFacturaSuelta || p.id?.startsWith('suelta_'));
-                        const hasPedido = Boolean(p.numero_pedido);
-                        const fcObj = Array.isArray(p.facturas_clientes) ? p.facturas_clientes[0] : p.facturas_clientes;
-                        const hasFactura = Boolean(p.has_factura || p.folio_factura || fcObj || isSuelta);
-                        const folioText = p.folio_factura || fcObj?.serie_folio || (p.uuid_fiscal ? `UUID:${p.uuid_fiscal.substring(0, 8)}` : '');
-
-                        // Estados de la Tríada:
-                        const isTriada = hasPedido && hasFactura;
-                        const isPedidoSolo = hasPedido && !hasFactura;
-                        const isFacturaSola = !hasPedido && isSuelta;
-
-                        const titleText = isFacturaSola 
-                          ? `Factura: ${folioText || 'CFDI Emitido'}` 
-                          : `Pedido #${p.numero_pedido}`;
-
-                        return (
-                          <div key={p.id} className="flex items-center justify-between gap-3 p-3 hover:bg-gray-50 dark:hover:bg-gray-900/30 border-b border-gray-100 dark:border-gray-900 last:border-0 font-sans">
-                            <label className="flex items-start gap-3 flex-1 min-w-0 cursor-pointer">
-                              <input type="checkbox" checked={reconcileModal.pedidosSeleccionados.includes(p.id)}
-                                onChange={() => {
-                                  setReconcileModal((prev) => {
-                                    const sel = [...prev.pedidosSeleccionados];
-                                    const idx = sel.indexOf(p.id);
-                                    idx > -1 ? sel.splice(idx, 1) : sel.push(p.id);
-                                    
-                                    const nextStatus = autoEstatus(prev.gastosSeleccionados, sel);
-
-                                    const xmlList: string[] = prev.xmlUrl ? prev.xmlUrl.split(',') : [];
-                                    const pdfList: string[] = prev.pdfFacturaUrl ? prev.pdfFacturaUrl.split(',') : [];
-
-                                    pedidosPendientes.filter(item => sel.includes(item.id)).forEach(item => {
-                                      if (item.xml_url) xmlList.push(...item.xml_url.split(','));
-                                      if (item.pdf_url) pdfList.push(...item.pdf_url.split(','));
-                                      if (item.facturas_clientes) {
-                                        (Array.isArray(item.facturas_clientes) ? item.facturas_clientes : [item.facturas_clientes]).forEach((inv: any) => {
-                                          if (inv?.xml_url) xmlList.push(...inv.xml_url.split(','));
-                                          if (inv?.pdf_url) pdfList.push(...inv.pdf_url.split(','));
-                                        });
-                                      }
-                                    });
-
-                                    const newXmlUrl = Array.from(new Set(xmlList.map(s => s.trim()).filter(Boolean))).join(',');
-                                    const newPdfUrl = Array.from(new Set(pdfList.map(s => s.trim()).filter(Boolean))).join(',');
-                                    
-                                    return { 
-                                      ...prev, 
-                                      pedidosSeleccionados: sel,
-                                      estatusClave: nextStatus,
-                                      xmlUrl: newXmlUrl,
-                                      pdfFacturaUrl: newPdfUrl
-                                    };
-                                  });
-                                }}
-                                className="w-4 h-4 rounded text-amber-500 focus:ring-amber-500 bg-white dark:bg-gray-950 border-gray-300 dark:border-gray-700 mt-1 shrink-0" />
-                              <div className="flex-1 min-w-0 space-y-1">
-                                <div className="flex items-center gap-2 flex-wrap">
-                                  <span className="text-xs font-bold text-gray-900 dark:text-white">{titleText}</span>
-                                  {isTriada && (
-                                    <span className="bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 px-2 py-0.5 rounded text-[10px] font-bold border border-emerald-200 dark:border-emerald-800 flex items-center gap-1 shadow-xs">
-                                      <span>✨ Tríada Lista: Factura {folioText || 'Vinculada'}</span>
-                                    </span>
-                                  )}
-                                  {isPedidoSolo && (
-                                    <span className="bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400 px-1.5 py-0.5 rounded text-[9px] font-bold border border-amber-200 dark:border-amber-800">
-                                      Pend. Facturar
-                                    </span>
-                                  )}
-                                  {isFacturaSola && (
-                                    <span className="bg-purple-50 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 px-1.5 py-0.5 rounded text-[9px] font-bold border border-purple-200 dark:border-purple-800">
-                                      🧾 CFDI sin Pedido Asignado
-                                    </span>
-                                  )}
-                                </div>
-
-                                {clienteNombre && (
-                                  <div className="text-[11px] font-medium text-gray-700 dark:text-gray-300 flex items-center gap-1.5 truncate">
-                                    <span className="font-bold text-blue-600 dark:text-blue-400 truncate">{clienteNombre}</span>
-                                    {clienteRfc && <span className="font-mono text-[10px] text-gray-400 font-normal shrink-0">({clienteRfc})</span>}
-                                  </div>
+                              className="w-4 h-4 rounded text-amber-500 focus:ring-amber-500 bg-white dark:bg-gray-950 border-gray-300 dark:border-gray-700" />
+                            <div className="flex-1 min-w-0">
+                              <div className="text-xs font-semibold text-gray-800 dark:text-gray-200 truncate">{g.concepto}</div>
+                              <div className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5 flex flex-wrap gap-x-2 gap-y-0.5 items-center font-medium">
+                                <span className="font-bold text-gray-700 dark:text-gray-300">{formatCurrency(g.monto)}</span>
+                                <span>•</span>
+                                <span>{formatDate(g.fecha_gasto)}</span>
+                                {proveedor?.nombre_comercial && (
+                                  <>
+                                    <span>•</span>
+                                    <span className="text-blue-600 dark:text-blue-400 font-semibold">{proveedor.nombre_comercial}</span>
+                                  </>
                                 )}
-
-                                <div className="text-[10px] text-gray-500 dark:text-gray-400 flex flex-wrap gap-x-2 gap-y-0.5 items-center font-medium">
-                                  <span className="font-extrabold text-xs font-mono text-emerald-600 dark:text-emerald-400">{formatCurrency(p.precio_total)}</span>
-                                  <span>•</span>
-                                  <span>{p.fecha_pedido ? new Date(p.fecha_pedido).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : 'Sin fecha'}</span>
-                                  {p.metodo_pago && (
-                                    <>
-                                      <span>•</span>
-                                      <span className="bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-400 px-1.5 py-0.5 rounded text-[9px] font-bold">
-                                        {getMetodoPagoLabel(p.metodo_pago)}
-                                      </span>
-                                    </>
-                                  )}
-                                  {isTriada && (
-                                    <span className="text-[9px] text-emerald-600 dark:text-emerald-400 font-medium">
-                                      (Pedido + Factura + Depósito se asignarán juntos)
+                                {g.metodo_pago && (
+                                  <>
+                                    <span>•</span>
+                                    <span className="bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-400 px-1.5 py-0.5 rounded text-[9px] font-bold">
+                                      {getMetodoPagoLabel(g.metodo_pago)}
                                     </span>
-                                  )}
-                                </div>
+                                  </>
+                                )}
                               </div>
-                            </label>
-                            
-                            <button
-                              type="button"
-                              onClick={() => {
-                                if (handleSaveReconciliation) {
-                                  const nextStatus = autoEstatus([], [p.id]);
-                                  handleSaveReconciliation([], nextStatus, [p.id]);
-                                }
+                            </div>
+                          </label>
+                          
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (handleSaveReconciliation) {
+                                const nextStatus = autoEstatus([g.id], []);
+                                handleSaveReconciliation([g.id], nextStatus, []);
+                              }
+                            }}
+                            className="px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-[10px] font-bold shadow transition-all shrink-0 cursor-pointer"
+                          >
+                            Conciliar
+                          </button>
+                        </div>
+                      );
+                    })
+                  ) : (
+                    filteredPedidos.map((p) => {
+                      const clienteNombre = p.clientes?.nombre_local || p.clientes?.razon_social || p.cliente_nombre || p.nombreReceptor || '';
+                      const clienteRfc = p.clientes?.rfc || p.rfcReceptor || p.rfc || p.cliente_rfc || '';
+                      const isSuelta = Boolean(p._esFacturaSuelta || p.id?.startsWith('suelta_'));
+                      const hasPedido = Boolean(p.numero_pedido);
+                      const fcObj = Array.isArray(p.facturas_clientes) ? p.facturas_clientes[0] : p.facturas_clientes;
+                      const hasFactura = Boolean(p.has_factura || p.folio_factura || fcObj || isSuelta);
+                      const folioText = p.folio_factura || fcObj?.serie_folio || (p.uuid_fiscal ? `UUID:${p.uuid_fiscal.substring(0, 8)}` : '');
+
+                      // Estados de la Tríada:
+                      const isTriada = hasPedido && hasFactura;
+                      const isPedidoSolo = hasPedido && !hasFactura;
+                      const isFacturaSola = !hasPedido && isSuelta;
+
+                      const titleText = isFacturaSola 
+                        ? `Factura: ${folioText || 'CFDI Emitido'}` 
+                        : `Pedido #${p.numero_pedido}`;
+
+                      return (
+                        <div key={p.id} className="flex items-center justify-between gap-3 p-3 hover:bg-gray-50 dark:hover:bg-gray-900/30 border-b border-gray-100 dark:border-gray-900 last:border-0 font-sans">
+                          <label className="flex items-start gap-3 flex-1 min-w-0 cursor-pointer">
+                            <input type="checkbox" checked={reconcileModal.pedidosSeleccionados.includes(p.id)}
+                              onChange={() => {
+                                setReconcileModal((prev) => {
+                                  const sel = [...prev.pedidosSeleccionados];
+                                  const idx = sel.indexOf(p.id);
+                                  idx > -1 ? sel.splice(idx, 1) : sel.push(p.id);
+                                  
+                                  const nextStatus = autoEstatus(prev.gastosSeleccionados, sel);
+
+                                  const xmlList: string[] = prev.xmlUrl ? prev.xmlUrl.split(',') : [];
+                                  const pdfList: string[] = prev.pdfFacturaUrl ? prev.pdfFacturaUrl.split(',') : [];
+
+                                  pedidosPendientes.filter(item => sel.includes(item.id)).forEach(item => {
+                                    if (item.xml_url) xmlList.push(...item.xml_url.split(','));
+                                    if (item.pdf_url) pdfList.push(...item.pdf_url.split(','));
+                                    if (item.facturas_clientes) {
+                                      (Array.isArray(item.facturas_clientes) ? item.facturas_clientes : [item.facturas_clientes]).forEach((inv: any) => {
+                                        if (inv?.xml_url) xmlList.push(...inv.xml_url.split(','));
+                                        if (inv?.pdf_url) pdfList.push(...inv.pdf_url.split(','));
+                                      });
+                                    }
+                                  });
+
+                                  const newXmlUrl = Array.from(new Set(xmlList.map(s => s.trim()).filter(Boolean))).join(',');
+                                  const newPdfUrl = Array.from(new Set(pdfList.map(s => s.trim()).filter(Boolean))).join(',');
+                                  
+                                  return { 
+                                    ...prev, 
+                                    pedidosSeleccionados: sel,
+                                    estatusClave: nextStatus,
+                                    xmlUrl: newXmlUrl,
+                                    pdfFacturaUrl: newPdfUrl
+                                  };
+                                });
                               }}
-                              className="px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-[10px] font-bold shadow transition-all shrink-0 cursor-pointer"
-                            >
-                              Conciliar
-                            </button>
-                          </div>
-                        );
-                      })
+                              className="w-4 h-4 rounded text-amber-500 focus:ring-amber-500 bg-white dark:bg-gray-950 border-gray-300 dark:border-gray-700 mt-1 shrink-0" />
+                            <div className="flex-1 min-w-0 space-y-1">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-xs font-bold text-gray-900 dark:text-white">{titleText}</span>
+                                {isTriada && (
+                                  <span className="bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 px-2 py-0.5 rounded text-[10px] font-bold border border-emerald-200 dark:border-emerald-800 flex items-center gap-1 shadow-xs">
+                                    <span>✨ Tríada Lista: Factura {folioText || 'Vinculada'}</span>
+                                  </span>
+                                )}
+                                {isPedidoSolo && (
+                                  <span className="bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400 px-1.5 py-0.5 rounded text-[9px] font-bold border border-amber-200 dark:border-amber-800">
+                                    Pend. Facturar
+                                  </span>
+                                )}
+                                {isFacturaSola && (
+                                  <span className="bg-purple-50 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 px-1.5 py-0.5 rounded text-[9px] font-bold border border-purple-200 dark:border-purple-800">
+                                    🧾 CFDI sin Pedido Asignado
+                                  </span>
+                                )}
+                              </div>
+
+                              {clienteNombre && (
+                                <div className="text-[11px] font-medium text-gray-700 dark:text-gray-300 flex items-center gap-1.5 truncate">
+                                  <span className="font-bold text-blue-600 dark:text-blue-400 truncate">{clienteNombre}</span>
+                                  {clienteRfc && <span className="font-mono text-[10px] text-gray-400 font-normal shrink-0">({clienteRfc})</span>}
+                                </div>
+                              )}
+
+                              <div className="text-[10px] text-gray-500 dark:text-gray-400 flex flex-wrap gap-x-2 gap-y-0.5 items-center font-medium">
+                                <span className="font-extrabold text-xs font-mono text-emerald-600 dark:text-emerald-400">{formatCurrency(p.precio_total)}</span>
+                                <span>•</span>
+                                <span>{formatDate(p.fecha_pedido)}</span>
+                                {p.metodo_pago && (
+                                  <>
+                                    <span>•</span>
+                                    <span className="bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-400 px-1.5 py-0.5 rounded text-[9px] font-bold">
+                                      {getMetodoPagoLabel(p.metodo_pago)}
+                                    </span>
+                                  </>
+                                )}
+                                {isTriada && (
+                                  <span className="text-[9px] text-emerald-600 dark:text-emerald-400 font-medium">
+                                    (Pedido + Factura + Depósito se asignarán juntos)
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </label>
+                          
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (handleSaveReconciliation) {
+                                const nextStatus = autoEstatus([], [p.id]);
+                                handleSaveReconciliation([], nextStatus, [p.id]);
+                              }
+                            }}
+                            className="px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-[10px] font-bold shadow transition-all shrink-0 cursor-pointer"
+                          >
+                            Conciliar
+                          </button>
+                        </div>
+                      );
+                    })
                   )}
-                  {isOutflow && gastosReconciliables.length === 0 && (
-                    <div className="p-4 text-center text-xs text-gray-400 italic">No hay egresos sin conciliar</div>
+
+                  {isOutflow && filteredGastos.length === 0 && (
+                    <div className="p-6 text-center text-xs text-gray-400 space-y-2 font-sans">
+                      <p className="font-medium">
+                        {manualMatchSearch.trim()
+                          ? `No se encontraron egresos que coincidan con "${manualMatchSearch}".`
+                          : `No hay egresos sin conciliar en ${reconcilePeriodFilter === 'mes' ? `el mes de ${targetMonthLabel}` : reconcilePeriodFilter === 'anio' ? `el año fiscal ${targetYear}` : 'el historial'}.`}
+                      </p>
+                      {reconcilePeriodFilter === 'mes' && countAnio > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setReconcilePeriodFilter('anio')}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 border border-blue-200 dark:border-blue-800 rounded-lg text-xs font-bold hover:bg-blue-100 dark:hover:bg-blue-900/60 transition-colors cursor-pointer"
+                        >
+                          <Calendar size={13} />
+                          <span>Ver {countAnio} egresos de otros meses del año fiscal {targetYear}</span>
+                        </button>
+                      )}
+                    </div>
                   )}
-                  {!isOutflow && pedidosPendientes.length === 0 && (
-                    <div className="p-4 text-center text-xs text-gray-400 italic">No hay facturas de ingresos ni pedidos sin conciliar</div>
+
+                  {!isOutflow && filteredPedidos.length === 0 && (
+                    <div className="p-6 text-center text-xs text-gray-400 space-y-2 font-sans">
+                      <p className="font-medium">
+                        {manualMatchSearch.trim()
+                          ? `No se encontraron ingresos ni pedidos que coincidan con "${manualMatchSearch}".`
+                          : `No hay ingresos ni pedidos sin conciliar en ${reconcilePeriodFilter === 'mes' ? `el mes de ${targetMonthLabel}` : reconcilePeriodFilter === 'anio' ? `el año fiscal ${targetYear}` : 'el historial'}.`}
+                      </p>
+                      {reconcilePeriodFilter === 'mes' && countAnio > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setReconcilePeriodFilter('anio')}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 border border-blue-200 dark:border-blue-800 rounded-lg text-xs font-bold hover:bg-blue-100 dark:hover:bg-blue-900/60 transition-colors cursor-pointer"
+                        >
+                          <Calendar size={13} />
+                          <span>Ver {countAnio} ingresos de otros meses del año fiscal {targetYear}</span>
+                        </button>
+                      )}
+                    </div>
                   )}
                 </div>
               </div>
@@ -7107,7 +7598,7 @@ export default function BancoTab({
                     <CreditCard size={16} className="text-amber-500" /> Vincular Comprobantes al Depósito Bancario
                   </h3>
                   <p className="text-xs text-gray-500 mt-0.5 font-sans">
-                    Asocia tickets de depósito en ventanilla y cortes de tarjeta con este movimiento de {formatCurrency(movMonto)} ({new Date(activeDepositMov.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })}).
+                    Asocia tickets de depósito en ventanilla y cortes de tarjeta con este movimiento de {formatCurrency(movMonto)} ({formatDate(activeDepositMov.fecha)}).
                   </p>
                 </div>
                 <button
@@ -7158,7 +7649,7 @@ export default function BancoTab({
                                 {isVentanilla ? 'Ventanilla' : 'Tarjeta'}
                               </span>
                               <span className="font-mono text-gray-550 text-[10px]">
-                                {new Date(c.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })}
+                                {formatDate(c.fecha)}
                               </span>
                             </div>
                             <p className="font-bold text-gray-800 dark:text-gray-255 truncate">{c.descripcion || 'Sin descripción'}</p>
@@ -7601,7 +8092,7 @@ export default function BancoTab({
                               <div className="min-w-0 flex-1">
                                 <div className="flex items-center gap-1">
                                   <span className="font-mono text-[9px] text-gray-550 dark:text-gray-400">
-                                    {new Date(c.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })}
+                                    {formatDate(c.fecha)}
                                   </span>
                                   <span className={`text-[8px] px-1 py-0.1 rounded font-bold ${
                                     isVentanilla
@@ -7732,7 +8223,7 @@ export default function BancoTab({
                     <ArrowRightLeft size={16} className="text-amber-500" /> Vincular Movimientos al Comprobante
                   </h3>
                   <p className="text-xs text-gray-500 mt-0.5 font-sans">
-                    Asocia depósitos bancarios de tu estado de cuenta con el comprobante de {formatCurrency(compMonto)} ({new Date(currentCompToLink.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })}).
+                    Asocia depósitos bancarios de tu estado de cuenta con el comprobante de {formatCurrency(compMonto)} ({formatDate(currentCompToLink.fecha)}).
                   </p>
                 </div>
                 <button
@@ -7767,7 +8258,7 @@ export default function BancoTab({
                         >
                           <div className="space-y-1 flex-1 min-w-0">
                             <span className="font-mono text-gray-500 text-[10px]">
-                              {new Date(m.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })}
+                              {formatDate(m.fecha)}
                             </span>
                             <p className="font-bold text-gray-800 dark:text-gray-255 truncate">{m.concepto}</p>
                             {m.referencia && <span className="text-[10px] text-gray-400">Ref: {m.referencia}</span>}
@@ -7965,7 +8456,7 @@ export default function BancoTab({
                             />
                             <div className="min-w-0 flex-1">
                               <span className="font-mono text-[9px] text-gray-500 block">
-                                {new Date(m.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })}
+                                {formatDate(m.fecha)}
                               </span>
                               <p className="font-bold text-xs text-gray-750 dark:text-gray-255 truncate">{m.concepto}</p>
                               {m.referencia && <p className="text-[9px] text-gray-400">Ref: {m.referencia}</p>}
@@ -8125,7 +8616,7 @@ export default function BancoTab({
                     <div>
                       <span className="text-[9px] font-bold text-red-655 dark:text-red-400 uppercase">Egreso (Retiro)</span>
                       <p className="font-bold text-xs text-gray-800 dark:text-gray-200 mt-1 truncate">{fusionModal.mov1.concepto}</p>
-                      <span className="text-[9px] text-gray-400 block mt-0.5">Fecha: {new Date(fusionModal.mov1.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })}</span>
+                      <span className="text-[9px] text-gray-400 block mt-0.5">Fecha: {formatDate(fusionModal.mov1.fecha)}</span>
                     </div>
                     <span className="text-sm font-extrabold text-red-505 mt-3 block">-{formatCurrency(fusionModal.mov1.retiro || Math.abs(fusionModal.mov1.monto))}</span>
                   </div>
@@ -8135,7 +8626,7 @@ export default function BancoTab({
                     <div>
                       <span className="text-[9px] font-bold text-emerald-655 dark:text-emerald-400 uppercase">Ingreso (Depósito)</span>
                       <p className="font-bold text-xs text-gray-800 dark:text-gray-200 mt-1 truncate">{fusionModal.mov2.concepto}</p>
-                      <span className="text-[9px] text-gray-400 block mt-0.5">Fecha: {new Date(fusionModal.mov2.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })}</span>
+                      <span className="text-[9px] text-gray-400 block mt-0.5">Fecha: {formatDate(fusionModal.mov2.fecha)}</span>
                     </div>
                     <span className="text-sm font-extrabold text-emerald-505 mt-3 block">+{formatCurrency(fusionModal.mov2.deposito || Math.abs(fusionModal.mov2.monto))}</span>
                   </div>
@@ -8565,7 +9056,7 @@ export default function BancoTab({
                           />
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-1.5 mb-1">
-                              <span className="text-[9px] font-mono text-gray-500">{new Date(c.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })}</span>
+                              <span className="text-[9px] font-mono text-gray-500">{formatDate(c.fecha)}</span>
                               <span className="text-[8px] bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 px-1.5 py-0.5 rounded uppercase font-bold">{c.tipo.replace('_', ' ')}</span>
                             </div>
                             <p className="text-xs font-bold text-gray-800 dark:text-gray-200 truncate">{c.descripcion || 'Sin descripción'}</p>
@@ -8614,7 +9105,7 @@ export default function BancoTab({
                           />
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-1.5 mb-1">
-                              <span className="text-[9px] font-mono text-gray-500">{new Date(m.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' })}</span>
+                              <span className="text-[9px] font-mono text-gray-500">{formatDate(m.fecha)}</span>
                               {m.referencia && <span className="text-[8px] bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 px-1.5 py-0.5 rounded font-bold truncate max-w-[100px]">Ref: {m.referencia}</span>}
                             </div>
                             <p className="text-xs font-bold text-gray-800 dark:text-gray-200 line-clamp-2">{m.concepto}</p>

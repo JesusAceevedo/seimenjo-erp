@@ -5,6 +5,7 @@ import {
   Building2,
   CreditCard,
 } from 'lucide-react';
+import { formatDate } from '@/lib/formatters';
 
 interface ConciliacionBbvaSubTabProps {
   comparativoBbvaBanco: any;
@@ -158,7 +159,7 @@ export const ConciliacionBbvaSubTab: React.FC<ConciliacionBbvaSubTabProps> = ({
                 return (
                   <tr key={c.id} className={`hover:bg-gray-50/80 dark:hover:bg-gray-800/40 transition-colors ${c._isEntranteProximoMes ? 'bg-purple-50/40 dark:bg-purple-950/20' : ''}`}>
                     <td className="p-3 font-mono font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">
-                      {c.fecha ? new Date(c.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : ''}
+                      {formatDate(c.fecha)}
                     </td>
                     <td className="p-3 font-bold text-gray-800 dark:text-gray-200 max-w-sm truncate" title={c.descripcion}>
                       {c.descripcion || 'Corte Terminal BBVA'}
@@ -233,7 +234,7 @@ export const ConciliacionBbvaSubTab: React.FC<ConciliacionBbvaSubTabProps> = ({
               return (
                 <tr key={m.id} className="hover:bg-gray-50/80 dark:hover:bg-gray-800/40 transition-colors">
                   <td className="p-3 font-mono font-medium text-gray-700 dark:text-gray-300">
-                    {m.fecha ? new Date(m.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : ''}
+                    {formatDate(m.fecha)}
                   </td>
                   <td className="p-3 font-bold text-gray-800 dark:text-gray-200 max-w-sm truncate" title={m.concepto}>
                     {m.concepto || 'Depósito BBVA'}

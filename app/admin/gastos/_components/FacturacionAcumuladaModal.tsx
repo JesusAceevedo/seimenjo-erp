@@ -3,7 +3,7 @@
 
 import React, { useState, useMemo } from 'react';
 import { X, FileText, Search, Check, AlertTriangle, Link as LinkIcon, UploadCloud, RefreshCw, Layers } from 'lucide-react';
-import { formatCurrency } from '../../../../lib/formatters';
+import { formatCurrency, formatDate } from '../../../../lib/formatters';
 import { useSessionToken } from '../../../../lib/hooks/useSessionToken';
 import { useEmpresaId } from '../../../../lib/hooks/useEmpresaId';
 import { vincularFacturaAPedido } from '../actions';
@@ -349,7 +349,7 @@ export default function FacturacionAcumuladaModal({
                           {formatCurrency(monto)}
                         </div>
                         <div className="text-[10px] text-gray-400 font-mono">
-                          {p.fecha_pedido ? new Date(p.fecha_pedido).toLocaleDateString('es-MX') : '—'}
+                          {p.fecha_pedido ? formatDate(p.fecha_pedido) : '—'}
                         </div>
                       </div>
                     </div>

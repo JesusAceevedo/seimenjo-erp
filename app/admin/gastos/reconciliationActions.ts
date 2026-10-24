@@ -3501,6 +3501,69 @@ export async function crearComprobanteDeposito(
       mes_venta: mesVentaVal
     };
 
+    // Prevenir duplicados de corte_parrot para la misma fecha
+    if (insertPayload.tipo === 'corte_parrot') {
+      const { data: existingParrot } = await supabaseAdmin
+        .from('comprobantes_deposito')
+        .select('id, archivo_url, desglose_tickets')
+        .eq('empresa_id', empresaId)
+        .eq('fecha', insertPayload.fecha)
+        .or('tipo.eq.corte_parrot,descripcion.ilike.%Corte Parrot%')
+        .limit(1);
+
+      if (existingParrot && existingParrot.length > 0) {
+        const existingComp = existingParrot[0];
+        const updatePayload = { ...insertPayload };
+        // Conservar archivo_url si ya lo tenía y el nuevo viene vacío
+        if (existingComp.archivo_url && !updatePayload.archivo_url) {
+          updatePayload.archivo_url = existingComp.archivo_url;
+        }
+        // Conservar desglose si el nuevo viene vacío
+        if ((!updatePayload.desglose_tickets || updatePayload.desglose_tickets.length === 0) && existingComp.desglose_tickets) {
+          updatePayload.desglose_tickets = existingComp.desglose_tickets;
+        }
+
+        let { data: updatedData, error: updErr } = await supabaseAdmin
+          .from('comprobantes_deposito')
+          .update(updatePayload)
+          .eq('id', existingComp.id)
+          .eq('empresa_id', empresaId)
+          .select()
+          .single();
+
+        if (updErr && (updErr.message?.includes('es_venta_mes_anterior') || updErr.message?.includes('mes_venta') || updErr.code === '42703')) {
+          delete updatePayload.es_venta_mes_anterior;
+          delete updatePayload.mes_venta;
+          const retryRes = await supabaseAdmin
+            .from('comprobantes_deposito')
+            .update(updatePayload)
+            .eq('id', existingComp.id)
+            .eq('empresa_id', empresaId)
+            .select()
+            .single();
+          updatedData = retryRes.data;
+          updErr = retryRes.error;
+        }
+
+        if (updErr) throw updErr;
+
+        if (payload.movimiento_bancario_id) {
+          await supabaseAdmin
+            .from('comprobantes_deposito_movimientos')
+            .upsert({
+              comprobante_id: updatedData.id,
+              movimiento_id: payload.movimiento_bancario_id,
+              monto_asociado: payload.monto,
+              empresa_id: empresaId
+            }, { onConflict: 'comprobante_id,movimiento_id' });
+          await autoActualizarEstatusMovimiento(payload.movimiento_bancario_id, empresaId);
+        }
+
+        await syncCajaChicaForComprobante(updatedData, empresaId);
+        return { success: true, comprobante: updatedData, wasUpdated: true };
+      }
+    }
+
     let { data, error } = await supabaseAdmin
       .from('comprobantes_deposito')
       .insert(insertPayload)
@@ -3720,6 +3783,125 @@ export async function eliminarMultiplesComprobantes(ids: string[], token: string
   } catch (err: any) {
     console.error('Error in eliminarMultiplesComprobantes:', err);
     return { success: false, error: err.message || 'Error al eliminar comprobantes en lote.' };
+  }
+}
+
+export async function eliminarCortesParrotDuplicadosSinTicket(token: string) {
+  try {
+    const { empresaId } = await getUserEmpresaId(token);
+
+    // 1. Obtener todos los comprobantes de corte Parrot
+    const { data: comprobantes, error } = await supabaseAdmin
+      .from('comprobantes_deposito')
+      .select('id, tipo, fecha, monto, descripcion, archivo_url, desglose_tickets, creado_en')
+      .eq('empresa_id', empresaId)
+      .or('tipo.eq.corte_parrot,descripcion.ilike.%Corte Parrot%')
+      .order('creado_en', { ascending: true });
+
+    if (error) throw error;
+    if (!comprobantes || comprobantes.length === 0) {
+      return { success: true, count: 0, message: 'No se encontraron comprobantes de Parrot.' };
+    }
+
+    // 2. Agrupar por fecha (YYYY-MM-DD)
+    const byFecha = new Map<string, typeof comprobantes>();
+    for (const c of comprobantes) {
+      const f = c.fecha ? String(c.fecha).substring(0, 10) : '';
+      if (!f) continue;
+      if (!byFecha.has(f)) byFecha.set(f, []);
+      byFecha.get(f)!.push(c);
+    }
+
+    const idsToDelete: string[] = [];
+    const updatesToMake: { id: string; payload: any }[] = [];
+
+    for (const [fecha, list] of byFecha.entries()) {
+      if (list.length <= 1) continue; // No hay duplicados en esta fecha
+
+      // Separar los que tienen ticket cargado (archivo_url válido) y los que no
+      const withTicket = list.filter(c => Boolean(c.archivo_url && String(c.archivo_url).trim() !== ''));
+      const withoutTicket = list.filter(c => !c.archivo_url || String(c.archivo_url).trim() === '');
+
+      if (withTicket.length > 0) {
+        // Conservamos el registro que tiene ticket
+        const keeper = withTicket[0];
+
+        // Si el keeper no tiene desglose_tickets pero alguno sin ticket sí tiene, se lo traspasamos al keeper
+        const candidateWithDesglose = list.find(c => Array.isArray(c.desglose_tickets) && c.desglose_tickets.length > 0);
+        if (candidateWithDesglose && (!keeper.desglose_tickets || keeper.desglose_tickets.length === 0)) {
+          updatesToMake.push({
+            id: keeper.id,
+            payload: { desglose_tickets: candidateWithDesglose.desglose_tickets }
+          });
+        }
+
+        // Eliminamos todos los que NO tienen ticket cargado
+        for (const item of withoutTicket) {
+          idsToDelete.push(item.id);
+        }
+
+        // Si hubiera más de uno con ticket cargado, conservamos el primero y eliminamos los extras
+        for (let i = 1; i < withTicket.length; i++) {
+          idsToDelete.push(withTicket[i].id);
+        }
+      } else {
+        // Ninguno tiene ticket cargado (por ejemplo ambos "Sin Ticket")
+        // Conservamos el que tenga más tickets desglosados (o el primero)
+        list.sort((a, b) => {
+          const lenA = Array.isArray(a.desglose_tickets) ? a.desglose_tickets.length : 0;
+          const lenB = Array.isArray(b.desglose_tickets) ? b.desglose_tickets.length : 0;
+          return lenB - lenA;
+        });
+
+        const keeper = list[0];
+        // Eliminamos los duplicados sobrantes
+        for (let i = 1; i < list.length; i++) {
+          idsToDelete.push(list[i].id);
+        }
+      }
+    }
+
+    // Aplicar actualizaciones pendientes a los keepers (desglose traspasado)
+    for (const upd of updatesToMake) {
+      await supabaseAdmin
+        .from('comprobantes_deposito')
+        .update(upd.payload)
+        .eq('id', upd.id)
+        .eq('empresa_id', empresaId);
+    }
+
+    let deletedCount = 0;
+    if (idsToDelete.length > 0) {
+      for (const id of idsToDelete) {
+        await removeCajaChicaForComprobante(id, empresaId);
+      }
+
+      await supabaseAdmin
+        .from('comprobantes_deposito_movimientos')
+        .delete()
+        .in('comprobante_id', idsToDelete)
+        .eq('empresa_id', empresaId);
+
+      const { error: delErr } = await supabaseAdmin
+        .from('comprobantes_deposito')
+        .delete()
+        .in('id', idsToDelete)
+        .eq('empresa_id', empresaId);
+
+      if (delErr) throw delErr;
+      deletedCount = idsToDelete.length;
+    }
+
+    return {
+      success: true,
+      deletedCount,
+      message: deletedCount > 0 
+        ? `Se eliminaron exitosamente ${deletedCount} registros duplicados de Parrot sin ticket.` 
+        : 'No se encontraron registros duplicados sin ticket.'
+    };
+  } catch (err: any) {
+    console.error('Error al eliminar duplicados de Parrot:', err);
+    return { success: false, error: err.message || 'Error al eliminar duplicados.' };
   }
 }
 

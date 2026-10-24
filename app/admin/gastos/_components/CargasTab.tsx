@@ -32,6 +32,7 @@ import {
 } from '../reconciliationActions';
 import { useSessionToken } from '../../../../lib/hooks/useSessionToken';
 import { supabase } from '../../../../lib/supabase';
+import { formatDate } from '../../../../lib/formatters';
 import { 
   descargarPlantillaEstadoCuenta, 
   CATEGORIAS_DEFAULT, 
@@ -105,18 +106,8 @@ export function CargasTab({
 
   const formatDateSafe = (dateStr?: string | null) => {
     if (!dateStr) return 'S/F';
-    const clean = String(dateStr).split('T')[0].trim();
-    const parts = clean.split('-');
-    if (parts.length === 3) {
-      const year = parseInt(parts[0], 10);
-      const month = parseInt(parts[1], 10) - 1;
-      const day = parseInt(parts[2], 10);
-      const d = new Date(year, month, day);
-      if (!isNaN(d.getTime())) {
-        return d.toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' });
-      }
-    }
-    return clean;
+    const res = formatDate(dateStr);
+    return res === '—' ? 'S/F' : res;
   };
 
   const formatCargaFecha = (carga: any) => {

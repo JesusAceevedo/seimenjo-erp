@@ -8,6 +8,7 @@ import {
   ChevronLeft,
   ChevronRight,
 } from 'lucide-react';
+import { formatDate } from '@/lib/formatters';
 
 interface DepositosBancariosTabProps {
   depositosMes: any[];
@@ -98,7 +99,7 @@ export const DepositosBancariosTab: React.FC<DepositosBancariosTabProps> = ({
               return (
                 <tr key={d.id} className="hover:bg-gray-50/80 dark:hover:bg-gray-900/50 transition-colors">
                   <td className="p-3 font-mono font-medium text-gray-600 dark:text-gray-400 whitespace-nowrap">
-                    {d.fecha ? new Date(d.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : ''}
+                    {formatDate(d.fecha)}
                   </td>
                   <td className="p-3 font-bold text-gray-800 dark:text-gray-200 max-w-xs truncate" title={d.concepto}>
                     {d.concepto || 'Depósito bancario'}
@@ -139,7 +140,7 @@ export const DepositosBancariosTab: React.FC<DepositosBancariosTabProps> = ({
                       {cdms.map((c: any, idx: number) => {
                         const comp = c.comprobantes_deposito;
                         const title = comp?.descripcion || `Ticket ${comp?.fecha || ''}`;
-                        const fechaComp = comp?.fecha ? new Date(comp.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : '';
+                        const fechaComp = formatDate(comp?.fecha);
                         return (
                           <span
                             key={`t-${idx}`}

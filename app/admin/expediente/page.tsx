@@ -12,6 +12,7 @@ import Pagination from '../_components/Pagination';
 import PeriodSelector from '../_components/PeriodSelector';
 import { usePeriod } from '../../../lib/hooks/usePeriod';
 import { useEmpresaId } from '../../../lib/hooks/useEmpresaId';
+import { formatDate } from '../../../lib/formatters';
 
 interface ExpedienteItem {
   id: string;
@@ -581,7 +582,7 @@ export default function ExpedienteDigital() {
                         </div>
                       </td>
                     <td className="p-4 font-mono text-gray-500">
-                      {new Date(item.fecha).toLocaleDateString()}
+                      {formatDate(item.fecha)}
                     </td>
                     <td className="p-4 font-bold text-gray-800 dark:text-gray-200">
                       {item.concepto}

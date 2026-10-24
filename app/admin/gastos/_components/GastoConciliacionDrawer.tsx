@@ -6,7 +6,7 @@ import {
   Calendar, DollarSign, CreditCard, Download, Copy,
   Edit3, Save, RefreshCw, Check, Link as LinkIcon, Eye
 } from 'lucide-react';
-import { formatCurrency } from '../../../../lib/formatters';
+import { formatCurrency, formatDate } from '../../../../lib/formatters';
 import { supabase } from '../../../../lib/supabase';
 import { useCfdiViewer } from '../../_components/CfdiViewerContext';
 
@@ -215,11 +215,7 @@ export default function GastoConciliacionDrawer({
               <div>
                 <span className="text-[10px] text-gray-400 dark:text-gray-550 block">Fecha Emisión</span>
                 <span className="font-mono font-bold text-gray-850 dark:text-gray-250">
-                  {gasto.fecha_timbrado
-                    ? new Date(gasto.fecha_timbrado).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' })
-                    : gasto.fecha_gasto
-                      ? new Date(gasto.fecha_gasto).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' })
-                      : '—'}
+                  {formatDate(gasto.fecha_timbrado || gasto.fecha_gasto)}
                 </span>
               </div>
               <div>
@@ -369,7 +365,7 @@ export default function GastoConciliacionDrawer({
 
                   {pagosAsociados.map((item: any, idx: number) => {
                     const mov = item.movimiento;
-                    const fechaFmt = mov.fecha ? new Date(mov.fecha).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
+                    const fechaFmt = mov.fecha ? formatDate(mov.fecha) : '—';
                     return (
                       <div key={item.id || idx} className="p-2.5 bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-lg space-y-1.5">
                         <div className="flex justify-between items-center text-[10px]">

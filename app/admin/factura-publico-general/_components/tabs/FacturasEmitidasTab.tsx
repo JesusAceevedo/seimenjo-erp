@@ -10,6 +10,7 @@ import {
   ChevronLeft,
   ChevronRight,
 } from 'lucide-react';
+import { formatDate } from '@/lib/formatters';
 
 interface FacturasEmitidasTabProps {
   displayedFacturas: any[];
@@ -151,7 +152,7 @@ export const FacturasEmitidasTab: React.FC<FacturasEmitidasTabProps> = ({
                   {f.serie_folio || 'S/F'}
                 </td>
                 <td className="p-3 font-mono text-gray-600 dark:text-gray-400 whitespace-nowrap">
-                  {f.fecha_emision ? new Date(f.fecha_emision).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : 'Sin fecha'}
+                  {formatDate(f.fecha_emision)}
                 </td>
                 <td className="p-3 font-bold text-gray-800 dark:text-gray-100">
                   {f._clienteNombre}

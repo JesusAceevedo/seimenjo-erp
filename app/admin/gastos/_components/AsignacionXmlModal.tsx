@@ -7,7 +7,7 @@ import { supabase } from '../../../../lib/supabase';
 import { useEmpresaId } from '../../../../lib/hooks/useEmpresaId';
 import { useSessionToken } from '../../../../lib/hooks/useSessionToken';
 import { usePeriod } from '../../../../lib/hooks/usePeriod';
-import { formatCurrency } from '../../../../lib/formatters';
+import { formatCurrency, formatDate } from '../../../../lib/formatters';
 import { vincularFacturaAPedido, desvincularFacturaDePedido, obtenerSignedUrl } from '../actions';
 import { useCfdiViewer } from '../../_components/CfdiViewerContext';
 import CfdiViewerModal from './CfdiViewerModal';
@@ -745,7 +745,7 @@ export default function AsignacionXmlModal({
                           <div className="text-[10px] text-gray-400 font-mono flex items-center gap-2">
                             <span>RFC: {rfc}</span>
                             <span>·</span>
-                            <span>{f.fecha_emision ? new Date(f.fecha_emision).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' }) : 'Sin fecha'}</span>
+                            <span>{f.fecha_emision ? formatDate(f.fecha_emision) : 'Sin fecha'}</span>
                           </div>
 
                           {f.uuid_fiscal && (
@@ -1012,7 +1012,7 @@ export default function AsignacionXmlModal({
                             <div className="text-[10px] text-gray-400 font-mono flex items-center gap-2">
                               <span>RFC: {rfc}</span>
                               <span>·</span>
-                              <span>{p.fecha_pedido ? new Date(p.fecha_pedido).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' }) : 'Sin fecha'}</span>
+                              <span>{p.fecha_pedido ? formatDate(p.fecha_pedido) : 'Sin fecha'}</span>
                             </div>
                           </div>
                         </div>

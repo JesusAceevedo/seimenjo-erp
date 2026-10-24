@@ -14,7 +14,7 @@ function escapeTgHtml(text: string | number | null | undefined): string {
     .replace(/>/g, '&gt;');
 }
 
-const DEFAULT_TELEGRAM_BOT_TOKEN = '8560125574:AAG0DnhejKkfcOvi3rka0Cn-jLA9aTx0PiI';
+const DEFAULT_TELEGRAM_BOT_TOKEN = '8730760276:AAGembds6r_tP8g1hD9t4M74CNUh-aQGl6Y';
 const DEFAULT_TELEGRAM_CHAT_ID = '-1004303384153';
 
 /**

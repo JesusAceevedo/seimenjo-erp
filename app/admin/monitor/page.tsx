@@ -2,18 +2,19 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 /* eslint-disable react-hooks/exhaustive-deps */
 
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../../lib/supabase';
-import { Plus, Filter, Soup, ShoppingCart, Truck, FileCheck, Search, Sun, Moon, FileText, ChevronLeft, ChevronRight, Users, LayoutDashboard, Printer, Mail, FileCode, Edit3, Trash2, DollarSign, AlertTriangle, UploadCloud, Loader2, RefreshCw } from 'lucide-react';
+import { Plus, Filter, Soup, ShoppingCart, Truck, FileCheck, Search, Sun, Moon, FileText, ChevronLeft, ChevronRight, Users, LayoutDashboard, Printer, Mail, FileCode, Edit3, Trash2, DollarSign, AlertTriangle, UploadCloud, Loader2, RefreshCw, ChevronDown, Check, X, User } from 'lucide-react';
 import { useThemeMode } from '../../../lib/useThemeMode';
 import { enviarFacturaPorCorreo, obtenerSignedUrl } from '../gastos/actions';
-import { eliminarDetallesPedido, recuperarDetalleDeFacturaXml, ConceptoRecuperado } from './actions';
+import { eliminarDetallesPedido, recuperarDetalleDeFacturaXml, ConceptoRecuperado, eliminarPedidoAdmin } from './actions';
 import { Pedido, Cliente, ProductoVariante, Repartidor, FormaPago, PrecioEspecialMap, DetallePedido } from '../types';
 import { SAT_FORMAS_PAGO, getMetodoPagoLabel } from '../../../lib/constants/sat';
 import { useEmpresaId } from '../../../lib/hooks/useEmpresaId';
 import SubirFacturaPedidoModal from './_components/SubirFacturaPedidoModal';
 import CompletarDetallePedidoModal from './_components/CompletarDetallePedidoModal';
+import { formatDate } from '../../../lib/formatters';
 
 // --- ESTADOS INICIALES (Optimizados fuera del componente para no recrearlos en cada render) ---
 const getPedidoInicial = () => ({
@@ -74,6 +75,34 @@ export default function AdminMonitor() {
   const [activeSubTab, setActiveSubTab] = useState<'general' | 'sakura'>('general');
   const [sakuraEmpresaId, setSakuraEmpresaId] = useState<string>('b9fec2e3-75d5-4002-9071-f79c56bda732');
   const [isSeimenjoEmpresa, setIsSeimenjoEmpresa] = useState<boolean>(false);
+  const [isSuperusuario, setIsSuperusuario] = useState<boolean>(false);
+
+  // Verificar si el usuario actual es Superusuario
+  useEffect(() => {
+    const checkStaffSuperuser = async () => {
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return;
+        const { data: staff } = await supabase
+          .from('usuarios_staff')
+          .select('es_superusuario')
+          .eq('supabase_auth_id', user.id)
+          .maybeSingle();
+        if (staff?.es_superusuario) {
+          setIsSuperusuario(true);
+        } else {
+          const raw = localStorage.getItem('seimenjo_session');
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            if (parsed.es_superusuario) setIsSuperusuario(true);
+          }
+        }
+      } catch (err) {
+        console.error('Error al verificar privilegios de superusuario:', err);
+      }
+    };
+    checkStaffSuperuser();
+  }, []);
 
   // Verificar si la empresa activa es Seimenjo
   useEffect(() => {
@@ -102,7 +131,9 @@ export default function AdminMonitor() {
   // Paginación y Filtros
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(6);
-  const [filtroCliente, setFiltroCliente] = useState('');
+  const [clienteBusquedaInput, setClienteBusquedaInput] = useState('');
+  const [isClienteDropdownOpen, setIsClienteDropdownOpen] = useState(false);
+  const clienteDropdownRef = useRef<HTMLDivElement>(null);
   const [filtroRango, setFiltroRango] = useState('mes_actual');
   const [fechaInicio, setFechaInicio] = useState('');
   const [fechaFin, setFechaFin] = useState('');
@@ -200,6 +231,42 @@ export default function AdminMonitor() {
       }
     }
   }, [isModalOpen, isSeimenjoEmpresa, activeSubTab, idPedidoEditar, clientes]);
+
+  // Sincronizar texto del buscador con el cliente seleccionado o al abrir/cerrar modal
+  useEffect(() => {
+    if (!isModalOpen) {
+      setIsClienteDropdownOpen(false);
+      setClienteBusquedaInput('');
+    } else if (!isClienteDropdownOpen) {
+      if (nuevoPedido.cliente_id) {
+        const found = clientes.find(c => c.id === nuevoPedido.cliente_id);
+        setClienteBusquedaInput(found?.nombre_local || found?.razon_social || nuevoPedido.cliente_nombre || '');
+      } else {
+        setClienteBusquedaInput(nuevoPedido.cliente_nombre || '');
+      }
+    }
+  }, [isModalOpen, nuevoPedido.cliente_id, nuevoPedido.cliente_nombre, clientes, isClienteDropdownOpen]);
+
+  // Manejar cierre al hacer click fuera del dropdown de clientes
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (clienteDropdownRef.current && !clienteDropdownRef.current.contains(event.target as Node)) {
+        setIsClienteDropdownOpen(false);
+        if (nuevoPedido.cliente_id) {
+          const found = clientes.find(c => c.id === nuevoPedido.cliente_id);
+          setClienteBusquedaInput(found?.nombre_local || found?.razon_social || nuevoPedido.cliente_nombre || '');
+        } else {
+          setClienteBusquedaInput(nuevoPedido.cliente_nombre || '');
+        }
+      }
+    }
+    if (isClienteDropdownOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isClienteDropdownOpen, nuevoPedido.cliente_id, nuevoPedido.cliente_nombre, clientes]);
 
   // --- CARGA DE PRECIOS ESPECIALES AL SELECCIONAR CLIENTE EN FORMULARIO ---
   useEffect(() => {
@@ -317,8 +384,8 @@ export default function AdminMonitor() {
       const [prodsRes, clisRes, repsRes, formasRes] = await Promise.all([
         supabase.from('producto_variantes').select('id, gramaje, precio_base, productos(nombre)'),
         targetEmpresaId
-          ? supabase.from('clientes').select('id, nombre_local').or(`empresa_id.eq.${targetEmpresaId},empresa_id.is.null,nombre_local.ilike.%ramen%playa%,razon_social.ilike.%ramen%playa%`)
-          : supabase.from('clientes').select('id, nombre_local'),
+          ? supabase.from('clientes').select('id, nombre_local, razon_social').or(`empresa_id.eq.${targetEmpresaId},empresa_id.is.null,nombre_local.ilike.%ramen%playa%,razon_social.ilike.%ramen%playa%`).order('nombre_local', { ascending: true })
+          : supabase.from('clientes').select('id, nombre_local, razon_social').order('nombre_local', { ascending: true }),
         targetEmpresaId ? supabase.from('repartidores').select('*').or(`empresa_id.is.null,empresa_id.eq.${targetEmpresaId}`).order('nombre', { ascending: true }) : supabase.from('repartidores').select('*').order('nombre', { ascending: true }),
         supabase.from('formas_pago').select('*').order('nombre', { ascending: true })
       ]);
@@ -332,9 +399,22 @@ export default function AdminMonitor() {
   }, [router, getTargetEmpresaId, activeSubTab]);
 
   // --- LÓGICA DE FILTRADO OPTIMIZADA ---
-  const clientesFiltrados = useMemo(() =>
-    clientes.filter(c => c.nombre_local?.toLowerCase().includes(filtroCliente.toLowerCase())),
-    [clientes, filtroCliente]);
+  const clientesFiltrados = useMemo(() => {
+    const query = clienteBusquedaInput.trim().toLowerCase();
+    const clienteSeleccionado = clientes.find(c => c.id === nuevoPedido.cliente_id);
+    const nombreSeleccionado = (clienteSeleccionado?.nombre_local || clienteSeleccionado?.razon_social || '').trim().toLowerCase();
+
+    // Si no hay búsqueda o si el texto coincide exactamente con el cliente ya seleccionado, mostramos todos
+    if (!query || query === nombreSeleccionado) {
+      return clientes;
+    }
+
+    return clientes.filter(c => {
+      const nom = (c.nombre_local || '').toLowerCase();
+      const razon = (c.razon_social || '').toLowerCase();
+      return nom.includes(query) || razon.includes(query);
+    });
+  }, [clientes, clienteBusquedaInput, nuevoPedido.cliente_id]);
 
   const pedidosFiltrados = useMemo(() => {
     let filtrados = [...pedidos];
@@ -773,14 +853,19 @@ export default function AdminMonitor() {
   };
 
   const eliminarPedido = async (id: string, estatusPago: string) => {
-    if (estatusPago === 'Liquidado') {
-      alert("No se puede eliminar un pedido que ya ha sido liquidado.");
+    if (estatusPago === 'Liquidado' && !isSuperusuario) {
+      alert("No se puede eliminar un pedido que ya ha sido liquidado. Se requieren permisos de superusuario.");
       return;
     }
-    if (!confirm('¿Estás seguro de que deseas eliminar este pedido? Esta acción no se puede deshacer.')) return;
+    const mensajeConfirm = estatusPago === 'Liquidado'
+      ? 'Este pedido se encuentra marcado como Liquidado.\n\nComo superusuario, ¿estás seguro de que deseas forzar su eliminación definitiva junto con sus comprobantes y detalles asociados? Esta acción no se puede deshacer.'
+      : '¿Estás seguro de que deseas eliminar este pedido? Esta acción no se puede deshacer.';
+
+    if (!confirm(mensajeConfirm)) return;
     try {
-      const { error } = await supabase.from('pedidos').delete().eq('id', id);
-      if (error) throw error;
+      const token = await getSessionToken();
+      const res = await eliminarPedidoAdmin(id, token);
+      if (!res.success) throw new Error(res.error || 'Error al eliminar');
       alert('Pedido eliminado correctamente.');
       fetchPedidos();
     } catch (err: any) {
@@ -986,6 +1071,11 @@ export default function AdminMonitor() {
             <div>
               <h2 className="text-2xl font-bold flex items-center gap-2 compact-title">
                 Gestión Pedidos
+                {isSuperusuario && (
+                  <span className="text-[10px] bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/30 px-2 py-0.5 rounded-full font-bold flex items-center gap-1" title="Privilegios de Superusuario activos: puedes eliminar pedidos incluso liquidados o en periodos especiales">
+                    ★ Superusuario
+                  </span>
+                )}
                 {isSeimenjoEmpresa && activeSubTab === 'sakura' && (
                   <span className="text-xs bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/30 px-2.5 py-1 rounded-full font-extrabold flex items-center gap-1">
                     <Soup size={14} /> Sakura
@@ -1152,9 +1242,9 @@ export default function AdminMonitor() {
                         )}
                       </td>
                       <td className="p-4 space-y-1 font-mono text-[11px] text-gray-900 dark:text-white">
-                        <div><span className="text-gray-500">Ped:</span> {new Date(p.fecha_pedido || '').toLocaleDateString()}</div>
-                        <div><span className="text-amber-600 dark:text-amber-500">Prod:</span> {p.fecha_produccion || 'N/A'}</div>
-                        <div><span className="text-emerald-600 dark:text-emerald-500">Ent:</span> {p.fecha_entrega || 'N/A'}</div>
+                        <div><span className="text-gray-500">Ped:</span> {formatDate(p.fecha_pedido)}</div>
+                        <div><span className="text-amber-600 dark:text-amber-500">Prod:</span> {p.fecha_produccion ? formatDate(p.fecha_produccion) : 'N/A'}</div>
+                        <div><span className="text-emerald-600 dark:text-emerald-500">Ent:</span> {p.fecha_entrega ? formatDate(p.fecha_entrega) : 'N/A'}</div>
                       </td>
                       <td className="p-4 space-y-1">
                         {(!p.pedido_detalles || p.pedido_detalles.length === 0) ? (
@@ -1286,7 +1376,23 @@ export default function AdminMonitor() {
                         >
                           <Printer size={12} /> Ticket
                         </button>
-                        {p.estatus_pago !== 'Liquidado' ? (
+                        {p.estatus_pago === 'Liquidado' && (!p.pedido_detalles || p.pedido_detalles.length === 0 || !p.fecha_produccion || !p.fecha_entrega) && (
+                          <button
+                            type="button"
+                            onClick={() => handleAbrirModalCompletarInfo(p)}
+                            disabled={cargandoRecuperacionId === p.id}
+                            className="w-full mt-1 px-2 py-1 bg-amber-500 hover:bg-amber-600 text-white font-medium rounded shadow transition-colors text-[10px] flex items-center justify-center gap-1 uppercase font-sans font-semibold cursor-pointer disabled:opacity-50"
+                            title="Completar información faltante de este pedido"
+                          >
+                            {cargandoRecuperacionId === p.id ? (
+                              <Loader2 size={11} className="animate-spin" />
+                            ) : (
+                              <Plus size={11} />
+                            )}
+                            <span>Completar Info</span>
+                          </button>
+                        )}
+                        {(p.estatus_pago !== 'Liquidado' || isSuperusuario) && (
                           <div className="flex gap-2 mt-1">
                             <button
                               onClick={() => abrirModalEditarPedido(p)}
@@ -1298,28 +1404,11 @@ export default function AdminMonitor() {
                             <button
                               onClick={() => eliminarPedido(p.id, p.estatus_pago || 'Pendiente')}
                               className="flex-1 py-1 px-1.5 bg-red-50 hover:bg-red-105 dark:bg-red-950/20 dark:hover:bg-red-900/30 text-red-600 dark:text-red-400 rounded text-[10px] font-bold flex items-center justify-center gap-1 transition-colors border border-red-200 dark:border-red-900/30"
-                              title="Eliminar pedido"
+                              title={p.estatus_pago === 'Liquidado' ? 'Eliminar pedido liquidado (Superusuario)' : 'Eliminar pedido'}
                             >
-                              <Trash2 size={10} /> Eliminar
+                              <Trash2 size={10} /> {p.estatus_pago === 'Liquidado' ? 'Eliminar (Super)' : 'Eliminar'}
                             </button>
                           </div>
-                        ) : (
-                          (!p.pedido_detalles || p.pedido_detalles.length === 0 || !p.fecha_produccion || !p.fecha_entrega) && (
-                            <button
-                              type="button"
-                              onClick={() => handleAbrirModalCompletarInfo(p)}
-                              disabled={cargandoRecuperacionId === p.id}
-                              className="w-full mt-1 px-2 py-1 bg-amber-500 hover:bg-amber-600 text-white font-medium rounded shadow transition-colors text-[10px] flex items-center justify-center gap-1 uppercase font-sans font-semibold cursor-pointer disabled:opacity-50"
-                              title="Completar información faltante de este pedido"
-                            >
-                              {cargandoRecuperacionId === p.id ? (
-                                <Loader2 size={11} className="animate-spin" />
-                              ) : (
-                                <Plus size={11} />
-                              )}
-                              <span>Completar Info</span>
-                            </button>
-                          )
                         )}
                       </td>
                     </tr>
@@ -1418,22 +1507,122 @@ export default function AdminMonitor() {
                         </button>
                       </div>
                     )}
-                    <div className="relative mb-3">
-                      <Search className="absolute left-3 top-2.5 text-gray-400" size={16} />
-                      <input placeholder="Buscar cliente..." className="w-full bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 text-gray-900 dark:text-white p-2 pl-10 rounded-lg text-sm" onChange={(e) => setFiltroCliente(e.target.value)} />
+                    {/* Buscador Unificado de Clientes (Combobox con Autocompletado) */}
+                    <div className="relative mb-3" ref={clienteDropdownRef}>
+                      <div className="relative">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" size={16} />
+                        <input
+                          type="text"
+                          placeholder="Buscar cliente por nombre o seleccionar de la lista..."
+                          className="w-full bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 text-gray-900 dark:text-white py-2.5 pl-10 pr-16 rounded-xl text-sm focus:ring-2 focus:ring-amber-500/40 focus:border-amber-500 outline-none transition-all"
+                          value={clienteBusquedaInput}
+                          onFocus={(e) => {
+                            setIsClienteDropdownOpen(true);
+                            e.target.select();
+                          }}
+                          onChange={(e) => {
+                            setClienteBusquedaInput(e.target.value);
+                            if (!isClienteDropdownOpen) setIsClienteDropdownOpen(true);
+                          }}
+                        />
+                        <div className="absolute right-2.5 top-1/2 -translate-y-1/2 flex items-center gap-1">
+                          {nuevoPedido.cliente_id && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setNuevoPedido(prev => ({ ...prev, cliente_id: '', cliente_nombre: '' }));
+                                setClienteBusquedaInput('');
+                                setIsClienteDropdownOpen(true);
+                              }}
+                              className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded-md transition-colors"
+                              title="Limpiar cliente seleccionado"
+                            >
+                              <X size={15} />
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => setIsClienteDropdownOpen(prev => !prev)}
+                            className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded-md transition-colors"
+                            title={isClienteDropdownOpen ? 'Cerrar lista' : 'Abrir lista de clientes'}
+                          >
+                            <ChevronDown size={16} className={`transition-transform duration-200 ${isClienteDropdownOpen ? 'rotate-180 text-amber-500' : ''}`} />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Dropdown Flotante Unificado */}
+                      {isClienteDropdownOpen && (
+                        <div className="absolute left-0 right-0 top-full mt-1.5 z-50 bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-xl shadow-2xl max-h-60 overflow-y-auto divide-y divide-gray-100 dark:divide-gray-800/60 animate-in fade-in-50 duration-150">
+                          {/* Opción Cliente Ocasional / No Registrado */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setNuevoPedido({
+                                ...nuevoPedido,
+                                cliente_id: '',
+                                cliente_nombre: ''
+                              });
+                              setClienteBusquedaInput('');
+                              setIsClienteDropdownOpen(false);
+                            }}
+                            className={`w-full text-left px-3.5 py-2.5 text-xs flex items-center justify-between transition-colors ${
+                              !nuevoPedido.cliente_id
+                                ? 'bg-amber-500/10 text-amber-700 dark:text-amber-400 font-bold'
+                                : 'hover:bg-gray-100 dark:hover:bg-gray-800/70 text-gray-600 dark:text-gray-300'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2">
+                              <User size={14} className="text-gray-400" />
+                              <span>👤 Cliente Ocasional / No registrado...</span>
+                            </div>
+                            {!nuevoPedido.cliente_id && <Check size={14} className="text-amber-600 dark:text-amber-400" />}
+                          </button>
+
+                          {/* Lista Filtrada de Clientes */}
+                          {clientesFiltrados.length > 0 ? (
+                            clientesFiltrados.map(c => {
+                              const isSelected = nuevoPedido.cliente_id === c.id;
+                              return (
+                                <button
+                                  key={c.id}
+                                  type="button"
+                                  onClick={() => {
+                                    setNuevoPedido({
+                                      ...nuevoPedido,
+                                      cliente_id: c.id,
+                                      cliente_nombre: (c.nombre_local || c.razon_social) || ''
+                                    });
+                                    setClienteBusquedaInput(c.nombre_local || c.razon_social || '');
+                                    setIsClienteDropdownOpen(false);
+                                  }}
+                                  className={`w-full text-left px-3.5 py-2.5 text-xs flex items-center justify-between transition-colors ${
+                                    isSelected
+                                      ? 'bg-amber-500/15 text-amber-700 dark:text-amber-400 font-bold'
+                                      : 'hover:bg-gray-100 dark:hover:bg-gray-800/70 text-gray-800 dark:text-gray-200'
+                                  }`}
+                                >
+                                  <div className="flex flex-col min-w-0 pr-2">
+                                    <span className="truncate font-semibold text-[13px]">{c.nombre_local}</span>
+                                    {c.razon_social && c.razon_social !== c.nombre_local && (
+                                      <span className="text-[11px] text-gray-400 dark:text-gray-500 truncate">
+                                        {c.razon_social}
+                                      </span>
+                                    )}
+                                  </div>
+                                  {isSelected && <Check size={15} className="text-amber-600 dark:text-amber-400 flex-shrink-0" />}
+                                </button>
+                              );
+                            })
+                          ) : (
+                            <div className="p-4 text-center text-xs text-gray-500 dark:text-gray-400">
+                              No se encontraron clientes que coincidan con &quot;<span className="font-semibold text-gray-700 dark:text-gray-300">{clienteBusquedaInput}</span>&quot;
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
-                    <select className="w-full bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 text-gray-900 dark:text-white p-2.5 rounded-lg text-sm mb-3" value={nuevoPedido.cliente_id || ''} onChange={e => {
-                      const selId = e.target.value;
-                      const selCli = clientes.find(c => c.id === selId);
-                      setNuevoPedido({
-                        ...nuevoPedido,
-                        cliente_id: selId,
-                        cliente_nombre: (selCli?.nombre_local || selCli?.razon_social) || ''
-                      });
-                    }}>
-                      <option value="">Cliente Ocasional / No registrado...</option>
-                      {clientesFiltrados.map(c => <option key={c.id} value={c.id}>{c.nombre_local}</option>)}
-                    </select>
 
                     {!nuevoPedido.cliente_id && (
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-3 border-t border-gray-200 dark:border-gray-800">

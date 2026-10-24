@@ -44,6 +44,7 @@ import {
 import BancoTab from '../gastos/_components/BancoTab';
 import PeriodSelector from '../_components/PeriodSelector';
 import AsignacionXmlModal from '../gastos/_components/AsignacionXmlModal';
+import { formatDate } from '@/lib/formatters';
 
 export const dynamic = 'force-dynamic';
 
@@ -1385,7 +1386,7 @@ export default function BankReconciliationModule() {
 
     links.forEach((rel: any) => {
       const m = rel.movimientos_bancarios || movsAll.find((item: any) => item.id === rel.movimiento_id);
-      const fecha = m?.fecha ? new Date(m.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : '';
+      const fecha = m?.fecha ? formatDate(m.fecha) : '';
       const concepto = m?.concepto || 'Movimiento Bancario';
       const ref = m?.referencia || '';
       const montoAsoc = Number(rel.monto_asociado || 0);
@@ -1507,7 +1508,7 @@ export default function BankReconciliationModule() {
       const assignedInfo = formatTicketMovimientosAsignados(c, movimientos);
 
       rows.push({
-        'Fecha Ticket': c.fecha ? new Date(c.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : '',
+        'Fecha Ticket': c.fecha ? formatDate(c.fecha) : '',
         'Cuenta / Banco': cuenta.nombre,
         'Tipo Ingreso': tipoDesc,
         'Importe sin Propina': targetAmountBase,
@@ -1526,7 +1527,7 @@ export default function BankReconciliationModule() {
 
         if (val > 0) {
           rows.push({
-            'Fecha Ticket': m.fecha ? new Date(m.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : '',
+            'Fecha Ticket': m.fecha ? formatDate(m.fecha) : '',
             'Cuenta / Banco': cuenta.nombre,
             'Tipo Ingreso': m.tipo_movimiento || 'Depósito Bancario Directo',
             'Importe sin Propina': val,
@@ -1556,7 +1557,7 @@ export default function BankReconciliationModule() {
       if (isTraspaso) return;
       if (val < 0) {
         rows.push({
-          'Fecha': m.fecha ? new Date(m.fecha).toLocaleDateString('es-MX', { timeZone: 'UTC' }) : '',
+          'Fecha': m.fecha ? formatDate(m.fecha) : '',
           'Banco / Cuenta': cuenta.nombre,
           'Tipo Egreso': m.tipo_movimiento || 'Retiro / Gasto',
           'Concepto / Descripción': m.concepto || 'Egreso',

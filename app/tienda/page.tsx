@@ -17,6 +17,7 @@ import { useThemeMode } from '../../lib/useThemeMode';
 import { obtenerSignedUrlCliente, notificarPedidoTelegramAction } from './actions';
 import ClienteCfdiModal from './ClienteCfdiModal';
 import DatosFiscalesModal from './DatosFiscalesModal';
+import { formatDate } from '../../lib/formatters';
 
 // Interfaces de tipado
 interface Producto { id: string; nombre: string; categoria: string; imagen_url: string; }
@@ -1620,7 +1621,7 @@ export default function Tienda() {
                               </span>
                             </td>
                             <td className="p-4 text-gray-600 dark:text-gray-450">
-                              {fac.fecha_emision ? new Date(fac.fecha_emision).toLocaleDateString() : 'N/A'}
+                              {fac.fecha_emision ? formatDate(fac.fecha_emision) : 'N/A'}
                             </td>
                             <td className="p-4 text-right font-bold text-gray-900 dark:text-white">
                               ${Number(fac.total || 0).toFixed(2)} MXN

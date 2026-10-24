@@ -24,6 +24,7 @@ import {
   Tag
 } from 'lucide-react';
 import { PropuestaConciliacionItem } from '../reconciliationActions';
+import { formatDate as formatSharedDate } from '../../../../lib/formatters';
 
 interface AutoConciliacionModalProps {
   isOpen: boolean;
@@ -71,15 +72,8 @@ export default function AutoConciliacionModal({
   const formatDate = (dateStr?: string | null) => {
     if (!dateStr) return 'Sin fecha';
     try {
-      const parts = dateStr.split('T')[0].split('-');
-      if (parts.length === 3) {
-        return new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2])).toLocaleDateString('es-MX', {
-          day: '2-digit',
-          month: 'short',
-          year: 'numeric'
-        });
-      }
-      return new Date(dateStr).toLocaleDateString('es-MX');
+      const res = formatSharedDate(dateStr);
+      return res === '—' ? 'Sin fecha' : res;
     } catch {
       return dateStr;
     }

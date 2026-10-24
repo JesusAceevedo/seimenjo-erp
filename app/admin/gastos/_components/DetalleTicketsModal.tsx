@@ -2,6 +2,7 @@
 
 import React, { useState, useMemo } from 'react';
 import { X, Receipt, Search, Download, DollarSign, CreditCard, Sparkles, Filter } from 'lucide-react';
+import { formatDate } from '../../../../lib/formatters';
 
 interface TicketItem {
   numero_pedido?: string;
@@ -63,16 +64,20 @@ export default function DetalleTicketsModal({
     let totPropina = 0;
     let granTotal = 0;
 
+    let ventaNeta = 0;
+
     tickets.forEach((t) => {
       const tp = (t.tipo_pago || '').toLowerCase();
       const monto = Number(t.total || 0);
       const prop = Number(t.propina || 0);
+      const base = Number(t.total_sin_propina !== undefined && t.total_sin_propina !== null && !isNaN(Number(t.total_sin_propina)) && Number(t.total_sin_propina) > 0 ? t.total_sin_propina : Math.max(0, monto - prop));
 
       totPropina += prop;
       granTotal += monto;
+      ventaNeta += base;
 
       if (tp.includes('efectivo')) {
-        totEfec += monto;
+        totEfec += base;
         countEfec++;
       } else if (
         tp.includes('terminal') ||
@@ -83,13 +88,13 @@ export default function DetalleTicketsModal({
         tp.includes('credito') ||
         tp.includes('amex')
       ) {
-        totTerm += monto;
+        totTerm += base;
         countTerm++;
       } else if (tp.includes('parrot') || tp.includes('qr') || tp.includes('transferencia')) {
-        totParrot += monto;
+        totParrot += base;
         countParrot++;
       } else {
-        totTerm += monto;
+        totTerm += base;
         countTerm++;
       }
     });
@@ -102,6 +107,7 @@ export default function DetalleTicketsModal({
       totParrot,
       countParrot,
       totPropina,
+      ventaNeta,
       granTotal,
       totalTickets: tickets.length,
     };
@@ -197,7 +203,7 @@ export default function DetalleTicketsModal({
               <h3 className="text-base font-extrabold text-gray-900 dark:text-white flex items-center gap-2">
                 Desglose de Ventas del Día
                 <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400 text-xs font-black">
-                  {comprobante.fecha}
+                  {formatDate(comprobante.fecha)}
                 </span>
               </h3>
               <p className="text-xs text-gray-500 dark:text-gray-400">
@@ -284,19 +290,35 @@ export default function DetalleTicketsModal({
             <div className="text-base font-black text-amber-600 dark:text-amber-400 font-mono mt-1">
               {formatCurrency(stats.totPropina)}
             </div>
+            <span className="text-[9px] text-gray-400 font-mono block">Excluidas del SAT</span>
           </div>
 
-          {/* Total del Día */}
+          {/* Ventas Netas (Subtotal Excel) */}
+          <div className="p-3 rounded-xl border bg-white dark:bg-gray-900 border-emerald-200 dark:border-emerald-800/40">
+            <div className="flex items-center justify-between text-[11px] font-bold text-emerald-700 dark:text-emerald-400">
+              <span>🏷️ Ventas Netas</span>
+              <span className="text-[9px] font-mono bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 px-1 rounded font-bold">
+                Excel
+              </span>
+            </div>
+            <div className="text-base font-black text-emerald-700 dark:text-emerald-400 font-mono mt-1">
+              {formatCurrency(stats.ventaNeta)}
+            </div>
+            <span className="text-[9px] text-gray-400 font-mono block">Subtotal sin propinas</span>
+          </div>
+
+          {/* Total del Día con Propinas */}
           <div className="p-3 rounded-xl border bg-white dark:bg-gray-900 border-gray-200 dark:border-gray-800">
             <div className="flex items-center justify-between text-[11px] font-bold text-gray-500 dark:text-gray-400">
-              <span>🏆 Total del Día</span>
+              <span>🏆 Total Cobrado</span>
               <span className="text-[10px] font-mono bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 px-1.5 py-0.2 rounded font-bold">
-                {stats.totalTickets} ventas
+                {stats.totalTickets} tickets
               </span>
             </div>
             <div className="text-base font-black text-gray-900 dark:text-white font-mono mt-1">
               {formatCurrency(stats.granTotal)}
             </div>
+            <span className="text-[9px] text-gray-400 font-mono block">Ventas + Propinas</span>
           </div>
         </div>
 
