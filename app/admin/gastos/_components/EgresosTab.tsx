@@ -144,20 +144,23 @@ export default function EgresosTab({
     }
   };
 
-  // Modal para asociar a gasto principal
-  // Modal para asociar a gasto principal (con soporte para selección múltiple)
+  // Modal para asociar a gasto principal (con soporte para selección múltiple y dirección flexible)
   const [associationModal, setAssociationModal] = useState<{
     isOpen: boolean;
     childGasto: GastoFacturado | null;
     searchParent: string;
     selectedParentIds: string[];
     loading: boolean;
+    soloMesActual: boolean;
+    modoAgrupacion: 'este_es_padre' | 'este_es_hijo';
   }>({
     isOpen: false,
     childGasto: null,
     searchParent: '',
     selectedParentIds: [],
-    loading: false
+    loading: false,
+    soloMesActual: true,
+    modoAgrupacion: 'este_es_padre'
   });
 
   const handleSaveAssociation = async () => {
@@ -166,24 +169,43 @@ export default function EgresosTab({
     try {
       const child = associationModal.childGasto;
       const selectedIds = associationModal.selectedParentIds;
-      const primaryParentId = selectedIds[0];
 
-      // Vincular el gasto hijo al gasto principal seleccionado
-      const { error: err1 } = await supabase
-        .from('gastos')
-        .update({ gasto_padre_id: primaryParentId })
-        .eq('id', child.id);
+      if (associationModal.modoAgrupacion === 'este_es_padre') {
+        // La factura actual (child) es el PADRE principal. Todos los seleccionados pasan a ser sus HIJOS.
+        const parentId = child.id;
 
-      if (err1) throw err1;
+        // 1. Asegurar que el padre principal no tenga gasto_padre_id
+        await supabase
+          .from('gastos')
+          .update({ gasto_padre_id: null })
+          .eq('id', parentId);
 
-      // Si se seleccionaron múltiples facturas del listado, vincular las demás bajo el mismo gasto principal
-      if (selectedIds.length > 1) {
-        const otherIds = selectedIds.slice(1);
-        const { error: err2 } = await supabase
+        // 2. Asociar todos los seleccionados al padre
+        const { error: err } = await supabase
+          .from('gastos')
+          .update({ gasto_padre_id: parentId })
+          .in('id', selectedIds);
+
+        if (err) throw err;
+      } else {
+        // Modo inverso: la factura actual (child) se convierte en HIJA del primer seleccionado
+        const primaryParentId = selectedIds[0];
+
+        const { error: err1 } = await supabase
           .from('gastos')
           .update({ gasto_padre_id: primaryParentId })
-          .in('id', otherIds);
-        if (err2) throw err2;
+          .eq('id', child.id);
+
+        if (err1) throw err1;
+
+        if (selectedIds.length > 1) {
+          const otherIds = selectedIds.slice(1);
+          const { error: err2 } = await supabase
+            .from('gastos')
+            .update({ gasto_padre_id: primaryParentId })
+            .in('id', otherIds);
+          if (err2) throw err2;
+        }
       }
 
       alert(`Asociación realizada con éxito (${selectedIds.length} factura${selectedIds.length > 1 ? 's' : ''}).`);
@@ -192,7 +214,9 @@ export default function EgresosTab({
         childGasto: null,
         searchParent: '',
         selectedParentIds: [],
-        loading: false
+        loading: false,
+        soloMesActual: true,
+        modoAgrupacion: 'este_es_padre'
       });
       if (onRefresh) onRefresh();
       else window.location.reload();
@@ -221,7 +245,9 @@ export default function EgresosTab({
         childGasto: null,
         searchParent: '',
         selectedParentIds: [],
-        loading: false
+        loading: false,
+        soloMesActual: true,
+        modoAgrupacion: 'este_es_padre'
       });
       if (onRefresh) onRefresh();
       else window.location.reload();
@@ -238,22 +264,34 @@ export default function EgresosTab({
     return gastosFacturados.filter(g => {
       // Excluir el mismo gasto
       if (g.id === child.id) return false;
-      // Excluir si ya es hijo de otro
-      if (g.gasto_padre_id) return false;
       
-      // Aplicar filtro de búsqueda
+      // Filtro de mes si está activado
+      if (associationModal.soloMesActual && selectedMonth) {
+        const fechaRef = g.mes_conciliacion || (g.fecha_gasto ? g.fecha_gasto.substring(0, 7) : (g.fecha_timbrado ? g.fecha_timbrado.substring(0, 7) : ''));
+        if (fechaRef && fechaRef !== selectedMonth) return false;
+      }
+      
+      // Aplicar filtro de búsqueda flexible
       if (associationModal.searchParent) {
-        const s = associationModal.searchParent.toLowerCase();
-        const conceptoMatch = g.concepto?.toLowerCase().includes(s);
-        const uuidMatch = g.uuid_fiscal?.toLowerCase().includes(s);
-        const rfcMatch = g.proveedores?.rfc?.toLowerCase().includes(s);
-        const provMatch = g.proveedores?.nombre_comercial?.toLowerCase().includes(s);
-        const montoMatch = g.monto?.toString().includes(s);
-        return conceptoMatch || uuidMatch || rfcMatch || provMatch || montoMatch;
+        const s = associationModal.searchParent.toLowerCase().trim();
+        const sClean = s.replace(/[\s\-_]/g, '');
+        const provClean = (g.proveedores?.nombre_comercial || '').toLowerCase().replace(/[\s\-_]/g, '');
+        const rfcClean = (g.proveedores?.rfc || '').toLowerCase().replace(/[\s\-_]/g, '');
+        const conceptoClean = (g.concepto || '').toLowerCase().replace(/[\s\-_]/g, '');
+        const uuidClean = (g.uuid_fiscal || '').toLowerCase().replace(/[\s\-_]/g, '');
+        const folioClean = (g.folio_factura || '').toLowerCase().replace(/[\s\-_]/g, '');
+        const montoStr = g.monto ? String(g.monto).replace(/[\s,\$]/g, '') : '';
+
+        return provClean.includes(sClean) ||
+               rfcClean.includes(sClean) ||
+               conceptoClean.includes(sClean) ||
+               uuidClean.includes(sClean) ||
+               folioClean.includes(sClean) ||
+               montoStr.includes(sClean);
       }
       return true;
-    }).slice(0, 50);
-  }, [gastosFacturados, associationModal.childGasto, associationModal.searchParent]);
+    }).slice(0, 60);
+  }, [gastosFacturados, associationModal.childGasto, associationModal.searchParent, associationModal.soloMesActual, selectedMonth]);
 
   // Mapa de hijos por id de padre
   const hijosMap = useMemo(() => {
@@ -271,7 +309,8 @@ export default function EgresosTab({
 
   const handleSincronizarPagos = async () => {
     if (!onSincronizarPagos) return;
-    if (!confirm('¿Deseas leer los XML de los registros cargados para corregir automáticamente los métodos de pago (ej. 28 -> Tarjeta de Débito)?')) return;
+    const mesTexto = selectedMonth ? `del mes (${selectedMonth})` : 'del periodo';
+    if (!confirm(`¿Deseas verificar los XML de las facturas ${mesTexto} para corregir automáticamente los métodos y formas de pago con los datos del SAT?`)) return;
     setSincronizando(true);
     try {
       await onSincronizarPagos();
@@ -409,7 +448,7 @@ export default function EgresosTab({
               disabled={sincronizando}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-sm transition-colors"
             >
-              <UploadCloud size={13} /> {sincronizando ? 'Verificando...' : 'Corregir Pagos XML'}
+              <UploadCloud size={13} /> {sincronizando ? 'Verificando...' : `Corregir Pagos XML (${selectedMonth || 'Mes'})`}
             </button>
             <button
               onClick={() => setShowXmlModal(true)}
@@ -882,14 +921,75 @@ export default function EgresosTab({
                         </div>
                       )}
                       {hasHijos && (() => {
+                        const allGroup = [g, ...hijos];
+                        const montoPadre = Number(g.monto || 0);
                         const totalHijos = hijos.reduce((sum, h) => sum + Number(h.monto || 0), 0);
-                        const totalAcumuladoGasto = Number(g.monto || 0) + totalHijos;
+                        const totalGrupo = allGroup.reduce((sum, h) => sum + Number(h.monto || 0), 0);
+                        
+                        const condonaciones = allGroup.filter(item => {
+                          const m = String(item.metodo_pago || '');
+                          const c = (item.concepto || '').toLowerCase();
+                          return m.includes('15') || c.includes('condon');
+                        });
+                        const totalCondonacion = condonaciones.reduce((sum, item) => sum + Number(item.monto || 0), 0);
+
+                        const ppdItems = allGroup.filter(item => {
+                          const m = String(item.metodo_pago || '');
+                          const c = (item.concepto || '').toUpperCase();
+                          return (m.includes('99') || c.includes('PPD') || m.toLowerCase().includes('definir')) && !condonaciones.includes(item);
+                        });
+                        const totalPpd = ppdItems.reduce((sum, item) => sum + Number(item.monto || 0), 0);
+
+                        const pagadosItems = allGroup.filter(item => !condonaciones.includes(item) && !ppdItems.includes(item));
+                        const totalPagado = pagadosItems.reduce((sum, item) => sum + Number(item.monto || 0), 0);
+
+                        // CASO A: Grupo con Condonación / Descuento (ej. Totalplay Pronto Pago)
+                        if (totalCondonacion > 0) {
+                          return (
+                            <div 
+                              className="text-[10px] font-black text-amber-700 dark:text-amber-300 mt-1 bg-amber-50 dark:bg-amber-950/40 px-2 py-0.5 rounded-lg border border-amber-300 dark:border-amber-800/50 inline-flex items-center gap-1 shadow-2xs" 
+                              title={`Total Facturado: -${formatCurrency(totalGrupo)} | Condonación: -${formatCurrency(totalCondonacion)} | Cobrado en Banco/Tarjeta: -${formatCurrency(totalPagado)} ${totalPpd > 0 ? `| Pendiente PPD: -${formatCurrency(totalPpd)}` : ''}`}
+                            >
+                              <span>🎁 Condonación: -{formatCurrency(totalCondonacion)}</span>
+                              <span className="text-emerald-600 dark:text-emerald-400 font-bold">• Cobrado: -{formatCurrency(totalPagado)}</span>
+                            </div>
+                          );
+                        }
+
+                        // CASO B: El padre es una factura principal y los hijos son abonos/parcialidades menores
+                        if (montoPadre > 0 && totalHijos <= montoPadre + 0.05) {
+                          const saldoPendiente = Math.max(0, montoPadre - totalHijos);
+                          const esLiquidadoTotal = saldoPendiente < 0.05;
+                          
+                          if (esLiquidadoTotal) {
+                            return (
+                              <div 
+                                className="text-[10px] font-black text-emerald-700 dark:text-emerald-300 mt-1 bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded-lg border border-emerald-300 dark:border-emerald-800/50 inline-flex items-center gap-1 shadow-2xs" 
+                                title={`Factura PPD: -${formatCurrency(montoPadre)} | Liquidada con ${hijos.length} Pago(s)/REP (-${formatCurrency(totalHijos)}) | Saldo pendiente: $0.00`}
+                              >
+                                <span>✨ 100% Pagada (Saldo: $0.00)</span>
+                              </div>
+                            );
+                          }
+                          
+                          return (
+                            <div 
+                              className="text-[10px] font-black text-indigo-700 dark:text-indigo-300 mt-1 bg-indigo-50 dark:bg-indigo-950/40 px-2 py-0.5 rounded-lg border border-indigo-200 dark:border-indigo-800/50 inline-flex items-center gap-1 shadow-2xs" 
+                              title={`Factura PPD: -${formatCurrency(montoPadre)} | Abonado con ${hijos.length} Parcialidad(es): -${formatCurrency(totalHijos)} | Saldo por liquidar: -${formatCurrency(saldoPendiente)}`}
+                            >
+                              <span>Abonado: -{formatCurrency(totalHijos)}</span>
+                              <span className="text-amber-600 dark:text-amber-400 font-bold">(Resta: -{formatCurrency(saldoPendiente)})</span>
+                            </div>
+                          );
+                        }
+
+                        // CASO C: Contenedor agrupador o acumulado
                         return (
                           <div 
                             className="text-[10px] font-black text-indigo-700 dark:text-indigo-300 mt-1 bg-indigo-50 dark:bg-indigo-950/40 px-2 py-0.5 rounded-lg border border-indigo-200 dark:border-indigo-800/50 inline-block shadow-2xs" 
-                            title={`Monto Padre: -${formatCurrency(g.monto)} | ${hijos.length} Parcialidad(es): -${formatCurrency(totalHijos)}`}
+                            title={`${hijos.length} comprobante(s) acumulados`}
                           >
-                            📊 Suma: -{formatCurrency(totalAcumuladoGasto)}
+                            📊 Acumulado Grupo: -{formatCurrency(totalGrupo)}
                           </div>
                         );
                       })()}
@@ -994,7 +1094,9 @@ export default function EgresosTab({
                             childGasto: g,
                             searchParent: '',
                             selectedParentIds: g.gasto_padre_id ? [g.gasto_padre_id] : [],
-                            loading: false
+                            loading: false,
+                            soloMesActual: true,
+                            modoAgrupacion: 'este_es_padre'
                           })}
                           title="Vincular a Gasto Principal / Parcialidad"
                           className="p-1.5 rounded text-gray-500 hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 transition-colors"
@@ -1021,26 +1123,130 @@ export default function EgresosTab({
                     </td>
                   </tr>
 
-                  {/* Renderizar parcialidades/hijos anidados */}
-                  {hasHijos && isExpanded && hijos.map(h => (
-                    <tr key={h.id} className="bg-indigo-50/20 dark:bg-indigo-950/20 border-l-4 border-indigo-500 transition-colors">
-                      {/* Fecha */}
-                      <td className="p-3 pl-8 font-mono text-gray-500 dark:text-gray-400 whitespace-nowrap">
-                        {formatDate(h.fecha_timbrado || h.fecha_gasto)}
-                      </td>
+                  {/* Renderizar panel de desglose y parcialidades/hijos anidados */}
+                  {hasHijos && isExpanded && (() => {
+                    const allComprobantes = [g, ...hijos];
+                    const totalFacturadoBruto = allComprobantes.reduce((sum, item) => sum + Number(item.monto || 0), 0);
+                    
+                    const condonaciones = allComprobantes.filter(item => {
+                      const m = String(item.metodo_pago || '');
+                      const c = (item.concepto || '').toLowerCase();
+                      return m.includes('15') || c.includes('condon');
+                    });
+                    const totalCondonacion = condonaciones.reduce((sum, item) => sum + Number(item.monto || 0), 0);
 
-                      {/* UUID / Detalle */}
-                      <td className="p-3 font-mono">
-                        <div className="text-gray-600 dark:text-gray-400 font-semibold tracking-tight">
-                          {h.uuid_fiscal ? h.uuid_fiscal : <span className="text-gray-400 italic">N/A</span>}
-                        </div>
-                        <div className="text-[10px] text-gray-400 mt-0.5 flex items-center gap-1 flex-wrap">
-                          <span className="truncate max-w-[200px]">{h.concepto}</span>
-                          <span className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-indigo-100/60 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-400 uppercase">
-                            Parcialidad / REP
-                          </span>
-                        </div>
-                      </td>
+                    const ppdItems = allComprobantes.filter(item => {
+                      const m = String(item.metodo_pago || '');
+                      const c = (item.concepto || '').toUpperCase();
+                      return (m.includes('99') || c.includes('PPD') || m.toLowerCase().includes('definir')) && !condonaciones.includes(item);
+                    });
+                    const totalPpd = ppdItems.reduce((sum, item) => sum + Number(item.monto || 0), 0);
+
+                    const pagadosItems = allComprobantes.filter(item => !condonaciones.includes(item) && !ppdItems.includes(item));
+                    const totalPagadoEfectivo = pagadosItems.reduce((sum, item) => sum + Number(item.monto || 0), 0);
+
+                    return (
+                      <>
+                        <tr className="bg-indigo-50/40 dark:bg-indigo-950/30 border-l-4 border-indigo-500">
+                          <td colSpan={8} className="p-3 pl-8">
+                            <div className="bg-white dark:bg-gray-900 border border-indigo-200 dark:border-indigo-800/60 rounded-xl p-3.5 shadow-sm space-y-3 font-sans">
+                              <div className="flex items-center justify-between border-b border-gray-150 dark:border-gray-800 pb-2 flex-wrap gap-2">
+                                <span className="text-xs font-extrabold text-indigo-900 dark:text-indigo-200 flex items-center gap-1.5">
+                                  <span>📊</span> Desglose Ejecutivo del Paquete / Grupo ({allComprobantes.length} CFDIs)
+                                </span>
+                                <div className="flex items-center gap-2">
+                                  <span className="text-[11px] text-gray-500 dark:text-gray-400">
+                                    Total Facturado Bruto: <strong className="font-mono text-gray-900 dark:text-gray-100">{formatCurrency(totalFacturadoBruto)}</strong>
+                                  </span>
+                                </div>
+                              </div>
+
+                              <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5">
+                                {/* Total Facturado */}
+                                <div className="p-2.5 bg-blue-50/70 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900/50 rounded-xl">
+                                  <span className="text-[10px] uppercase font-bold text-blue-700 dark:text-blue-300 block">1. Total Facturado</span>
+                                  <span className="text-sm font-mono font-black text-blue-900 dark:text-blue-100 mt-0.5 block">{formatCurrency(totalFacturadoBruto)}</span>
+                                  <span className="text-[10px] text-gray-500 dark:text-gray-400 block mt-0.5">{allComprobantes.length} facturas emitidas</span>
+                                </div>
+
+                                {/* Condonación / Descuento */}
+                                <div className="p-2.5 bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/50 rounded-xl">
+                                  <span className="text-[10px] uppercase font-bold text-amber-700 dark:text-amber-300 block">2. Condonación (SAT 15)</span>
+                                  <span className="text-sm font-mono font-black text-amber-900 dark:text-amber-100 mt-0.5 block">
+                                    {totalCondonacion > 0 ? `-${formatCurrency(totalCondonacion)}` : '$0.00'}
+                                  </span>
+                                  <span className="text-[10px] text-gray-500 dark:text-gray-400 block mt-0.5">
+                                    {condonaciones.length > 0 ? `${condonaciones.length} condonación por pronto pago` : 'Sin condonación'}
+                                  </span>
+                                </div>
+
+                                {/* Pendiente / PPD */}
+                                <div className="p-2.5 bg-purple-50/70 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-900/50 rounded-xl">
+                                  <span className="text-[10px] uppercase font-bold text-purple-700 dark:text-purple-300 block">3. Facturado en PPD (SAT 99)</span>
+                                  <span className="text-sm font-mono font-black text-purple-900 dark:text-purple-100 mt-0.5 block">
+                                    {totalPpd > 0 ? formatCurrency(totalPpd) : '$0.00'}
+                                  </span>
+                                  <span className="text-[10px] text-gray-500 dark:text-gray-400 block mt-0.5">
+                                    {ppdItems.length > 0 ? `${ppdItems.length} pendiente(s) por diferir` : 'Sin PPD pendiente'}
+                                  </span>
+                                </div>
+
+                                {/* Cobrado en Banco / Tarjeta */}
+                                <div className="p-2.5 bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-900/50 rounded-xl">
+                                  <span className="text-[10px] uppercase font-bold text-emerald-700 dark:text-emerald-300 block">4. Cargo en Estado de Cuenta</span>
+                                  <span className="text-sm font-mono font-black text-emerald-900 dark:text-emerald-100 mt-0.5 block">{formatCurrency(totalPagadoEfectivo)}</span>
+                                  <span className="text-[10px] text-gray-500 dark:text-gray-400 block mt-0.5">
+                                    {pagadosItems.length} pagado(s) con {pagadosItems[0]?.metodo_pago ? getMetodoPagoLabel(pagadosItems[0].metodo_pago) : 'Banco/Tarjeta'}
+                                  </span>
+                                </div>
+                              </div>
+
+                              <div className="bg-gray-50 dark:bg-gray-800/60 p-2.5 rounded-xl text-xs text-gray-700 dark:text-gray-300 flex items-center justify-between flex-wrap gap-2 border border-gray-200 dark:border-gray-700/60">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-base">💡</span>
+                                  <span>
+                                    <strong>Fórmula de Cuadre:</strong> Facturado (<strong>{formatCurrency(totalFacturadoBruto)}</strong>) {totalCondonacion > 0 ? <>— Condonación (<strong>-{formatCurrency(totalCondonacion)}</strong>)</> : ''} {totalPpd > 0 ? <>— PPD (<strong>-{formatCurrency(totalPpd)}</strong>)</> : ''} = <strong>{formatCurrency(totalPagadoEfectivo)}</strong> cobrado en tu Estado de Cuenta.
+                                  </span>
+                                </div>
+                                <span className="px-2 py-0.5 bg-emerald-600 text-white rounded-lg text-[10px] font-bold font-mono">
+                                  Cuadre Banco: {formatCurrency(totalPagadoEfectivo)}
+                                </span>
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+
+                        {hijos.map(h => (
+                          <tr key={h.id} className="bg-indigo-50/20 dark:bg-indigo-950/20 border-l-4 border-indigo-500 transition-colors">
+                            {/* Fecha */}
+                            <td className="p-3 pl-8 font-mono text-gray-500 dark:text-gray-400 whitespace-nowrap">
+                              {formatDate(h.fecha_timbrado || h.fecha_gasto)}
+                            </td>
+
+                            {/* UUID / Detalle */}
+                            <td className="p-3 font-mono">
+                              <div className="text-gray-600 dark:text-gray-400 font-semibold tracking-tight">
+                                {h.uuid_fiscal ? h.uuid_fiscal : <span className="text-gray-400 italic">N/A</span>}
+                              </div>
+                              <div className="text-[10px] text-gray-400 mt-0.5 flex items-center gap-1 flex-wrap">
+                                <span className="truncate max-w-[200px]">{h.concepto}</span>
+                                {String(h.metodo_pago || '').includes('15') && (
+                                  <span className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-300 uppercase">
+                                    🎁 Condonación
+                                  </span>
+                                )}
+                                {String(h.metodo_pago || '').includes('99') && (
+                                  <span className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-purple-100 dark:bg-purple-900/40 text-purple-800 dark:text-purple-300 uppercase">
+                                    ⏳ PPD (Por definir)
+                                  </span>
+                                )}
+                                {!String(h.metodo_pago || '').includes('15') && !String(h.metodo_pago || '').includes('99') && (
+                                  <span className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-indigo-100/60 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-400 uppercase">
+                                    Parcialidad / REP
+                                  </span>
+                                )}
+                              </div>
+                            </td>
 
                       {/* Proveedor */}
                       <td className="p-3 text-gray-500 dark:text-gray-450">
@@ -1143,7 +1349,9 @@ export default function EgresosTab({
                               childGasto: h,
                               searchParent: '',
                               selectedParentIds: h.gasto_padre_id ? [h.gasto_padre_id] : [],
-                              loading: false
+                              loading: false,
+                              soloMesActual: true,
+                              modoAgrupacion: 'este_es_hijo'
                             })}
                             title="Vincular a Gasto Principal / Parcialidad"
                             className="p-1 rounded text-gray-500 hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 transition-colors"
@@ -1170,7 +1378,10 @@ export default function EgresosTab({
                       </td>
                     </tr>
                   ))}
-                </React.Fragment>
+                </>
+              );
+            })()}
+          </React.Fragment>
               );
             })}
             {visible.length === 0 && (
@@ -1284,7 +1495,7 @@ export default function EgresosTab({
                 </p>
               </div>
               <button 
-                onClick={() => setAssociationModal({ isOpen: false, childGasto: null, searchParent: '', selectedParentIds: [], loading: false })}
+                onClick={() => setAssociationModal({ isOpen: false, childGasto: null, searchParent: '', selectedParentIds: [], loading: false, soloMesActual: true, modoAgrupacion: 'este_es_padre' })}
                 className="p-1.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
               >
                 <Plus className="rotate-45" size={18} />
@@ -1296,7 +1507,7 @@ export default function EgresosTab({
               
               {/* Información del Gasto Seleccionado */}
               <div className="p-3.5 bg-gray-50 dark:bg-gray-900/40 border border-gray-150 dark:border-gray-850 rounded-xl space-y-2">
-                <span className="text-[10px] font-extrabold uppercase text-gray-400 dark:text-gray-500 tracking-wider block">Gasto Seleccionado (Hijo)</span>
+                <span className="text-[10px] font-extrabold uppercase text-gray-400 dark:text-gray-500 tracking-wider block">Gasto Base de la Operación</span>
                 <div className="flex justify-between items-start gap-4">
                   <div>
                     <h4 className="text-xs font-bold text-gray-800 dark:text-gray-200">{associationModal.childGasto.concepto}</h4>
@@ -1312,14 +1523,85 @@ export default function EgresosTab({
                 </div>
               </div>
 
-              {/* Input de Búsqueda de Padre */}
+              {/* Selector de Modo de Agrupación (Dirección) */}
               <div className="space-y-1.5">
-                <label className="text-[10px] font-extrabold text-gray-500 dark:text-gray-400 uppercase tracking-wider block">Buscar Facturas Principales</label>
+                <label className="text-[10px] font-extrabold text-gray-500 dark:text-gray-400 uppercase tracking-wider block">
+                  ¿Cómo deseas agrupar estas facturas?
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setAssociationModal(prev => ({ ...prev, modoAgrupacion: 'este_es_padre' }))}
+                    className={`p-2.5 rounded-xl text-left transition-all border cursor-pointer ${
+                      associationModal.modoAgrupacion === 'este_es_padre'
+                        ? 'bg-indigo-50 dark:bg-indigo-950/40 border-indigo-500 text-indigo-900 dark:text-indigo-200 ring-2 ring-indigo-500/30'
+                        : 'bg-white dark:bg-gray-900 border-gray-200 dark:border-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-50'
+                    }`}
+                  >
+                    <div className="font-bold flex items-center gap-1.5 text-indigo-600 dark:text-indigo-400">
+                      <span>👑</span> Factura Principal (Recomendado)
+                    </div>
+                    <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-1 leading-relaxed">
+                      Hacer de este gasto (<strong>{formatCurrency(associationModal.childGasto.monto)}</strong>) el <strong>Padre</strong> y agrupar las seleccionadas como sus parcialidades.
+                    </p>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setAssociationModal(prev => ({ ...prev, modoAgrupacion: 'este_es_hijo' }))}
+                    className={`p-2.5 rounded-xl text-left transition-all border cursor-pointer ${
+                      associationModal.modoAgrupacion === 'este_es_hijo'
+                        ? 'bg-indigo-50 dark:bg-indigo-950/40 border-indigo-500 text-indigo-900 dark:text-indigo-200 ring-2 ring-indigo-500/30'
+                        : 'bg-white dark:bg-gray-900 border-gray-200 dark:border-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-50'
+                    }`}
+                  >
+                    <div className="font-bold flex items-center gap-1.5 text-indigo-600 dark:text-indigo-400">
+                      <span>📎</span> Parcialidad / Hijo
+                    </div>
+                    <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-1 leading-relaxed">
+                      Meter este gasto (<strong>{formatCurrency(associationModal.childGasto.monto)}</strong>) como <strong>hijo</strong> de la factura que selecciones abajo.
+                    </p>
+                  </button>
+                </div>
+              </div>
+
+              {/* Input de Búsqueda y Selector de Periodo */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-[10px] font-extrabold text-gray-500 dark:text-gray-400 uppercase tracking-wider block">
+                    Buscar Facturas para Agrupar
+                  </label>
+                  <div className="flex items-center gap-1 bg-gray-100 dark:bg-gray-800 p-0.5 rounded-lg text-[10px] font-bold">
+                    <button
+                      type="button"
+                      onClick={() => setAssociationModal(prev => ({ ...prev, soloMesActual: true }))}
+                      className={`px-2 py-0.5 rounded-md transition-all ${
+                        associationModal.soloMesActual
+                          ? 'bg-white dark:bg-gray-900 text-indigo-600 dark:text-indigo-400 shadow-2xs font-black'
+                          : 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'
+                      }`}
+                    >
+                      📅 Mes actual {selectedMonth ? `(${selectedMonth})` : ''}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setAssociationModal(prev => ({ ...prev, soloMesActual: false }))}
+                      className={`px-2 py-0.5 rounded-md transition-all ${
+                        !associationModal.soloMesActual
+                          ? 'bg-white dark:bg-gray-900 text-indigo-600 dark:text-indigo-400 shadow-2xs font-black'
+                          : 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'
+                      }`}
+                    >
+                      🌐 Todo el año / Histórico
+                    </button>
+                  </div>
+                </div>
+
                 <div className="relative">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" size={14} />
                   <input
                     type="text"
-                    placeholder="Filtrar por concepto, monto, UUID o proveedor..."
+                    placeholder="Filtrar por concepto, monto, UUID, folio o proveedor..."
                     value={associationModal.searchParent}
                     onChange={(e) => setAssociationModal(prev => ({ ...prev, searchParent: e.target.value }))}
                     className="w-full bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 pl-9 pr-3 py-2 rounded-lg text-xs outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 transition-all font-semibold"
@@ -1331,7 +1613,7 @@ export default function EgresosTab({
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between">
                   <label className="text-[10px] font-extrabold text-gray-500 dark:text-gray-400 uppercase tracking-wider block">
-                    Seleccionar del Listado (Selección Múltiple)
+                    Seleccionar del Listado ({parentCandidates.length} disponibles)
                   </label>
                   {parentCandidates.length > 0 && (
                     <button
@@ -1358,12 +1640,22 @@ export default function EgresosTab({
                 {associationModal.selectedParentIds.length > 0 && (() => {
                   const selectedGastos = gastosFacturados.filter(g => associationModal.selectedParentIds.includes(g.id));
                   const totalSum = selectedGastos.reduce((s, g) => s + Number(g.monto || 0), 0);
+                  const childMonto = Number(associationModal.childGasto?.monto || 0);
+
                   return (
-                    <div className="p-2.5 bg-indigo-50 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800/50 rounded-xl flex justify-between items-center text-xs font-semibold text-indigo-900 dark:text-indigo-300">
-                      <span>Seleccionados ({associationModal.selectedParentIds.length} facturas):</span>
-                      <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400">
-                        -{formatCurrency(totalSum)}
-                      </span>
+                    <div className="p-2.5 bg-indigo-50 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800/50 rounded-xl space-y-1 text-xs font-semibold text-indigo-900 dark:text-indigo-300">
+                      <div className="flex justify-between items-center">
+                        <span>Facturas seleccionadas ({associationModal.selectedParentIds.length}):</span>
+                        <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400">
+                          -{formatCurrency(totalSum)}
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center text-[11px] pt-1 border-t border-indigo-200/60 dark:border-indigo-800/60">
+                        <span>{associationModal.modoAgrupacion === 'este_es_padre' ? 'Factura Principal (Padre):' : 'Factura a vincular (Hijo):'}</span>
+                        <span className="font-mono text-emerald-600 dark:text-emerald-400 font-bold">
+                          -{formatCurrency(childMonto)}
+                        </span>
+                      </div>
                     </div>
                   );
                 })()}
@@ -1396,7 +1688,14 @@ export default function EgresosTab({
                           <div className="space-y-0.5 min-w-0">
                             <p className="text-gray-800 dark:text-gray-200 truncate font-semibold">{p.concepto}</p>
                             <p className="text-[10px] text-gray-400 truncate font-mono">UUID: {p.uuid_fiscal ? `${p.uuid_fiscal.substring(0, 13)}...` : 'Sin UUID'}</p>
-                            <p className="text-[10px] text-gray-500 font-semibold">{p.proveedores?.nombre_comercial}</p>
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <p className="text-[10px] text-gray-500 font-semibold">{p.proveedores?.nombre_comercial}</p>
+                              {p.gasto_padre_id && (
+                                <span className="px-1.5 py-0.2 rounded text-[8px] font-bold bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400">
+                                  🔗 Se reasignará
+                                </span>
+                              )}
+                            </div>
                           </div>
                         </div>
                         <div className="text-right shrink-0">
@@ -1407,7 +1706,9 @@ export default function EgresosTab({
                     );
                   })}
                   {parentCandidates.length === 0 && (
-                    <p className="p-4 text-center text-xs text-gray-400 italic bg-gray-50/50 dark:bg-gray-900/20">No se encontraron facturas candidatas</p>
+                    <p className="p-4 text-center text-xs text-gray-400 italic bg-gray-50/50 dark:bg-gray-900/20">
+                      No se encontraron facturas candidatas {associationModal.soloMesActual ? 'en este mes. Prueba cambiando a "Todo el año / Histórico".' : '.'}
+                    </p>
                   )}
                 </div>
               </div>
@@ -1431,7 +1732,7 @@ export default function EgresosTab({
               <div className="flex gap-2">
                 <button
                   type="button"
-                  onClick={() => setAssociationModal({ isOpen: false, childGasto: null, searchParent: '', selectedParentIds: [], loading: false })}
+                  onClick={() => setAssociationModal({ isOpen: false, childGasto: null, searchParent: '', selectedParentIds: [], loading: false, soloMesActual: true, modoAgrupacion: 'este_es_padre' })}
                   disabled={associationModal.loading}
                   className="px-4 py-2 rounded-xl text-xs font-bold text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors disabled:opacity-50"
                 >
@@ -1445,7 +1746,9 @@ export default function EgresosTab({
                 >
                   {associationModal.loading 
                     ? 'Guardando...' 
-                    : `Confirmar Asociación (${associationModal.selectedParentIds.length})`}
+                    : associationModal.modoAgrupacion === 'este_es_padre'
+                      ? `Agrupar ${associationModal.selectedParentIds.length} factura(s) bajo esta`
+                      : `Confirmar Asociación (${associationModal.selectedParentIds.length})`}
                 </button>
               </div>
             </div>

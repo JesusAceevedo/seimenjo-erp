@@ -74,6 +74,7 @@ export default function DashboardTab({
   // Filters
   const [filtroDepto, setFiltroDepto] = useState<string>('');
   const [filtroPuesto, setFiltroPuesto] = useState<string>('');
+  const [filtroEstado, setFiltroEstado] = useState<'activos' | 'inactivos' | 'todos'>('activos');
 
   const empleadosConPuesto = useMemo(() => empleados.map(emp => {
     const puesto = puestos.find(p => p.id === emp.puesto_id);
@@ -82,14 +83,35 @@ export default function DashboardTab({
   }), [empleados, puestos, departamentos]);
 
   const filteredStats = useMemo(() => {
-    return dashboardStats.filter(s => {
+    // 1. Filtrar por estado (activos por defecto para ocultar dados de baja)
+    let stats = dashboardStats.filter(s => {
+      const isActivo = s.empleado.activo !== false;
+      if (filtroEstado === 'activos' && !isActivo) return false;
+      if (filtroEstado === 'inactivos' && isActivo) return false;
+      return true;
+    });
+
+    // 2. Filtrar por depto y puesto
+    stats = stats.filter(s => {
       const emp = empleadosConPuesto.find(e => e.id === s.empleado.id);
       if (!emp) return true;
       if (filtroDepto && emp.depto?.id !== filtroDepto) return false;
       if (filtroPuesto && emp.puesto?.id !== filtroPuesto) return false;
       return true;
     });
-  }, [dashboardStats, filtroDepto, filtroPuesto, empleadosConPuesto]);
+
+    // 3. Deduplicar por nombre normalizado (si hay duplicados, conserva el primero/activo)
+    const seen = new Set<string>();
+    return stats.filter(s => {
+      const normName = (s.empleado.nombre_completo || `${s.empleado.primer_nombre} ${s.empleado.primer_apellido}`)
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, ' ');
+      if (seen.has(normName)) return false;
+      seen.add(normName);
+      return true;
+    });
+  }, [dashboardStats, filtroDepto, filtroPuesto, filtroEstado, empleadosConPuesto]);
 
   // Metrics
   const totalFaltas = filteredStats.reduce((a, c) => a + c.faltas, 0);
@@ -137,14 +159,14 @@ export default function DashboardTab({
           <button
             onClick={() => setShowFilters(!showFilters)}
             className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all border ${
-              showFilters || filtroDepto || filtroPuesto
+              showFilters || filtroDepto || filtroPuesto || filtroEstado !== 'activos'
                 ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/30'
                 : 'bg-gray-50 dark:bg-gray-900 text-gray-700 dark:text-gray-200 border-gray-200 dark:border-gray-800 hover:bg-gray-100 dark:hover:bg-gray-800'
             }`}
           >
             <Filter size={15} />
             <span>{showFilters ? 'Ocultar Filtros' : 'Mostrar Filtros'}</span>
-            {(filtroDepto || filtroPuesto) && (
+            {(filtroDepto || filtroPuesto || filtroEstado !== 'activos') && (
               <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
             )}
           </button>
@@ -153,9 +175,9 @@ export default function DashboardTab({
           </span>
         </div>
 
-        {(filtroDepto || filtroPuesto) && (
+        {(filtroDepto || filtroPuesto || filtroEstado !== 'activos') && (
           <button
-            onClick={() => { setFiltroDepto(''); setFiltroPuesto(''); }}
+            onClick={() => { setFiltroDepto(''); setFiltroPuesto(''); setFiltroEstado('activos'); }}
             className="text-[11px] text-amber-600 dark:text-amber-400 hover:underline font-semibold"
           >
             Restablecer Filtros
@@ -177,6 +199,12 @@ export default function DashboardTab({
             </div>
             <div className="flex items-center gap-2 border-l border-gray-200 dark:border-gray-800 pl-3">
               <Filter size={14} className="text-gray-400" />
+              <select value={filtroEstado} onChange={e => setFiltroEstado(e.target.value as any)}
+                className="px-2.5 py-1.5 rounded-lg border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-900 text-xs focus:outline-none focus:ring-1 focus:ring-amber-500 font-semibold text-gray-700 dark:text-gray-200">
+                <option value="activos">Solo Activos (predeterminado)</option>
+                <option value="inactivos">Dados de Baja</option>
+                <option value="todos">Todos (Activos y Bajas)</option>
+              </select>
               <select value={filtroDepto} onChange={e => { setFiltroDepto(e.target.value); setFiltroPuesto(''); }}
                 className="px-2.5 py-1.5 rounded-lg border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-900 text-xs focus:outline-none focus:ring-1 focus:ring-amber-500 font-semibold">
                 <option value="">Todos los Departamentos</option>
@@ -283,7 +311,12 @@ export default function DashboardTab({
                   return (
                     <tr key={idx} className="hover:bg-gray-50 dark:hover:bg-gray-900/10">
                       <td className="p-3">
-                        <span className="font-semibold text-gray-900 dark:text-white block">{stat.empleado.nombre_completo}</span>
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-semibold text-gray-900 dark:text-white block">{stat.empleado.nombre_completo}</span>
+                          {stat.empleado.activo === false && (
+                            <span className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-rose-500/10 text-rose-600 border border-rose-500/20">Baja</span>
+                          )}
+                        </div>
                         <span className="text-[10px] text-gray-400">{emp?.depto?.nombre || ''}</span>
                       </td>
                       <td className="p-3 text-gray-500">{emp?.puesto?.nombre || '—'}</td>

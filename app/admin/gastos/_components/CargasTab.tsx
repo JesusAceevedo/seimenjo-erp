@@ -20,7 +20,10 @@ import {
   Download,
   Tag,
   CalendarDays,
-  Edit2
+  Edit2,
+  ArrowUp,
+  ArrowDown,
+  ArrowUpDown
 } from 'lucide-react';
 import { 
   obtenerCargasEstadosCuenta, 
@@ -66,6 +69,61 @@ export function CargasTab({
   const [selectedCargaDetail, setSelectedCargaDetail] = useState<any | null>(null);
   const [cargaMovimientos, setCargaMovimientos] = useState<any[]>([]);
   const [loadingDetail, setLoadingDetail] = useState(false);
+  const [detailSortColumn, setDetailSortColumn] = useState<'fecha' | 'concepto' | 'referencia' | 'monto' | 'estatus'>('referencia');
+  const [detailSortDirection, setDetailSortDirection] = useState<'asc' | 'desc'>('asc');
+
+  const handleSortDetail = (column: 'fecha' | 'concepto' | 'referencia' | 'monto' | 'estatus') => {
+    if (detailSortColumn === column) {
+      setDetailSortDirection(prev => prev === 'asc' ? 'desc' : 'asc');
+    } else {
+      setDetailSortColumn(column);
+      setDetailSortDirection('asc');
+    }
+  };
+
+  const sortedCargaMovimientos = React.useMemo(() => {
+    if (!cargaMovimientos || cargaMovimientos.length === 0) return [];
+    const list = [...cargaMovimientos];
+
+    list.sort((a, b) => {
+      let comparison = 0;
+
+      if (detailSortColumn === 'referencia') {
+        const refA = String(a.referencia || '').trim();
+        const refB = String(b.referencia || '').trim();
+        if (!refA && !refB) comparison = 0;
+        else if (!refA) comparison = 1;
+        else if (!refB) comparison = -1;
+        else {
+          comparison = refA.localeCompare(refB, undefined, { numeric: true, sensitivity: 'base' });
+        }
+      } else if (detailSortColumn === 'fecha') {
+        const dateA = a.fecha ? new Date(a.fecha).getTime() : 0;
+        const dateB = b.fecha ? new Date(b.fecha).getTime() : 0;
+        comparison = dateA - dateB;
+      } else if (detailSortColumn === 'concepto') {
+        const concA = String(a.concepto || '').trim();
+        const concB = String(b.concepto || '').trim();
+        comparison = concA.localeCompare(concB, undefined, { sensitivity: 'base' });
+      } else if (detailSortColumn === 'monto') {
+        const valA = Number(a.monto) || 0;
+        const valB = Number(b.monto) || 0;
+        comparison = valA - valB;
+      } else if (detailSortColumn === 'estatus') {
+        const estA = String(a.estatus_conciliacion_bancaria?.nombre || 'Pendiente');
+        const estB = String(b.estatus_conciliacion_bancaria?.nombre || 'Pendiente');
+        comparison = estA.localeCompare(estB);
+      }
+
+      if (comparison === 0) {
+        comparison = (a.id || '').localeCompare(b.id || '');
+      }
+
+      return detailSortDirection === 'asc' ? comparison : -comparison;
+    });
+
+    return list;
+  }, [cargaMovimientos, detailSortColumn, detailSortDirection]);
 
   // Estado para modal de confirmación de eliminación
   const [cargaToDelete, setCargaToDelete] = useState<any | null>(null);
@@ -406,6 +464,8 @@ export function CargasTab({
 
   const handleOpenDetail = async (carga: any) => {
     setSelectedCargaDetail(carga);
+    setDetailSortColumn('referencia');
+    setDetailSortDirection('asc');
     setLoadingDetail(true);
     try {
       const activeToken = token || await getSessionToken();
@@ -1134,17 +1194,84 @@ export function CargasTab({
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full text-left text-xs">
-                    <thead className="bg-gray-100 dark:bg-gray-800/80 uppercase font-bold text-[10px] text-gray-500">
+                    <thead className="bg-gray-100 dark:bg-gray-800/80 uppercase font-bold text-[10px] text-gray-500 select-none">
                       <tr>
-                        <th className="p-3">Fecha</th>
-                        <th className="p-3">Concepto</th>
-                        <th className="p-3">Referencia</th>
-                        <th className="p-3 text-right">Monto ($)</th>
-                        <th className="p-3">Estatus Conciliación</th>
+                        <th 
+                          onClick={() => handleSortDetail('fecha')}
+                          className="p-3 cursor-pointer hover:text-amber-600 dark:hover:text-amber-400 transition-colors"
+                          title="Ordenar por fecha"
+                        >
+                          <div className="flex items-center gap-1">
+                            <span>Fecha</span>
+                            {detailSortColumn === 'fecha' ? (
+                              detailSortDirection === 'asc' ? <ArrowUp size={12} className="text-amber-500" /> : <ArrowDown size={12} className="text-amber-500" />
+                            ) : (
+                              <ArrowUpDown size={11} className="opacity-40" />
+                            )}
+                          </div>
+                        </th>
+                        <th 
+                          onClick={() => handleSortDetail('concepto')}
+                          className="p-3 cursor-pointer hover:text-amber-600 dark:hover:text-amber-400 transition-colors"
+                          title="Ordenar por concepto"
+                        >
+                          <div className="flex items-center gap-1">
+                            <span>Concepto</span>
+                            {detailSortColumn === 'concepto' ? (
+                              detailSortDirection === 'asc' ? <ArrowUp size={12} className="text-amber-500" /> : <ArrowDown size={12} className="text-amber-500" />
+                            ) : (
+                              <ArrowUpDown size={11} className="opacity-40" />
+                            )}
+                          </div>
+                        </th>
+                        <th 
+                          onClick={() => handleSortDetail('referencia')}
+                          className={`p-3 cursor-pointer hover:text-amber-600 dark:hover:text-amber-400 transition-colors ${
+                            detailSortColumn === 'referencia' ? 'text-amber-600 dark:text-amber-400 bg-amber-500/5' : ''
+                          }`}
+                          title="Ordenar por referencia"
+                        >
+                          <div className="flex items-center gap-1">
+                            <span>Referencia</span>
+                            {detailSortColumn === 'referencia' ? (
+                              detailSortDirection === 'asc' ? <ArrowUp size={12} className="text-amber-500" /> : <ArrowDown size={12} className="text-amber-500" />
+                            ) : (
+                              <ArrowUpDown size={11} className="opacity-40" />
+                            )}
+                          </div>
+                        </th>
+                        <th 
+                          onClick={() => handleSortDetail('monto')}
+                          className="p-3 text-right cursor-pointer hover:text-amber-600 dark:hover:text-amber-400 transition-colors"
+                          title="Ordenar por monto"
+                        >
+                          <div className="flex items-center justify-end gap-1">
+                            <span>Monto ($)</span>
+                            {detailSortColumn === 'monto' ? (
+                              detailSortDirection === 'asc' ? <ArrowUp size={12} className="text-amber-500" /> : <ArrowDown size={12} className="text-amber-500" />
+                            ) : (
+                              <ArrowUpDown size={11} className="opacity-40" />
+                            )}
+                          </div>
+                        </th>
+                        <th 
+                          onClick={() => handleSortDetail('estatus')}
+                          className="p-3 cursor-pointer hover:text-amber-600 dark:hover:text-amber-400 transition-colors"
+                          title="Ordenar por estatus de conciliación"
+                        >
+                          <div className="flex items-center gap-1">
+                            <span>Estatus Conciliación</span>
+                            {detailSortColumn === 'estatus' ? (
+                              detailSortDirection === 'asc' ? <ArrowUp size={12} className="text-amber-500" /> : <ArrowDown size={12} className="text-amber-500" />
+                            ) : (
+                              <ArrowUpDown size={11} className="opacity-40" />
+                            )}
+                          </div>
+                        </th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
-                      {cargaMovimientos.map((m) => (
+                      {sortedCargaMovimientos.map((m) => (
                         <tr key={m.id} className="hover:bg-gray-50 dark:hover:bg-gray-900 group">
                           <td className="p-3 whitespace-nowrap text-gray-700 dark:text-gray-300 font-mono">
                             {editingMovId === m.id ? (

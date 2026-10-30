@@ -63,7 +63,7 @@ export default function IncidenciasTab({ incidencias, empleados, empresaId, onSa
             <select required value={form.empleado_id} onChange={e => setForm({ ...form, empleado_id: e.target.value })}
               className="w-full px-3 py-2 rounded-lg bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 focus:outline-none">
               <option value="">Seleccionar...</option>
-              {empleados.map(e => <option key={e.id} value={e.id}>{e.nombre_completo}</option>)}
+              {empleados.filter(e => e.activo !== false).map(e => <option key={e.id} value={e.id}>{e.nombre_completo}</option>)}
             </select></div>
           <div><label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Tipo *</label>
             <select value={form.tipo_incidencia} onChange={e => setForm({ ...form, tipo_incidencia: e.target.value })}

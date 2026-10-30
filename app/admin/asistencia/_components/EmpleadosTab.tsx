@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { Users, FileText, CheckCircle } from 'lucide-react';
 import type { EmpleadoDetalle, Puesto, StaffMember, Departamento } from '../types';
-import { saveEmpleado, deleteEmpleado } from '../actions';
+import { saveEmpleado, deleteEmpleado, reactivarEmpleado, purgeEmpleado } from '../actions';
 import HorarioIndividualModal from './HorarioIndividualModal';
 
 interface Props {
@@ -20,6 +20,7 @@ interface Props {
 export default function EmpleadosTab({ empleados, puestos, staffList, departamentos, horariosEmpleados, turnos, empresaId, onSaved }: Props) {
   const [selected, setSelected] = useState<EmpleadoDetalle | null>(null);
   const [scheduleEmp, setScheduleEmp] = useState<EmpleadoDetalle | null>(null);
+  const [filtroEstado, setFiltroEstado] = useState<'activos' | 'inactivos' | 'todos'>('activos');
   const [form, setForm] = useState({
     usuario_staff_id: '', primer_apellido: '', segundo_apellido: '', primer_nombre: '', segundo_nombre: '',
     curp: '', rfc: '', nss: '', telefono: '', banco: '', cuenta_clabe: '',
@@ -105,12 +106,32 @@ export default function EmpleadosTab({ empleados, puestos, staffList, departamen
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm('¿Desactivar este empleado?')) return;
+    if (!confirm('¿Dar de baja a este empleado?')) return;
     try {
       await deleteEmpleado(id);
       onSaved();
     } catch (err: any) {
-      alert('Error: ' + err.message);
+      alert('Error al dar de baja: ' + err.message);
+    }
+  };
+
+  const handleReactivar = async (id: string) => {
+    if (!confirm('¿Reactivar este empleado?')) return;
+    try {
+      await reactivarEmpleado(id);
+      onSaved();
+    } catch (err: any) {
+      alert('Error al reactivar: ' + err.message);
+    }
+  };
+
+  const handlePurge = async (id: string, nombre: string) => {
+    if (!confirm(`¿Eliminar definitivamente a "${nombre}"?\nEsta acción es irreversible y borrará el registro de la base de datos.`)) return;
+    try {
+      await purgeEmpleado(id);
+      onSaved();
+    } catch (err: any) {
+      alert('Error al eliminar: ' + err.message);
     }
   };
 
@@ -237,51 +258,121 @@ export default function EmpleadosTab({ empleados, puestos, staffList, departamen
       </div>
 
       <div className="lg:col-span-2 bg-white dark:bg-gray-950 p-6 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-sm space-y-4">
-        <h3 className="text-sm font-bold text-gray-800 dark:text-gray-100 uppercase tracking-wide flex items-center gap-2">
-          <Users className="text-amber-500" size={18} /> Plantilla de Empleados
-        </h3>
-        <div className="overflow-hidden rounded-xl border border-gray-100 dark:border-gray-800">
-          <table className="w-full text-left text-xs">
-            <thead>
-              <tr className="bg-gray-100/60 dark:bg-gray-900/40 border-b border-gray-200 dark:border-gray-800 text-gray-500 font-semibold">
-                <th className="p-3">Nombre</th>
-                <th className="p-3">Puesto</th>
-                <th className="p-3">PIN</th>
-                <th className="p-3">Sueldo Mensual / Diario</th>
-                <th className="p-3">Depto</th>
-                <th className="p-3 text-right">Acciones</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100 dark:divide-gray-800/40">
-              {empleados.filter(e => e.activo !== false).map(emp => {
-                const puesto = puestos.find(p => p.id === emp.puesto_id);
-                const depto = departamentos.find(d => d.id === puesto?.departamento_id);
-                const diario = emp.sueldo_diario || 250;
-                const mensual = emp.sueldo_mensual !== undefined && emp.sueldo_mensual !== null
-                  ? emp.sueldo_mensual
-                  : Math.round(diario * 30);
-                return (
-                  <tr key={emp.id} className="hover:bg-gray-50 dark:hover:bg-gray-900/10">
-                    <td className="p-3 font-semibold text-gray-900 dark:text-white">{emp.nombre_completo}</td>
-                    <td className="p-3 text-gray-600 dark:text-gray-300">{puesto?.nombre || 'Sin Puesto'}</td>
-                    <td className="p-3 font-mono text-gray-500">{emp.zkteco_user_id || 'N/A'}</td>
-                    <td className="p-3">
-                      <div className="font-bold text-emerald-600 dark:text-emerald-400">${mensual.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}/mes</div>
-                      <div className="text-[10px] text-gray-400">${diario}/día</div>
-                    </td>
-                    <td className="p-3 text-gray-400 text-[10px]">{depto?.nombre || '-'}</td>
-                    <td className="p-3 text-right space-x-1">
-                      <button onClick={() => handleEdit(emp)} className="px-2.5 py-1 bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20 rounded font-semibold text-[10px] transition-colors">Editar</button>
-                      <button onClick={() => setScheduleEmp(emp)} className="px-2.5 py-1 bg-blue-500/10 text-blue-600 dark:text-blue-400 hover:bg-blue-500/20 rounded font-semibold text-[10px] transition-colors">Horario</button>
-                      <button onClick={() => handleDelete(emp.id)} className="px-2.5 py-1 bg-rose-500/10 text-rose-600 dark:text-rose-400 hover:bg-rose-500/20 rounded font-semibold text-[10px] transition-colors">Baja</button>
-                    </td>
-                  </tr>
-                );
-              })}
-              {empleados.length === 0 && <tr><td colSpan={6} className="p-4 text-center text-gray-400 italic">No hay empleados registrados</td></tr>}
-            </tbody>
-          </table>
-        </div>
+        {(() => {
+          const activosCount = empleados.filter(e => e.activo !== false).length;
+          const inactivosCount = empleados.filter(e => e.activo === false).length;
+          const displayedEmpleados = empleados.filter(e => {
+            if (filtroEstado === 'activos') return e.activo !== false;
+            if (filtroEstado === 'inactivos') return e.activo === false;
+            return true;
+          });
+
+          return (
+            <>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <h3 className="text-sm font-bold text-gray-800 dark:text-gray-100 uppercase tracking-wide flex items-center gap-2">
+                  <Users className="text-amber-500" size={18} /> Plantilla de Empleados
+                </h3>
+                <div className="flex items-center gap-1 bg-gray-100 dark:bg-gray-900 p-1 rounded-xl text-xs font-semibold">
+                  <button
+                    type="button"
+                    onClick={() => setFiltroEstado('activos')}
+                    className={`px-3 py-1 rounded-lg transition-all ${
+                      filtroEstado === 'activos'
+                        ? 'bg-white dark:bg-gray-800 shadow-sm text-amber-600 dark:text-amber-400 font-bold'
+                        : 'text-gray-500 hover:text-gray-800 dark:hover:text-gray-200'
+                    }`}
+                  >
+                    Activos ({activosCount})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFiltroEstado('inactivos')}
+                    className={`px-3 py-1 rounded-lg transition-all ${
+                      filtroEstado === 'inactivos'
+                        ? 'bg-white dark:bg-gray-800 shadow-sm text-rose-600 dark:text-rose-400 font-bold'
+                        : 'text-gray-500 hover:text-gray-800 dark:hover:text-gray-200'
+                    }`}
+                  >
+                    Dados de Baja ({inactivosCount})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFiltroEstado('todos')}
+                    className={`px-3 py-1 rounded-lg transition-all ${
+                      filtroEstado === 'todos'
+                        ? 'bg-white dark:bg-gray-800 shadow-sm text-blue-600 dark:text-blue-400 font-bold'
+                        : 'text-gray-500 hover:text-gray-800 dark:hover:text-gray-200'
+                    }`}
+                  >
+                    Todos ({empleados.length})
+                  </button>
+                </div>
+              </div>
+              <div className="overflow-hidden rounded-xl border border-gray-100 dark:border-gray-800">
+                <table className="w-full text-left text-xs">
+                  <thead>
+                    <tr className="bg-gray-100/60 dark:bg-gray-900/40 border-b border-gray-200 dark:border-gray-800 text-gray-500 font-semibold">
+                      <th className="p-3">Nombre</th>
+                      <th className="p-3">Puesto</th>
+                      <th className="p-3">PIN</th>
+                      <th className="p-3">Sueldo Mensual / Diario</th>
+                      <th className="p-3">Depto</th>
+                      <th className="p-3 text-right">Acciones</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100 dark:divide-gray-800/40">
+                    {displayedEmpleados.map(emp => {
+                      const puesto = puestos.find(p => p.id === emp.puesto_id);
+                      const depto = departamentos.find(d => d.id === puesto?.departamento_id);
+                      const diario = emp.sueldo_diario || 250;
+                      const mensual = emp.sueldo_mensual !== undefined && emp.sueldo_mensual !== null
+                        ? emp.sueldo_mensual
+                        : Math.round(diario * 30);
+                      const isBaja = emp.activo === false;
+                      return (
+                        <tr key={emp.id} className="hover:bg-gray-50 dark:hover:bg-gray-900/10">
+                          <td className="p-3">
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-semibold text-gray-900 dark:text-white block">{emp.nombre_completo}</span>
+                              {isBaja && (
+                                <span className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-rose-500/10 text-rose-600 border border-rose-500/20">Baja</span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="p-3 text-gray-600 dark:text-gray-300">{puesto?.nombre || 'Sin Puesto'}</td>
+                          <td className="p-3 font-mono text-gray-500">{emp.zkteco_user_id || 'N/A'}</td>
+                          <td className="p-3">
+                            <div className="font-bold text-emerald-600 dark:text-emerald-400">${mensual.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}/mes</div>
+                            <div className="text-[10px] text-gray-400">${diario}/día</div>
+                          </td>
+                          <td className="p-3 text-gray-400 text-[10px]">{depto?.nombre || '-'}</td>
+                          <td className="p-3 text-right space-x-1">
+                            <button onClick={() => handleEdit(emp)} className="px-2.5 py-1 bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20 rounded font-semibold text-[10px] transition-colors">Editar</button>
+                            {!isBaja ? (
+                              <>
+                                <button onClick={() => setScheduleEmp(emp)} className="px-2.5 py-1 bg-blue-500/10 text-blue-600 dark:text-blue-400 hover:bg-blue-500/20 rounded font-semibold text-[10px] transition-colors">Horario</button>
+                                <button onClick={() => handleDelete(emp.id)} className="px-2.5 py-1 bg-rose-500/10 text-rose-600 dark:text-rose-400 hover:bg-rose-500/20 rounded font-semibold text-[10px] transition-colors">Baja</button>
+                              </>
+                            ) : (
+                              <>
+                                <button onClick={() => handleReactivar(emp.id)} className="px-2.5 py-1 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20 rounded font-semibold text-[10px] transition-colors">Reactivar</button>
+                                <button onClick={() => handlePurge(emp.id, emp.nombre_completo || '')} className="px-2.5 py-1 bg-rose-500/10 text-rose-600 dark:text-rose-400 hover:bg-rose-500/20 rounded font-semibold text-[10px] transition-colors">Eliminar</button>
+                              </>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {displayedEmpleados.length === 0 && (
+                      <tr><td colSpan={6} className="p-4 text-center text-gray-400 italic">No hay empleados para este filtro</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          );
+        })()}
       </div>
 
       {scheduleEmp && (

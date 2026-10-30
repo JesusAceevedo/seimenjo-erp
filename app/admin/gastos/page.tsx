@@ -235,7 +235,7 @@ export default function EgresosModule() {
       // 7. Gastos reconciliables
       const { data: gReconcile } = await supabase
         .from('gastos')
-        .select('id, concepto, monto, fecha_gasto, xml_url, pdf_url, ticket_url, metodo_pago, proveedores(nombre_comercial, rfc)')
+        .select('id, concepto, monto, fecha_gasto, xml_url, pdf_url, ticket_url, metodo_pago, uuid_fiscal, gasto_padre_id, folio_factura, subtotal, iva_acreditable, proveedores(nombre_comercial, rfc)')
         .eq('empresa_id', empresaId)
         .is('movimiento_bancario_id', null)
         .is('gasto_padre_id', null)
@@ -570,6 +570,19 @@ export default function EgresosModule() {
     });
   }, [movimientosEgresos, selectedMonth]);
 
+  const noDeduciblesCount = useMemo(() => {
+    return movimientosBancarios.filter((m: any) => {
+      const rawType = (m.tipo_movimiento || '').toLowerCase();
+      const isOutflow = rawType === 'retiro' || rawType === 'cargo' || rawType === 'egreso' || Number(m.retiro || 0) > 0 || (Number(m.monto || 0) < 0) || m.tipo_movimiento === 'Retiro';
+      if (!isOutflow) return false;
+      const clave = m.estatus_conciliacion_bancaria?.clave;
+      const hasPostCloseNote = m.comentarios?.includes('Conciliado después del periodo de cierre');
+      const isNoDeducibleStatus = clave === 'no_deducible' || clave === 'pendiente';
+      const hasMissingProof = !m.xml_url && !m.pdf_factura_url && !m.pdf_ticket_url && !m.soporte_reembolso_url;
+      return isNoDeducibleStatus || hasMissingProof || hasPostCloseNote;
+    }).length;
+  }, [movimientosBancarios]);
+
   const comprobantesForSelectedMonth = useMemo(() => {
     return comprobantes.filter(c => {
       if (!selectedMonth) return true;
@@ -666,7 +679,7 @@ export default function EgresosModule() {
                 : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-900'
             }`}
           >
-            <Tag size={15} /> ⚠️ No Deducibles (Atemporal)
+            <Tag size={15} /> ⚠️ No Deducibles (Atemporal) ({noDeduciblesCount})
           </button>
         </div>
 
@@ -741,9 +754,9 @@ export default function EgresosModule() {
                     onSincronizarPagos={async () => {
                       try {
                         const token = await getSessionToken();
-                        const res = await sincronizarMetodosPagoXml(token);
+                        const res = await sincronizarMetodosPagoXml(token, selectedMonth);
                         if (res.success) {
-                          alert(`Sincronización terminada. Se corrigieron ${res.count} registros.`);
+                          alert(`Sincronización terminada para ${selectedMonth || 'el periodo'}. Se verificaron todos los XMLs del mes y se corrigieron ${res.count} registros.`);
                           await fetchData();
                         } else {
                           throw new Error(res.error);

@@ -1571,66 +1571,85 @@ function mapFormaPagoCodeToMetodo(code: string): string {
   return code ? code.trim().padStart(2, '0') : '99';
 }
 
-export async function sincronizarMetodosPagoXml(token?: string) {
+export async function sincronizarMetodosPagoXml(token?: string, mes?: string) {
   try {
     const { empresaId } = await getUserEmpresaId(token ?? '');
     const supabase = supabaseAdmin;
 
-    // Traer todos los gastos de la empresa que tienen XML
-    const { data: gastos, error } = await supabase
+    let query = supabase
       .from('gastos')
-      .select('id, metodo_pago, forma_pago_id, xml_url')
+      .select('id, metodo_pago, forma_pago_id, xml_url, fecha_gasto, fecha_timbrado')
       .eq('empresa_id', empresaId)
       .not('xml_url', 'is', null);
+
+    // Si se especifica mes (ej. '2026-10'), se verifican TODAS las facturas de ese mes para corregir cualquier discrepancia
+    if (mes && /^\d{4}-\d{2}$/.test(mes)) {
+      const [year, month] = mes.split('-').map(Number);
+      const lastDay = new Date(year, month, 0).getDate();
+      const startDate = `${mes}-01`;
+      const endDate = `${mes}-${String(lastDay).padStart(2, '0')}`;
+      query = query.gte('fecha_gasto', startDate).lte('fecha_gasto', endDate);
+    } else {
+      // Si no se especifica mes, revisar aquellas con método nulo o 99 para no saturar con el histórico completo
+      query = query.or('metodo_pago.is.null,metodo_pago.eq.99');
+    }
+
+    const { data: gastos, error } = await query;
 
     if (error) throw error;
     if (!gastos || gastos.length === 0) return { success: true, count: 0 };
 
     let corregidos = 0;
 
-    for (const g of gastos) {
-      if (!g.xml_url) continue;
-      const urls = g.xml_url.split(',').filter(Boolean);
-      if (urls.length === 0) continue;
+    // Procesar en lotes paralelos de 10 para máxima velocidad
+    const BATCH_SIZE = 10;
+    for (let i = 0; i < gastos.length; i += BATCH_SIZE) {
+      const batch = gastos.slice(i, i + BATCH_SIZE);
+      await Promise.all(
+        batch.map(async (g) => {
+          if (!g.xml_url) return;
+          const urls = g.xml_url.split(',').filter(Boolean);
+          if (urls.length === 0) return;
 
-      try {
-        let text = '';
-        if (urls[0].startsWith('http://') || urls[0].startsWith('https://')) {
-          const res = await fetch(urls[0]);
-          if (!res.ok) continue;
-          text = await res.text();
-        } else {
-          // Download directly from Supabase Storage
-          const { data: fileData, error: downloadErr } = await supabase.storage.from('facturas').download(urls[0]);
-          if (downloadErr || !fileData) {
-            console.error("Error downloading XML from storage for Gasto " + g.id, downloadErr);
-            continue;
+          try {
+            let text = '';
+            if (urls[0].startsWith('http://') || urls[0].startsWith('https://')) {
+              const res = await fetch(urls[0]);
+              if (!res.ok) return;
+              text = await res.text();
+            } else {
+              const { data: fileData, error: downloadErr } = await supabase.storage.from('facturas').download(urls[0]);
+              if (downloadErr || !fileData) {
+                console.error("Error downloading XML from storage for Gasto " + g.id, downloadErr);
+                return;
+              }
+              text = await fileData.text();
+            }
+
+            const formaPagoMatch = 
+              text.match(/FormaPago\s*=\s*['"]([^'"]+)['"]/i) || 
+              text.match(/formaDePago\s*=\s*['"]([^'"]+)['"]/i) ||
+              text.match(/FormaDePagoP\s*=\s*['"]([^'"]+)['"]/i) ||
+              text.match(/formaDePagoP\s*=\s*['"]([^'"]+)['"]/i);
+
+            if (formaPagoMatch && formaPagoMatch[1]) {
+              const codigo = formaPagoMatch[1];
+              const correcto = mapFormaPagoCodeToMetodo(codigo);
+              const formaPagoId = await getFormaPagoIdByCode(correcto);
+
+              if (correcto && (g.metodo_pago !== correcto || (formaPagoId && g.forma_pago_id !== formaPagoId))) {
+                await supabase.from('gastos').update({ 
+                  metodo_pago: correcto,
+                  forma_pago_id: formaPagoId || g.forma_pago_id
+                }).eq('id', g.id);
+                corregidos++;
+              }
+            }
+          } catch (e) {
+            console.error("Error procesando XML de gasto " + g.id, e);
           }
-          text = await fileData.text();
-        }
-
-        const formaPagoMatch = 
-          text.match(/FormaPago\s*=\s*['"]([^'"]+)['"]/i) || 
-          text.match(/formaDePago\s*=\s*['"]([^'"]+)['"]/i) ||
-          text.match(/FormaDePagoP\s*=\s*['"]([^'"]+)['"]/i) ||
-          text.match(/formaDePagoP\s*=\s*['"]([^'"]+)['"]/i);
-
-        if (formaPagoMatch && formaPagoMatch[1]) {
-          const codigo = formaPagoMatch[1];
-          const correcto = mapFormaPagoCodeToMetodo(codigo);
-          const formaPagoId = await getFormaPagoIdByCode(correcto);
-
-          if (correcto && (g.metodo_pago !== correcto || g.forma_pago_id !== formaPagoId)) {
-            await supabase.from('gastos').update({ 
-              metodo_pago: correcto,
-              forma_pago_id: formaPagoId
-            }).eq('id', g.id);
-            corregidos++;
-          }
-        }
-      } catch (e) {
-        console.error("Error procesando XML de gasto " + g.id, e);
-      }
+        })
+      );
     }
 
     return { success: true, count: corregidos };

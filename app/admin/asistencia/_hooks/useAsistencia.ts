@@ -120,8 +120,18 @@ export function useAsistencia() {
 
   const calculateRealtimePresencia = (rawLogs: ChecadaRaw[], employees: EmpleadoDetalle[]) => {
     const localTodayStr = new Date().toLocaleDateString('en-CA');
+    // Solo empleados activos y con PIN biométrico (excluyendo exentos) participan en presencia en tiempo real
+    const activeEmployees = employees.filter(e => e.activo !== false && e.zkteco_user_id && !e.exento_reloj_checador);
+    const seen = new Set<string>();
+    const uniqueEmployees = activeEmployees.filter(e => {
+      const key = e.zkteco_user_id || e.id;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
     const presenceMap = new Map<string, { lastCheck: string; status: 'PRESENTE' | 'AUSENTE'; log: any }>();
-    employees.forEach(emp => {
+    uniqueEmployees.forEach(emp => {
       if (emp.zkteco_user_id) {
         presenceMap.set(emp.zkteco_user_id, { lastCheck: '--:--', status: 'AUSENTE', log: null });
       }
@@ -165,7 +175,7 @@ export function useAsistencia() {
       });
     });
 
-    const list = employees.map(emp => {
+    const list = uniqueEmployees.map(emp => {
       const state = presenceMap.get(emp.zkteco_user_id) || { lastCheck: '--:--', status: 'AUSENTE', log: null };
       return { empleado: emp, ...state };
     });
@@ -212,7 +222,14 @@ export function useAsistencia() {
         const excRetardo = hasIncidence && hasIncidence.tipo_incidencia === 'justificacion_retardo';
         const excOmision = hasIncidence && (hasIncidence.tipo_incidencia === 'omision_entrada' || hasIncidence.tipo_incidencia === 'omision_salida' || hasIncidence.tipo_incidencia === 'justificacion_omision');
 
-        if (schedule && schedule.turno_id && !esDiaDescanso) {
+        if (emp.activo === false) {
+          dailyDetails.push({
+            date: dateStr,
+            status: 'Baja',
+            detail: 'Empleado dado de baja',
+            color: 'text-gray-400 bg-gray-50 dark:bg-gray-900 border border-gray-100 dark:border-gray-800'
+          });
+        } else if (schedule && schedule.turno_id && !esDiaDescanso) {
           const turno = turnos.find(t => t.id === schedule.turno_id);
           
           if (hasIncidence && !excFalta && !excRetardo && !excOmision) {

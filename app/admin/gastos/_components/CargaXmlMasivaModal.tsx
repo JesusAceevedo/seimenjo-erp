@@ -445,6 +445,24 @@ export default function CargaXmlMasivaModal({ onClose, onSuccess, tipo, empresaR
               }
             }
             
+            const isRep = isComplementoPago || tipoDeComprobante === 'P';
+            let autoGastoPadreId = null;
+            let parentConcepto = '';
+
+            if (isRep && uuidsRelacionados.length > 0) {
+              const { data: parentGastoFound } = await supabase
+                .from('gastos')
+                .select('id, concepto')
+                .in('uuid_fiscal', uuidsRelacionados)
+                .eq('empresa_id', empresaId)
+                .maybeSingle();
+
+              if (parentGastoFound) {
+                autoGastoPadreId = parentGastoFound.id;
+                parentConcepto = parentGastoFound.concepto;
+              }
+            }
+
             insertPayload = {
               folio_factura: folioStr,
               uuid_fiscal: uuid.toUpperCase(),
@@ -455,7 +473,11 @@ export default function CargaXmlMasivaModal({ onClose, onSuccess, tipo, empresaR
               pdf_url: pdfUrl || null,
               fecha_gasto: fecha_emision,
               empresa_id: empresaId,
-              concepto: isNomina ? `Nómina - ${proveedor_cliente_nombre}` : `Gasto por factura XML (UUID: ${uuid.substring(0, 8)})`,
+              concepto: isNomina 
+                ? `Nómina - ${proveedor_cliente_nombre}` 
+                : isRep
+                  ? (parentConcepto ? `REP (Complemento de Pago) para: ${parentConcepto}` : `REP (Complemento de Pago) suelto (UUID: ${uuid.substring(0, 8)})`)
+                  : `Gasto por factura XML (UUID: ${uuid.substring(0, 8)})`,
               registrado_por: staffId,
               proveedor_id: proveedorId,
               forma_pago_id: formaPagoId,
@@ -463,7 +485,8 @@ export default function CargaXmlMasivaModal({ onClose, onSuccess, tipo, empresaR
               estatus_facturado: true,
               metodo_pago: metodoPago,
               fecha_timbrado: fechaTimbrado || null,
-              es_deducible: true
+              es_deducible: true,
+              gasto_padre_id: autoGastoPadreId
             };
           } else {
             // Buscar o crear cliente por RFC

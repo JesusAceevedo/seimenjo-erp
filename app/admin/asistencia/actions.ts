@@ -503,7 +503,23 @@ export async function deleteDiaFestivo(id: string) {
 export async function deleteEmpleado(id: string) {
   const { error } = await getServerSupabase()
     .from('empleados_detalle')
-    .update({ activo: false })
+    .update({ activo: false, fecha_baja: new Date().toISOString().split('T')[0] })
+    .eq('id', id);
+  if (error) throw error;
+}
+
+export async function reactivarEmpleado(id: string) {
+  const { error } = await getServerSupabase()
+    .from('empleados_detalle')
+    .update({ activo: true, fecha_baja: null })
+    .eq('id', id);
+  if (error) throw error;
+}
+
+export async function purgeEmpleado(id: string) {
+  const { error } = await getServerSupabase()
+    .from('empleados_detalle')
+    .delete()
     .eq('id', id);
   if (error) throw error;
 }

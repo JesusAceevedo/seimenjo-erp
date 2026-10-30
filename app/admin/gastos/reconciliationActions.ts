@@ -968,7 +968,18 @@ export async function obtenerMovimientosPorCarga(cargaId: string, token: string)
       .order('fecha', { ascending: false });
 
     if (error) throw error;
-    return { success: true, data: data || [] };
+
+    // Ordenar naturalmente por referencia bancaria (ej. 283, 284, 288...)
+    const sorted = (data || []).sort((a: any, b: any) => {
+      const refA = String(a.referencia || '').trim();
+      const refB = String(b.referencia || '').trim();
+      if (!refA && !refB) return 0;
+      if (!refA) return 1;
+      if (!refB) return -1;
+      return refA.localeCompare(refB, undefined, { numeric: true, sensitivity: 'base' });
+    });
+
+    return { success: true, data: sorted };
   } catch (err: any) {
     return { success: false, error: err.message || 'Error al obtener movimientos de la carga' };
   }

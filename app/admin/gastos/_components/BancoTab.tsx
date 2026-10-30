@@ -992,14 +992,16 @@ export default function BancoTab({
 
   const opcionesMesesAtemporal = React.useMemo(() => {
     const setMeses = new Set<string>();
-    movimientos.forEach((m: any) => {
+    const source = allMovimientos && allMovimientos.length > 0 ? allMovimientos : movimientos;
+    source.forEach((m: any) => {
       if (m.fecha) setMeses.add(m.fecha.substring(0, 7));
     });
     return Array.from(setMeses).sort().reverse();
-  }, [movimientos]);
+  }, [allMovimientos, movimientos]);
 
   const atemporalNoDeducibles = React.useMemo(() => {
-    return movimientos.filter((m: any) => {
+    const source = allMovimientos && allMovimientos.length > 0 ? allMovimientos : movimientos;
+    return source.filter((m: any) => {
       const clave = m.estatus_conciliacion_bancaria?.clave;
       const hasPostCloseNote = m.comentarios?.includes('Conciliado después del periodo de cierre');
       const isNoDeducibleStatus = clave === 'no_deducible' || clave === 'pendiente';
@@ -1037,39 +1039,40 @@ export default function BancoTab({
         if (!m.fecha || !m.fecha.startsWith(filtroMesAtemporal)) return false;
       }
 
-      // Checklist: Tipo de Movimiento (EXCLUSION: checked = Ocultar)
+      // Checklist: Tipo de Movimiento (INCLUSIÓN: checked = Mostrar)
       if (tiposAtemporalSelected.length > 0) {
-        const rawType = (m.tipo_movimiento || '').toLowerCase();
-        const isRetiro = rawType === 'retiro' || rawType === 'cargo' || rawType === 'egreso' || Number(m.retiro || 0) > 0 || (Number(m.monto || 0) < 0);
-        const isDeposito = rawType === 'deposito' || rawType === 'abono' || rawType === 'ingreso' || Number(m.deposito || 0) > 0 || (Number(m.monto || 0) > 0 && !isRetiro);
+        const rawTypeMov = (m.tipo_movimiento || '').toLowerCase();
+        const isRetiro = rawTypeMov === 'retiro' || rawTypeMov === 'cargo' || rawTypeMov === 'egreso' || Number(m.retiro || 0) > 0 || (Number(m.monto || 0) < 0);
+        const isDeposito = rawTypeMov === 'deposito' || rawTypeMov === 'abono' || rawTypeMov === 'ingreso' || Number(m.deposito || 0) > 0 || (Number(m.monto || 0) > 0 && !isRetiro);
 
-        if (isDeposito && tiposAtemporalSelected.includes('Deposito')) return false;
-        if (isRetiro && tiposAtemporalSelected.includes('Retiro')) return false;
+        const matchTipo = (isDeposito && tiposAtemporalSelected.includes('Deposito')) ||
+                          (isRetiro && tiposAtemporalSelected.includes('Retiro'));
+        if (!matchTipo) return false;
       }
 
-      // Checklist: Estatus Conciliación (EXCLUSION: checked = Ocultar)
+      // Checklist: Estatus Conciliación (INCLUSIÓN: checked = Mostrar)
       if (estatusAtemporalSelected.length > 0) {
         const currentClave = hasPostCloseNote ? 'conciliado_post_cierre' : (clave || 'pendiente');
-        if (estatusAtemporalSelected.includes(currentClave) || (clave && estatusAtemporalSelected.includes(clave))) {
-          return false;
-        }
+        const matchEstatus = estatusAtemporalSelected.includes(currentClave) || (clave && estatusAtemporalSelected.includes(clave));
+        if (!matchEstatus) return false;
       }
 
-      // Checklist: Ciclo Contable (EXCLUSION: checked = Ocultar)
+      // Checklist: Ciclo Contable (INCLUSIÓN: checked = Mostrar)
       if (ciclosAtemporalSelected.length > 0) {
         const pStatus = getPeriodStatusForMov(m.fecha).clave;
-        if (ciclosAtemporalSelected.includes(pStatus)) return false;
+        if (!ciclosAtemporalSelected.includes(pStatus)) return false;
       }
 
-      // Checklist: Categoría de movimiento (EXCLUSION: checked = Ocultar)
+      // Checklist: Categoría de movimiento (INCLUSIÓN: checked = Mostrar)
       if (categoriasAtemporalSelected.length > 0) {
         const catId = m.categoria_movimiento_id || m.categoria_id || m.categorias_movimiento_bancario?.id;
         const catNombre = m.categorias_movimiento_bancario?.nombre;
 
         const isSinCategoria = !catId && !catNombre;
-        if (isSinCategoria && categoriasAtemporalSelected.includes('sin_categoria')) return false;
-        if (catId && categoriasAtemporalSelected.includes(catId)) return false;
-        if (catNombre && categoriasAtemporalSelected.includes(catNombre)) return false;
+        const matchCat = (isSinCategoria && categoriasAtemporalSelected.includes('sin_categoria')) ||
+          (catId && (categoriasAtemporalSelected.includes(catId) || categoriasAtemporalSelected.includes(String(catId)))) ||
+          (catNombre && categoriasAtemporalSelected.includes(catNombre));
+        if (!matchCat) return false;
       }
 
       // Select Estatus alternativo
@@ -1090,6 +1093,7 @@ export default function BancoTab({
     });
   }, [
     movimientos,
+    allMovimientos,
     busquedaAtemporal,
     filtroMesAtemporal,
     selectedCuentaId,
@@ -1454,6 +1458,7 @@ export default function BancoTab({
 
   const [uploadedXmlAmounts, setUploadedXmlAmounts] = React.useState<{[key: string]: number}>({});
   const xmlAmountsCache = React.useRef<{[key: string]: number}>({});
+  const xmlMetaCache = React.useRef<{[key: string]: { amount: number; tipo: string; uuid: string; relatedUuids: string[]; isRep: boolean }}>({});
 
   const parseXmlTotal = (file: File): Promise<number> => {
     return new Promise((resolve) => {
@@ -1494,6 +1499,43 @@ export default function BancoTab({
               }
             }
           }
+
+          const timbre = xmlDoc.getElementsByTagName('tfd:TimbreFiscalDigital')[0] || xmlDoc.getElementsByTagName('TimbreFiscalDigital')[0];
+          const uuid = timbre?.getAttribute('UUID')?.toUpperCase() || '';
+          const relatedUuids: string[] = [];
+
+          if (tipoDeComprobante === 'P' || pagoNodes.length > 0) {
+            const docRelNodes = xmlDoc.getElementsByTagName('pago20:DoctoRelacionado').length > 0
+              ? xmlDoc.getElementsByTagName('pago20:DoctoRelacionado')
+              : xmlDoc.getElementsByTagName('pago10:DoctoRelacionado').length > 0
+                ? xmlDoc.getElementsByTagName('pago10:DoctoRelacionado')
+                : xmlDoc.getElementsByTagName('DoctoRelacionado');
+            for (let i = 0; i < docRelNodes.length; i++) {
+              const ref = docRelNodes[i].getAttribute('IdDocumento') || docRelNodes[i].getAttribute('idDocumento');
+              if (ref && !relatedUuids.includes(ref.toUpperCase())) {
+                relatedUuids.push(ref.toUpperCase());
+              }
+            }
+          } else if (tipoDeComprobante === 'E') {
+            const cfdiRelNodes = xmlDoc.getElementsByTagName('cfdi:CfdiRelacionado').length > 0
+              ? xmlDoc.getElementsByTagName('cfdi:CfdiRelacionado')
+              : xmlDoc.getElementsByTagName('CfdiRelacionado');
+            for (let i = 0; i < cfdiRelNodes.length; i++) {
+              const ref = cfdiRelNodes[i].getAttribute('UUID') || cfdiRelNodes[i].getAttribute('uuid');
+              if (ref && !relatedUuids.includes(ref.toUpperCase())) {
+                relatedUuids.push(ref.toUpperCase());
+              }
+            }
+          }
+
+          xmlMetaCache.current[file.name] = {
+            amount: total,
+            tipo: tipoDeComprobante,
+            uuid,
+            relatedUuids,
+            isRep: (tipoDeComprobante === 'P' || pagoNodes.length > 0)
+          };
+
           resolve(total);
         } catch (err) {
           console.error('Error parsing XML total:', err);
@@ -1542,6 +1584,49 @@ export default function BancoTab({
           }
         }
       }
+
+      const timbre = xmlDoc.getElementsByTagName('tfd:TimbreFiscalDigital')[0] || xmlDoc.getElementsByTagName('TimbreFiscalDigital')[0];
+      const uuid = timbre?.getAttribute('UUID')?.toUpperCase() || '';
+      const relatedUuids: string[] = [];
+
+      if (tipoDeComprobante === 'P' || pagoNodes.length > 0) {
+        const docRelNodes = xmlDoc.getElementsByTagName('pago20:DoctoRelacionado').length > 0
+          ? xmlDoc.getElementsByTagName('pago20:DoctoRelacionado')
+          : xmlDoc.getElementsByTagName('pago10:DoctoRelacionado').length > 0
+            ? xmlDoc.getElementsByTagName('pago10:DoctoRelacionado')
+            : xmlDoc.getElementsByTagName('DoctoRelacionado');
+        for (let i = 0; i < docRelNodes.length; i++) {
+          const ref = docRelNodes[i].getAttribute('IdDocumento') || docRelNodes[i].getAttribute('idDocumento');
+          if (ref && !relatedUuids.includes(ref.toUpperCase())) {
+            relatedUuids.push(ref.toUpperCase());
+          }
+        }
+      } else if (tipoDeComprobante === 'E') {
+        const cfdiRelNodes = xmlDoc.getElementsByTagName('cfdi:CfdiRelacionado').length > 0
+          ? xmlDoc.getElementsByTagName('cfdi:CfdiRelacionado')
+          : xmlDoc.getElementsByTagName('CfdiRelacionado');
+        for (let i = 0; i < cfdiRelNodes.length; i++) {
+          const ref = cfdiRelNodes[i].getAttribute('UUID') || cfdiRelNodes[i].getAttribute('uuid');
+          if (ref && !relatedUuids.includes(ref.toUpperCase())) {
+            relatedUuids.push(ref.toUpperCase());
+          }
+        }
+      }
+
+      const metaObj = {
+        amount: total,
+        tipo: tipoDeComprobante,
+        uuid,
+        relatedUuids,
+        isRep: (tipoDeComprobante === 'P' || pagoNodes.length > 0)
+      };
+
+      xmlMetaCache.current[path] = metaObj;
+      const fileName = path.split('/').pop() || '';
+      if (fileName) {
+        xmlMetaCache.current[fileName] = metaObj;
+      }
+
       return total;
     } catch (err) {
       console.error('Error fetching/parsing XML total:', err);
@@ -1722,12 +1807,21 @@ export default function BancoTab({
                   </button>
                 </div>
               </div>
-              {field === 'xml' && xmlAmount !== undefined && xmlAmount !== null && (
-                <div className="text-[9px] text-blue-600 dark:text-blue-400 font-extrabold flex justify-between items-center mt-0.5 border-t border-gray-100 dark:border-gray-850 pt-1">
-                  <span>Monto CFDI:</span>
-                  <span>{formatCurrency(xmlAmount)}</span>
-                </div>
-              )}
+              {field === 'xml' && xmlAmount !== undefined && xmlAmount !== null && (() => {
+                const meta = xmlMetaCache.current[path] || xmlMetaCache.current[fileName];
+                const isRep = meta?.isRep || meta?.tipo === 'P';
+                const isCreditNote = meta?.tipo === 'E';
+                return (
+                  <div className="text-[9px] font-extrabold flex justify-between items-center mt-0.5 border-t border-gray-100 dark:border-gray-850 pt-1">
+                    <span className={isRep ? "text-purple-600 dark:text-purple-400 font-bold" : isCreditNote ? "text-amber-600 dark:text-amber-400 font-bold" : "text-blue-600 dark:text-blue-400"}>
+                      {isRep ? 'Monto REP (Pago):' : isCreditNote ? 'Nota de Crédito:' : 'Monto CFDI:'}
+                    </span>
+                    <span className={isCreditNote ? "text-amber-600 dark:text-amber-400 font-mono" : isRep ? "text-purple-600 dark:text-purple-400 font-mono" : "text-blue-600 dark:text-blue-400 font-mono"}>
+                      {isCreditNote ? `-${formatCurrency(xmlAmount)}` : formatCurrency(xmlAmount)}
+                    </span>
+                  </div>
+                );
+              })()}
             </div>
           );
         })}
@@ -6204,10 +6298,11 @@ export default function BancoTab({
 
                   <button
                     onClick={() => {
-                      setTiposAtemporalSelected([]);
-                      setEstatusAtemporalSelected([]);
-                      setCiclosAtemporalSelected([]);
-                      setCategoriasAtemporalSelected([]);
+                      setTiposAtemporalSelected(['Deposito', 'Retiro']);
+                      setEstatusAtemporalSelected(['no_deducible', 'pendiente', 'parcial', 'conciliado_post_cierre', 'conciliado']);
+                      setCiclosAtemporalSelected(['cerrado_definitivo', 'pre_cerrado', 'abierto']);
+                      const allCats = Array.from(new Set(['sin_categoria', ...uniqueCategoriasMovimiento.flatMap(c => [c.id, String(c.id)])]));
+                      setCategoriasAtemporalSelected(allCats);
                       setBusquedaAtemporal('');
                       setFiltroMesAtemporal('');
                       setFiltroCicloAtemporal('todos');
@@ -6663,8 +6758,43 @@ export default function BancoTab({
         const isOutflow = reconcileModal.movimiento.tipo_movimiento === 'Retiro';
         const movMonto = batchMovs.reduce((s, m) => s + Math.abs(Number(m.monto) || (m.tipo_movimiento === 'Retiro' ? Number(m.retiro) : Number(m.deposito)) || 0), 0);
         const selectedGastosList = gastosReconciliables.filter((g) => reconcileModal.gastosSeleccionados.includes(g.id));
+        // 1. Detección de gastos seleccionados que son REP / Parcialidades de otra factura seleccionada
+        const repGastoIds = new Set<string>();
+        if (isOutflow && selectedGastosList.length > 1) {
+          selectedGastosList.forEach((g: any) => {
+            const conceptoUpper = (g.concepto || '').toUpperCase();
+            const isRepConcept = conceptoUpper.includes('REP') || conceptoUpper.includes('COMPLEMENTO DE PAGO') || conceptoUpper.includes('RECIBO DE PAGO');
+            
+            // Relación por gasto_padre_id explícito
+            if (g.gasto_padre_id && selectedGastosList.some((other: any) => other.id === g.gasto_padre_id)) {
+              repGastoIds.add(g.id);
+            }
+            // Relación por concepto REP o UUID
+            else if (isRepConcept) {
+              const hasPossibleInvoice = selectedGastosList.some((other: any) => {
+                if (other.id === g.id) return false;
+                const otherConceptUpper = (other.concepto || '').toUpperCase();
+                if (otherConceptUpper.includes('REP') || otherConceptUpper.includes('COMPLEMENTO DE PAGO')) return false;
+                // Coincidencia por UUID o por proveedor o por monto idéntico
+                const sameProv = other.proveedores?.rfc && g.proveedores?.rfc && other.proveedores.rfc === g.proveedores.rfc;
+                const sameAmt = Math.abs(Number(other.monto) - Number(g.monto)) < 0.05;
+                const uuidInConcept = other.uuid_fiscal && conceptoUpper.includes(other.uuid_fiscal.substring(0, 8));
+                return uuidInConcept || sameProv || sameAmt;
+              });
+              if (hasPossibleInvoice) {
+                repGastoIds.add(g.id);
+              }
+            }
+          });
+        }
+
         const totalEgresosSistema = isOutflow 
           ? selectedGastosList.reduce((s, g) => {
+              // Si este gasto es un REP de pago que liquida una factura ya seleccionada, no sumar doble
+              if (repGastoIds.has(g.id)) {
+                return s;
+              }
+
               const otherConcs = movimientos
                 .filter((otherM: any) => otherM.id !== reconcileModal.movimiento.id)
                 .flatMap((otherM: any) => otherM.conciliaciones_bancarias || [])
@@ -6687,18 +6817,53 @@ export default function BancoTab({
                 return realPeds.reduce((s, p) => s + Number(p.precio_total || 0), 0);
               }
               return selPeds.reduce((s, p) => s + Number(p.precio_total || 0), 0);
-            })()
+            })();
 
         const selectedPedidosList = pedidosPendientes.filter((p: any) => reconcileModal.pedidosSeleccionados.includes(p.id));
 
+        // 2. Mapeo de XMLs cargados en el modal y deduplicación inteligente
+        const parsedXmlDetails = Object.entries(uploadedXmlAmounts).map(([path, val]) => {
+          const fileName = path.split('/').pop() || '';
+          const meta = xmlMetaCache.current[path] || xmlMetaCache.current[fileName] || {
+            amount: val,
+            tipo: 'I',
+            uuid: '',
+            relatedUuids: [],
+            isRep: false
+          };
+          return { path, fileName, val, ...meta };
+        });
+
+        const redundantXmlPaths = new Set<string>();
+        parsedXmlDetails.forEach((x) => {
+          if (x.isRep || x.tipo === 'P') {
+            // ¿Ampara un gasto ya seleccionado en el sistema?
+            const paysSelectedGasto = selectedGastosList.some((g: any) => {
+              if (g.uuid_fiscal && x.relatedUuids.includes(g.uuid_fiscal.toUpperCase())) return true;
+              if (selectedGastosList.length === 1 && Math.abs(Number(g.monto) - x.val) < 0.05) return true;
+              return false;
+            });
+            // ¿Ampara otro XML tipo 'I' que también está cargado?
+            const paysUploadedInvoiceXml = parsedXmlDetails.some((other) => {
+              if (other.path === x.path) return false;
+              if (other.tipo === 'I' && other.uuid && x.relatedUuids.includes(other.uuid.toUpperCase())) return true;
+              if (other.tipo === 'I' && Math.abs(other.val - x.val) < 0.05) return true;
+              return false;
+            });
+            if (paysSelectedGasto || paysUploadedInvoiceXml) {
+              redundantXmlPaths.add(x.path);
+            }
+          }
+        });
+
         const sumAllXmls = Object.values(uploadedXmlAmounts).reduce((s, val) => s + val, 0);
 
-        const totalXmlsCargados = Object.entries(uploadedXmlAmounts).reduce((s, [path, val]) => {
-          const fileName = path.split('/').pop() || '';
+        const totalXmlsCargados = parsedXmlDetails.reduce((s, x) => {
+          const fileName = x.fileName;
           const isAlreadyInSelectedGastos = selectedGastosList.some((g: any) => {
             if (!g.xml_url) return false;
             const gPaths = g.xml_url.split(',');
-            return gPaths.some((gp: string) => gp === path || gp.endsWith(fileName) || path.endsWith(gp.split('/').pop() || ''));
+            return gPaths.some((gp: string) => gp === x.path || gp.endsWith(fileName) || x.path.endsWith(gp.split('/').pop() || ''));
           });
           const isAlreadyInSelectedPedidos = selectedPedidosList.some((p: any) => {
             const xmlUrls: string[] = [];
@@ -6709,14 +6874,22 @@ export default function BancoTab({
                 if (fc.xml_url) xmlUrls.push(...fc.xml_url.split(','));
               });
             }
-            return xmlUrls.some((xp: string) => xp === path || xp.endsWith(fileName) || path.endsWith(xp.split('/').pop() || ''));
+            return xmlUrls.some((xp: string) => xp === x.path || xp.endsWith(fileName) || x.path.endsWith(xp.split('/').pop() || ''));
           });
-          return (isAlreadyInSelectedGastos || isAlreadyInSelectedPedidos) ? s : s + val;
+
+          if (isAlreadyInSelectedGastos || isAlreadyInSelectedPedidos) return s;
+          if (redundantXmlPaths.has(x.path)) return s;
+          if (x.tipo === 'E') return s - x.val; // Nota de Crédito (resta)
+
+          return s + x.val;
         }, 0);
 
-        const totalComprobado = totalEgresosSistema + totalXmlsCargados;
+        const totalComprobado = Math.max(0, totalEgresosSistema + totalXmlsCargados);
         const dif = movMonto - totalComprobado;
         const match = Math.abs(dif) < 0.05;
+
+        // Detección si se vinculó Factura PPD + REP
+        const hasPpdRepLink = isOutflow && (repGastoIds.size > 0 || redundantXmlPaths.size > 0);
 
         const selectedProvRaw = selectedGastosList[0]?.proveedores;
         const selectedProv = selectedProvRaw ? (Array.isArray(selectedProvRaw) ? selectedProvRaw[0] : selectedProvRaw) : null;
@@ -7035,6 +7208,15 @@ export default function BancoTab({
                     Acumulado: {formatCurrency(totalEgresosSistema)} ({isOutflow ? reconcileModal.gastosSeleccionados.length : reconcileModal.pedidosSeleccionados.length} {isOutflow ? 'facturas' : 'ítems'})
                   </span>
                 </div>
+                {isOutflow && hasPpdRepLink && (
+                  <div className="bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-800 p-2.5 rounded-xl text-xs text-emerald-800 dark:text-emerald-200 flex items-center gap-2 mb-2 font-medium">
+                    <span className="text-base shrink-0">✨</span>
+                    <div className="flex-1">
+                      <strong className="block text-emerald-900 dark:text-emerald-100">¡Factura PPD y Complemento de Pago (REP) vinculados!</strong>
+                      <span>El sistema identificó que el pago ampara la factura. Se computa el importe real del gasto ({formatCurrency(totalComprobado)}) sin duplicar el monto. Restante por conciliar: $0.00.</span>
+                    </div>
+                  </div>
+                )}
                 {!isOutflow && (() => {
                   const selPedidos = pedidosPendientes.filter((p) => reconcileModal.pedidosSeleccionados.includes(p.id));
                   const realPeds = selPedidos.filter((p) => !p._esFacturaSuelta && !p.id?.startsWith('suelta_'));
@@ -7087,6 +7269,14 @@ export default function BancoTab({
                                   <>
                                     <span>•</span>
                                     <span className="text-blue-600 dark:text-blue-400 font-semibold">{proveedor.nombre_comercial}</span>
+                                  </>
+                                )}
+                                {repGastoIds.has(g.id) && (
+                                  <>
+                                    <span>•</span>
+                                    <span className="bg-purple-50 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 px-1.5 py-0.5 rounded text-[9px] font-bold border border-purple-200 dark:border-purple-800">
+                                      💳 REP (Aplica a Factura PPD)
+                                    </span>
                                   </>
                                 )}
                                 {g.metodo_pago && (

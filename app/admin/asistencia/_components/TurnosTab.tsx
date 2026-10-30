@@ -67,7 +67,8 @@ export default function TurnosTab({ turnos, empleados, empresaId, onSaved }: Pro
     if (!confirm(`¿Asignar "${optionName}" a todos los empleados para ${dayNames[globalDay]}?`)) return;
     setApplying(true);
     try {
-      await applyGlobalSchedule(empleados, globalDay, isDescanso ? null : globalOption, isDescanso);
+      const empleadosActivos = empleados.filter(e => e.activo !== false);
+      await applyGlobalSchedule(empleadosActivos, globalDay, isDescanso ? null : globalOption, isDescanso);
       onSaved();
     } catch (err: any) {
       alert('Error: ' + err.message);
