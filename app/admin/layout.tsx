@@ -76,6 +76,19 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   };
 
   useEffect(() => {
+    // Detectar si el navegador tiene en caché una versión anterior con Server Action IDs antiguos tras un despliegue
+    const handleRejection = (event: PromiseRejectionEvent) => {
+      const msg = event?.reason?.message || String(event?.reason || '');
+      if (msg.includes('was not found on the server') || msg.includes('failed-to-find-server-action')) {
+        console.warn('[Next.js Server Action Mismatch] Se detectó una versión desactualizada tras despliegue. Recargando página...');
+        window.location.reload();
+      }
+    };
+    window.addEventListener('unhandledrejection', handleRejection);
+    return () => window.removeEventListener('unhandledrejection', handleRejection);
+  }, []);
+
+  useEffect(() => {
     const checkOnboarding = async () => {
       try {
         const isLoginPage = pathname === '/admin/login' || pathname === '/login';

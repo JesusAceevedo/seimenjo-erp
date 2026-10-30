@@ -762,6 +762,10 @@ export default function EgresosModule() {
                           throw new Error(res.error);
                         }
                       } catch (err: any) {
+                        if (err?.message?.includes('was not found on the server') || err?.message?.includes('failed-to-find-server-action')) {
+                          window.location.reload();
+                          return;
+                        }
                         alert(`Error al sincronizar: ${err.message}`);
                       }
                     }}
