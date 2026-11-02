@@ -4,6 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { useSessionToken } from '../../../../lib/hooks/useSessionToken';
 import { guardarAsientoManual, LineaAsientoInput } from '../actions';
 import { formatCurrency } from '../../../../lib/formatters';
+import DateInput from '@/components/ui/DateInput';
 import { Plus, Trash2, Scale, Save, X } from 'lucide-react';
 
 interface AccountOption {
@@ -145,8 +146,7 @@ export default function AsientoModal({ cuentas, onClose, onSuccess }: AsientoMod
 
             <div>
               <label className="block font-bold mb-1 text-gray-700 dark:text-gray-300">Fecha de Póliza</label>
-              <input
-                type="date"
+              <DateInput
                 required
                 value={fecha}
                 onChange={e => setFecha(e.target.value)}

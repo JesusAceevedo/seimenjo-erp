@@ -15,6 +15,7 @@ import { useEmpresaId } from '../../../lib/hooks/useEmpresaId';
 import SubirFacturaPedidoModal from './_components/SubirFacturaPedidoModal';
 import CompletarDetallePedidoModal from './_components/CompletarDetallePedidoModal';
 import { formatDate } from '../../../lib/formatters';
+import DateInput from '@/components/ui/DateInput';
 
 // --- ESTADOS INICIALES (Optimizados fuera del componente para no recrearlos en cada render) ---
 const getPedidoInicial = () => ({
@@ -1198,11 +1199,11 @@ export default function AdminMonitor() {
               <div className="flex gap-4 items-center">
                 <div className="flex flex-col">
                   <label className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1">Fecha de Inicio</label>
-                  <input type="date" className="border border-gray-200 dark:border-gray-800 p-2 rounded-lg text-sm bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-white" style={{ colorScheme: isDarkMode ? 'dark' : 'light' }} onChange={e => setFechaInicio(e.target.value)} />
+                  <DateInput className="border border-gray-200 dark:border-gray-800 p-2 rounded-lg text-sm bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-white" style={{ colorScheme: isDarkMode ? 'dark' : 'light' }} value={fechaInicio} onChange={e => setFechaInicio(e.target.value)} />
                 </div>
                 <div className="flex flex-col">
                   <label className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1">Fecha de Fin</label>
-                  <input type="date" className="border border-gray-200 dark:border-gray-800 p-2 rounded-lg text-sm bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-white" style={{ colorScheme: isDarkMode ? 'dark' : 'light' }} onChange={e => setFechaFin(e.target.value)} />
+                  <DateInput className="border border-gray-200 dark:border-gray-800 p-2 rounded-lg text-sm bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-white" style={{ colorScheme: isDarkMode ? 'dark' : 'light' }} value={fechaFin} onChange={e => setFechaFin(e.target.value)} />
                 </div>
               </div>
             )}
@@ -1657,11 +1658,11 @@ export default function AdminMonitor() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                     <label className="text-xs font-semibold text-gray-500 dark:text-gray-400">Fecha de Producción</label>
-                    <input type="date" className="w-full mt-1 bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 text-gray-900 dark:text-white p-2 rounded-lg text-sm" style={{ colorScheme: isDarkMode ? 'dark' : 'light' }} value={nuevoPedido.fecha_produccion || ''} onChange={e => setNuevoPedido({ ...nuevoPedido, fecha_produccion: e.target.value })} />
+                    <DateInput className="w-full mt-1 bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 text-gray-900 dark:text-white p-2 rounded-lg text-sm" style={{ colorScheme: isDarkMode ? 'dark' : 'light' }} value={nuevoPedido.fecha_produccion || ''} onChange={e => setNuevoPedido({ ...nuevoPedido, fecha_produccion: e.target.value })} />
                   </div>
                   <div>
                     <label className="text-xs font-semibold text-gray-500 dark:text-gray-400">Fecha de Entrega</label>
-                    <input type="date" className="w-full mt-1 bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 text-gray-900 dark:text-white p-2 rounded-lg text-sm" style={{ colorScheme: isDarkMode ? 'dark' : 'light' }} value={nuevoPedido.fecha_entrega || ''} onChange={e => setNuevoPedido({ ...nuevoPedido, fecha_entrega: e.target.value })} />
+                    <DateInput className="w-full mt-1 bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 text-gray-900 dark:text-white p-2 rounded-lg text-sm" style={{ colorScheme: isDarkMode ? 'dark' : 'light' }} value={nuevoPedido.fecha_entrega || ''} onChange={e => setNuevoPedido({ ...nuevoPedido, fecha_entrega: e.target.value })} />
                   </div>
                   <div>
                     <label className="text-xs font-semibold text-gray-500 dark:text-gray-400">Repartidor Asignado</label>
@@ -1762,7 +1763,7 @@ export default function AdminMonitor() {
               <div className="space-y-4">
                 <div>
                   <label className="text-xs font-semibold text-gray-500 dark:text-gray-400">Fecha Real de Entrega / Pago</label>
-                  <input type="date" value={liquidarModal.fecha} className="w-full mt-1 bg-gray-50 dark:bg-gray-950 border border-gray-300 dark:border-gray-700 text-gray-900 dark:text-white p-2 rounded-lg text-sm" style={{ colorScheme: isDarkMode ? 'dark' : 'light' }} onChange={e => setLiquidarModal({ ...liquidarModal, fecha: e.target.value })} />
+                  <DateInput value={liquidarModal.fecha} className="w-full mt-1 bg-gray-50 dark:bg-gray-950 border border-gray-300 dark:border-gray-700 text-gray-900 dark:text-white p-2 rounded-lg text-sm" style={{ colorScheme: isDarkMode ? 'dark' : 'light' }} onChange={e => setLiquidarModal({ ...liquidarModal, fecha: e.target.value })} />
                 </div>
                 <div>
                   <div className="flex justify-between items-center">

@@ -18,6 +18,7 @@ import { obtenerSignedUrlCliente, notificarPedidoTelegramAction } from './action
 import ClienteCfdiModal from './ClienteCfdiModal';
 import DatosFiscalesModal from './DatosFiscalesModal';
 import { formatDate } from '../../lib/formatters';
+import DateInput from '@/components/ui/DateInput';
 
 // Interfaces de tipado
 interface Producto { id: string; nombre: string; categoria: string; imagen_url: string; }
@@ -974,8 +975,7 @@ export default function Tienda() {
                     <label className="block text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase mb-1">
                       O elige otra fecha en el calendario:
                     </label>
-                    <input
-                      type="date"
+                    <DateInput
                       min={fechaHoyStr}
                       required
                       value={fechaEntrega}
@@ -1190,8 +1190,7 @@ export default function Tienda() {
                         <label className="block text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase mb-1">
                           O elige otra fecha en el calendario:
                         </label>
-                        <input
-                          type="date"
+                        <DateInput
                           min={fechaHoyStr}
                           required
                           value={fechaEntrega}

@@ -5,6 +5,7 @@ import { ChevronLeft, ChevronRight, RefreshCw, Sun, Users } from 'lucide-react';
 import type { EmpleadoDetalle } from '../types';
 import { loadPatronesDescanso, loadDescansosMensuales, generarDescansosMensuales, toggleDescansoMensual, toggleDescansoMensualDelete, bulkAssignDescansos } from '../actions';
 import type { Departamento, Puesto } from '../types';
+import DateInput from '@/components/ui/DateInput';
 
 interface Props {
   empresaId: string | null;
@@ -284,7 +285,7 @@ export default function CalendarioDescansos({ empresaId, empleados, departamento
 
             <div>
               <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Fecha</label>
-              <input type="date" value={bulkDate} onChange={e => setBulkDate(e.target.value)}
+              <DateInput value={bulkDate} onChange={e => setBulkDate(e.target.value)}
                 className="w-full px-3 py-2 rounded-lg bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 text-xs focus:outline-none focus:ring-1 focus:ring-amber-500" />
             </div>
 

@@ -1,6 +1,7 @@
 'use client';
 
 import React from 'react';
+import { formatDate } from '@/lib/formatters';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -266,7 +267,7 @@ export const ArqueoEfectivoSubTab: React.FC<ArqueoEfectivoSubTabProps> = ({
               {dailyCashGroups.map(day => (
                 <React.Fragment key={day.fecha}>
                   <tr className="bg-amber-50/50 dark:bg-amber-950/10 font-black">
-                    <td className="p-3 text-amber-800 dark:text-amber-300">{day.fecha} · Total del día ({day.tickets.length} ticket{day.tickets.length === 1 ? '' : 's'})</td>
+                    <td className="p-3 text-amber-800 dark:text-amber-300">{formatDate(day.fecha)} · Total del día ({day.tickets.length} ticket{day.tickets.length === 1 ? '' : 's'})</td>
                     <td className="p-3 text-right font-mono">{formatCurrency(day.base)}</td>
                     <td className="p-3 text-right font-mono">{formatCurrency(day.propina)}</td>
                     <td className="p-3 text-right font-mono">{formatCurrency(day.venta)}</td>
@@ -276,7 +277,7 @@ export const ArqueoEfectivoSubTab: React.FC<ArqueoEfectivoSubTabProps> = ({
                   </tr>
                   {day.tickets.map(ticket => (
                     <tr key={ticket.id} className="hover:bg-gray-50/70 dark:hover:bg-gray-800/30">
-                      <td className="p-3 pl-6 text-gray-700 dark:text-gray-300">{ticket.descripcion || `Corte Parrot ${day.fecha}`}</td>
+                      <td className="p-3 pl-6 text-gray-700 dark:text-gray-300">{ticket.descripcion || `Corte Parrot ${formatDate(day.fecha)}`}</td>
                       <td className="p-3 text-right font-mono">{formatCurrency(ticket._cashBase)}</td>
                       <td className="p-3 text-right font-mono">{formatCurrency(ticket._cashTip)}</td>
                       <td className="p-3 text-right font-mono">{formatCurrency(ticket._cashAmount)}</td>
@@ -322,7 +323,7 @@ export const ArqueoEfectivoSubTab: React.FC<ArqueoEfectivoSubTabProps> = ({
             <tbody className="divide-y divide-gray-100 dark:divide-gray-800/60">
               {cashDeposits.map(deposit => (
                 <tr key={deposit.id} className="hover:bg-gray-50/70 dark:hover:bg-gray-800/30">
-                  <td className="p-3 font-mono">{String(deposit.fecha || '').slice(0, 10)}</td>
+                  <td className="p-3 font-mono">{formatDate(deposit.fecha)}</td>
                   <td className="p-3 max-w-[360px] truncate" title={deposit.concepto}>{deposit.concepto || 'Depósito efectivo BBVA'}</td>
                   <td className="p-3 text-right font-mono font-bold">{formatCurrency(deposit._monto)}</td>
                   <td className="p-3 text-right font-mono text-sky-700 dark:text-sky-300">{formatCurrency(depositoDisponible(deposit))}</td>
@@ -352,7 +353,7 @@ export const ArqueoEfectivoSubTab: React.FC<ArqueoEfectivoSubTabProps> = ({
             <div className="p-4 border-b border-gray-200 dark:border-gray-800 flex items-start justify-between gap-3">
               <div>
                 <h4 className="text-sm font-black text-gray-900 dark:text-white flex items-center gap-2"><Link2 size={16} className="text-blue-600" /> Vincular efectivo Parrot con depósito BBVA</h4>
-                <p className="text-xs text-gray-500 mt-1">{ticketToLink.descripcion || 'Ticket Parrot'} · {String(ticketToLink.fecha || '').slice(0, 10)} · Efectivo: <strong>{formatCurrency(ticketToLink._cashAmount)}</strong></p>
+                <p className="text-xs text-gray-500 mt-1">{ticketToLink.descripcion || 'Ticket Parrot'} · {formatDate(ticketToLink.fecha)} · Efectivo: <strong>{formatCurrency(ticketToLink._cashAmount)}</strong></p>
               </div>
               <button type="button" onClick={() => setTicketToLink(null)} className="p-1.5 rounded-lg text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800" aria-label="Cerrar"><X size={17} /></button>
             </div>
@@ -362,7 +363,7 @@ export const ArqueoEfectivoSubTab: React.FC<ArqueoEfectivoSubTabProps> = ({
                 <div className="space-y-1.5">
                   {ticketToLink._cashDeposits.map(deposit => (
                     <div key={deposit.id} className="flex items-center justify-between gap-3 p-2.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-900/50">
-                      <span className="min-w-0 text-xs truncate">{String(deposit.fecha || '').slice(0, 10)} · {deposit.concepto}</span>
+                      <span className="min-w-0 text-xs truncate">{formatDate(deposit.fecha)} · {deposit.concepto}</span>
                       <span className="flex items-center gap-2 shrink-0 font-mono font-bold text-emerald-700 dark:text-emerald-300">
                         {formatCurrency(deposit.montoAsociado)}
                         {desvincularComprobante && <button type="button" title="Desvincular" onClick={async () => {
@@ -398,7 +399,7 @@ export const ArqueoEfectivoSubTab: React.FC<ArqueoEfectivoSubTabProps> = ({
                         })} />
                         <span className="min-w-0 flex-1">
                           <span className="block text-xs font-bold truncate">{deposit.concepto || 'Depósito efectivo'}</span>
-                          <span className="block text-[10px] text-gray-500">{String(deposit.fecha || '').slice(0, 10)} · Saldo disponible {formatCurrency(depositoDisponible(deposit))}</span>
+                          <span className="block text-[10px] text-gray-500">{formatDate(deposit.fecha)} · Saldo disponible {formatCurrency(depositoDisponible(deposit))}</span>
                         </span>
                         <span className="text-right font-mono text-xs font-black">{formatCurrency(deposit._monto)}{allocation > 0 && <span className="block text-[10px] text-blue-600">Asignar {formatCurrency(allocation)}</span>}</span>
                       </label>

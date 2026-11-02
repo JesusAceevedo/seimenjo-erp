@@ -15,6 +15,7 @@ import {
   Save
 } from 'lucide-react';
 import { Pedido, ProductoVariante, Repartidor } from '../../types';
+import DateInput from '@/components/ui/DateInput';
 import {
   recuperarDetalleDeFacturaXml,
   guardarDetallePedidoFaltante,
@@ -349,8 +350,7 @@ export default function CompletarDetallePedidoModal({
                 <label className="block font-semibold text-gray-600 dark:text-gray-400 mb-1">
                   Fecha de Producción {!pedido.fecha_produccion && <span className="text-amber-500 font-bold">(Faltante)</span>}
                 </label>
-                <input
-                  type="date"
+                <DateInput
                   value={fechaProduccion}
                   onChange={(e) => setFechaProduccion(e.target.value)}
                   className="w-full bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 text-gray-900 dark:text-white p-2 rounded-lg text-xs outline-none focus:border-amber-500"
@@ -361,8 +361,7 @@ export default function CompletarDetallePedidoModal({
                 <label className="block font-semibold text-gray-600 dark:text-gray-400 mb-1">
                   Fecha de Entrega {!pedido.fecha_entrega && <span className="text-amber-500 font-bold">(Faltante)</span>}
                 </label>
-                <input
-                  type="date"
+                <DateInput
                   value={fechaEntrega}
                   onChange={(e) => setFechaEntrega(e.target.value)}
                   className="w-full bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 text-gray-900 dark:text-white p-2 rounded-lg text-xs outline-none focus:border-emerald-500"

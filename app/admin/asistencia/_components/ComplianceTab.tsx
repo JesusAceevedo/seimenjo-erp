@@ -4,6 +4,8 @@ import { useState, useEffect, useCallback } from 'react';
 import { Calendar, Trash2, Info, AlertTriangle, Sun, CheckCircle } from 'lucide-react';
 import type { EmpleadoDetalle } from '../types';
 import { loadDiasFestivos, saveDiaFestivo, deleteDiaFestivo } from '../actions';
+import DateInput from '@/components/ui/DateInput';
+import { formatDate } from '@/lib/formatters';
 
 interface Props {
   empresaId: string | null;
@@ -143,7 +145,7 @@ export default function ComplianceTab({ empresaId, empleados }: Props) {
             <h4 className="text-xs font-bold text-gray-800 dark:text-gray-100 uppercase">Agregar Festivo</h4>
             <form onSubmit={handleAddFestivo} className="space-y-3 text-xs">
               <div><label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Fecha</label>
-                <input type="date" required value={nuevoFestivo.fecha} onChange={e => setNuevoFestivo({ ...nuevoFestivo, fecha: e.target.value })}
+                <DateInput required value={nuevoFestivo.fecha} onChange={e => setNuevoFestivo({ ...nuevoFestivo, fecha: e.target.value })}
                   className="w-full px-3 py-2 rounded-lg bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800" /></div>
               <div><label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Descripción</label>
                 <input type="text" required value={nuevoFestivo.descripcion} onChange={e => setNuevoFestivo({ ...nuevoFestivo, descripcion: e.target.value })}
@@ -164,7 +166,7 @@ export default function ComplianceTab({ empresaId, empleados }: Props) {
               {festivos.map(f => (
                 <div key={f.id} className="flex items-center justify-between p-3 rounded-lg bg-gray-50 dark:bg-gray-900 border border-gray-100 dark:border-gray-800 text-xs">
                   <div className="flex items-center gap-3">
-                    <span className="font-mono font-bold text-gray-700 dark:text-gray-300">{f.fecha}</span>
+                    <span className="font-mono font-bold text-gray-700 dark:text-gray-300">{formatDate(f.fecha)}</span>
                     <span className="text-gray-900 dark:text-white">{f.descripcion}</span>
                     {f.es_recurrente && <span className="text-[9px] bg-blue-500/10 text-blue-600 px-1.5 py-0.5 rounded font-bold">Recurrente</span>}
                   </div>
@@ -195,7 +197,7 @@ export default function ComplianceTab({ empresaId, empleados }: Props) {
               <div className="p-4 rounded-xl bg-gray-50 dark:bg-gray-900 border border-gray-100 dark:border-gray-800 space-y-2 text-xs">
                 <p className="font-bold text-gray-900 dark:text-white">{empleadoSeleccionado.nombre_completo}</p>
                 <div className="grid grid-cols-2 gap-2">
-                  <div><span className="text-gray-400">Ingreso:</span><br /><span className="font-bold">{empleadoSeleccionado.fecha_ingreso}</span></div>
+                  <div><span className="text-gray-400">Ingreso:</span><br /><span className="font-bold">{formatDate(empleadoSeleccionado.fecha_ingreso)}</span></div>
                   <div><span className="text-gray-400">Antigüedad:</span><br /><span className="font-bold text-amber-600">{antiguedad} años</span></div>
                   <div><span className="text-gray-400">Vacaciones:</span><br /><span className="font-bold text-emerald-600">{diasVac} días</span></div>
                   <div><span className="text-gray-400">Prima Vac. (25%):</span><br /><span className="font-bold text-blue-600">${(empleadoSeleccionado.sueldo_diario * diasVac * 0.25).toFixed(2)}</span></div>

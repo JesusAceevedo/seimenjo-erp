@@ -35,6 +35,7 @@ import { usePeriod } from '../../../lib/hooks/usePeriod';
 import { useThemeMode } from '../../../lib/useThemeMode';
 import PeriodSelector from '../_components/PeriodSelector';
 import { obtenerMovimientosNoDeduciblesAtemporal } from '../gastos/reconciliationActions';
+import { formatDate } from '@/lib/formatters';
 
 interface ReportRecord {
   id: string;
@@ -352,7 +353,7 @@ export default function ReportesOperacionPage() {
   const handleExportExcel = () => {
     try {
       const exportRows = filteredRecords.map((r) => ({
-        Fecha: r.fecha,
+        Fecha: r.fecha ? formatDate(r.fecha) : '',
         Módulo: r.moduloLabel,
         Origen: r.cuentaNombre,
         'Folio / UUID': r.folio,
@@ -710,7 +711,7 @@ export default function ReportesOperacionPage() {
                       >
                         {/* Fecha */}
                         <td className="p-3.5 font-mono text-[11px] font-bold text-gray-700 dark:text-gray-300">
-                          {r.fecha || '—'}
+                          {formatDate(r.fecha)}
                         </td>
 
                         {/* Módulo / Origen */}
@@ -911,7 +912,7 @@ export default function ReportesOperacionPage() {
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <span className="text-gray-400 font-bold uppercase text-[10px] block">Fecha de Operación</span>
-                    <p className="font-mono font-bold text-gray-800 dark:text-gray-200 mt-0.5">{selectedRecord.fecha || '—'}</p>
+                    <p className="font-mono font-bold text-gray-800 dark:text-gray-200 mt-0.5">{formatDate(selectedRecord.fecha)}</p>
                   </div>
                   <div>
                     <span className="text-gray-400 font-bold uppercase text-[10px] block">Folio / Referencia</span>

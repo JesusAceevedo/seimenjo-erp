@@ -4,6 +4,7 @@ import { useState, useMemo } from 'react';
 import { RefreshCw, Clock, Settings, Sliders, UserCheck, AlertCircle, Award, DollarSign, TrendingUp, Filter, Sun, Bell, Download } from 'lucide-react';
 import type { dashboardStat, ChecadaRaw, EmpleadoDetalle, Puesto, Departamento } from '../types';
 import BitacoraModal from './BitacoraModal';
+import DateInput from '@/components/ui/DateInput';
 
 interface Props {
   dashboardStats: dashboardStat[];
@@ -191,10 +192,10 @@ export default function DashboardTab({
           <div className="flex flex-wrap items-center gap-3">
             <div className="flex items-center gap-2">
               <label className="text-[10px] font-bold text-gray-400 uppercase">Rango Fechas:</label>
-              <input type="date" value={dashboardStartDate} onChange={e => onStartDateChange(e.target.value)}
+              <DateInput value={dashboardStartDate} onChange={e => onStartDateChange(e.target.value)}
                 className="px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-900 text-xs text-gray-700 dark:text-gray-200 focus:outline-none focus:ring-1 focus:ring-amber-500 font-bold" />
               <span className="text-gray-400 text-xs font-semibold">→</span>
-              <input type="date" value={dashboardEndDate} onChange={e => onEndDateChange(e.target.value)}
+              <DateInput value={dashboardEndDate} onChange={e => onEndDateChange(e.target.value)}
                 className="px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-900 text-xs text-gray-700 dark:text-gray-200 focus:outline-none focus:ring-1 focus:ring-amber-500 font-bold" />
             </div>
             <div className="flex items-center gap-2 border-l border-gray-200 dark:border-gray-800 pl-3">

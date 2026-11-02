@@ -1132,9 +1132,9 @@ export default function BankReconciliationModule() {
     return res;
   };
 
-  const handleVincularComprobante = async (comprobanteId: string, movimientoBancarioId: string, montoAsociado?: number) => {
+  const handleVincularComprobante = async (comprobanteId: string, movimientoBancarioId: string, montoAsociado?: number, comentarioDiferencia?: string) => {
     const token = await getSessionToken();
-    const res = await vincularComprobanteAMovimiento(comprobanteId, movimientoBancarioId, token, montoAsociado);
+    const res = await vincularComprobanteAMovimiento(comprobanteId, movimientoBancarioId, token, montoAsociado, comentarioDiferencia);
     if (res.success) {
       await fetchData();
     }
@@ -2005,6 +2005,7 @@ NOTIFY pgrst, 'reload schema';`}
               setBancoSubTab={setBancoSubTab}
               cuentasBancarias={cuentasBancarias}
               movimientos={movementsForSelectedMonth}
+              allMovimientos={movimientos}
               estatusCatalog={estatusCatalog}
               formasPago={formasPago}
               categoriasMovimiento={categoriasMovimiento}
@@ -2062,6 +2063,7 @@ NOTIFY pgrst, 'reload schema';`}
               handleBulkMoveMovimientos={handleBulkMoveMovimientos}
               handleUpdateMesConciliacion={handleUpdateMesConciliacion}
               comprobantes={comprobantesForSelectedMonth}
+              allComprobantes={comprobantes}
               selectedMonth={selectedMonth}
               onCrearComprobante={handleCrearComprobante}
               onActualizarComprobante={handleActualizarComprobante}

@@ -36,6 +36,7 @@ import {
 import { useSessionToken } from '../../../../lib/hooks/useSessionToken';
 import { supabase } from '../../../../lib/supabase';
 import { formatDate } from '../../../../lib/formatters';
+import DateInput from '@/components/ui/DateInput';
 import { 
   descargarPlantillaEstadoCuenta, 
   CATEGORIAS_DEFAULT, 
@@ -1276,8 +1277,7 @@ export function CargasTab({
                           <td className="p-3 whitespace-nowrap text-gray-700 dark:text-gray-300 font-mono">
                             {editingMovId === m.id ? (
                               <div className="flex items-center gap-1">
-                                <input
-                                  type="date"
+                                <DateInput
                                   value={editingMovDate}
                                   onChange={(e) => setEditingMovDate(e.target.value)}
                                   className="px-2 py-1 text-xs border border-amber-400 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white outline-none"
@@ -1467,8 +1467,7 @@ export function CargasTab({
                 Nueva Fecha para los Movimientos
               </label>
 
-              <input
-                type="date"
+              <DateInput
                 value={newDateValue}
                 onChange={(e) => setNewDateValue(e.target.value)}
                 className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 px-3.5 py-2.5 rounded-xl text-sm font-semibold text-gray-900 dark:text-white outline-none focus:ring-2 focus:ring-amber-500 transition-all cursor-pointer"

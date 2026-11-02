@@ -4,6 +4,8 @@ import { useState } from 'react';
 import { AlertCircle, FileText } from 'lucide-react';
 import type { Incidencia, EmpleadoDetalle } from '../types';
 import { createIncidencia } from '../actions';
+import DateInput from '@/components/ui/DateInput';
+import { formatDate } from '@/lib/formatters';
 
 interface Props {
   incidencias: Incidencia[];
@@ -72,10 +74,10 @@ export default function IncidenciasTab({ incidencias, empleados, empresaId, onSa
             </select></div>
           <div className="grid grid-cols-2 gap-3">
             <div><label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Fecha Inicio *</label>
-              <input type="date" required value={form.fecha_inicio} onChange={e => setForm({ ...form, fecha_inicio: e.target.value })}
+              <DateInput required value={form.fecha_inicio} onChange={e => setForm({ ...form, fecha_inicio: e.target.value })}
                 className="w-full px-3 py-2 rounded-lg bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800" /></div>
             <div><label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Fecha Fin *</label>
-              <input type="date" required value={form.fecha_fin} onChange={e => setForm({ ...form, fecha_fin: e.target.value })}
+              <DateInput required value={form.fecha_fin} onChange={e => setForm({ ...form, fecha_fin: e.target.value })}
                 className="w-full px-3 py-2 rounded-lg bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800" /></div>
           </div>
           <div><label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Motivo</label>
@@ -103,7 +105,7 @@ export default function IncidenciasTab({ incidencias, empleados, empresaId, onSa
                 <tr key={inc.id} className="hover:bg-gray-50 dark:hover:bg-gray-900/10">
                   <td className="p-3 font-semibold text-gray-900 dark:text-white">{inc.empleados_detalle?.nombre_completo || 'Empleado'}</td>
                   <td className="p-3 capitalize text-gray-600 dark:text-gray-300">{inc.tipo_incidencia.replace(/_/g, ' ')}</td>
-                  <td className="p-3 text-gray-500">{inc.fecha_inicio} al {inc.fecha_fin}</td>
+                  <td className="p-3 text-gray-500">{formatDate(inc.fecha_inicio)} al {formatDate(inc.fecha_fin)}</td>
                   <td className="p-3 font-semibold text-gray-700 dark:text-gray-300">{inc.total_dias} días</td>
                   <td className="p-3 text-right">
                     <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/10 text-emerald-600 uppercase">

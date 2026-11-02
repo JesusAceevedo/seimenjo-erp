@@ -47,15 +47,18 @@ export default function AutoConciliacionModal({
   onAdjustManual,
   onDownloadFile
 }: AutoConciliacionModalProps) {
-  const [selectedIds, setSelectedIds] = useState<string[]>(() => propuestas.map(p => p.id));
+  const [selectedIds, setSelectedIds] = useState<string[]>(() =>
+    propuestas.filter(p => p.mismoMes !== false).map(p => p.id)
+  );
+  const [soloMismoMes, setSoloMismoMes] = useState<boolean>(true);
   const [filtroTipo, setFiltroTipo] = useState<'todos' | 'retiros' | 'depositos' | 'efectivo'>('todos');
   const [filtroConfianza, setFiltroConfianza] = useState<'todas' | 'exacta' | 'alta' | 'media'>('todas');
   const [busqueda, setBusqueda] = useState('');
 
-  // Sincronizar selección inicial cuando cambian las propuestas
+  // Sincronizar selección inicial cuando cambian las propuestas (solo pre-seleccionar las del mismo mes)
   React.useEffect(() => {
     if (propuestas && propuestas.length > 0) {
-      setSelectedIds(propuestas.map(p => p.id));
+      setSelectedIds(propuestas.filter(p => p.mismoMes !== false).map(p => p.id));
     } else {
       setSelectedIds([]);
     }
@@ -80,8 +83,16 @@ export default function AutoConciliacionModal({
   };
 
   // Filtrado de propuestas
+  const propuestasPorAlcance = useMemo(() => {
+    return soloMismoMes ? propuestas.filter(p => p.mismoMes !== false) : propuestas;
+  }, [propuestas, soloMismoMes]);
+
+  const countOtrosMeses = useMemo(() => {
+    return propuestas.filter(p => p.mismoMes === false).length;
+  }, [propuestas]);
+
   const propuestasFiltradas = useMemo(() => {
-    return propuestas.filter(p => {
+    return propuestasPorAlcance.filter(p => {
       // Filtro Tipo
       if (filtroTipo === 'retiros' && p.tipo !== 'retiro_gasto') return false;
       if (filtroTipo === 'depositos' && p.tipo !== 'deposito_pedido') return false;
@@ -117,7 +128,7 @@ export default function AutoConciliacionModal({
 
       return true;
     });
-  }, [propuestas, filtroTipo, filtroConfianza, busqueda]);
+  }, [propuestasPorAlcance, filtroTipo, filtroConfianza, busqueda]);
 
   const toggleSelectAll = () => {
     const idsVisibles = propuestasFiltradas.map(p => p.id);
@@ -136,8 +147,8 @@ export default function AutoConciliacionModal({
   };
 
   const propuestasSeleccionadas = useMemo(() => {
-    return propuestas.filter(p => selectedIds.includes(p.id));
-  }, [propuestas, selectedIds]);
+    return propuestasPorAlcance.filter(p => selectedIds.includes(p.id));
+  }, [propuestasPorAlcance, selectedIds]);
 
   const totalMontoRetiros = useMemo(() => {
     return propuestasSeleccionadas
@@ -168,11 +179,11 @@ export default function AutoConciliacionModal({
                 <div className="flex items-center gap-2.5">
                   <h2 className="text-xl font-black tracking-tight">Propuestas de Auto-Conciliación</h2>
                   <span className="px-2.5 py-0.5 rounded-full text-xs font-extrabold bg-emerald-100 text-emerald-800 dark:bg-emerald-950/80 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800">
-                    {propuestas.length} {propuestas.length === 1 ? 'coincidencia' : 'coincidencias'}
+                    {propuestasPorAlcance.length} {propuestasPorAlcance.length === 1 ? 'coincidencia' : 'coincidencias'}
                   </span>
                 </div>
                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                  Revisa y valida la comparación entre transferencias bancarias y facturas/gastos antes de conciliar.
+                  De manera automática solo se proponen y seleccionan facturas del mes activo. Para facturas de otros meses puedes asignarlas manualmente.
                 </p>
               </div>
             </div>
@@ -195,7 +206,7 @@ export default function AutoConciliacionModal({
                 <span className="text-xs font-semibold text-gray-600 dark:text-gray-400">Seleccionadas:</span>
               </div>
               <span className="text-sm font-black font-mono text-emerald-600 dark:text-emerald-400">
-                {selectedIds.length} <span className="text-xs text-gray-400 font-normal">/ {propuestas.length}</span>
+                {propuestasSeleccionadas.length} <span className="text-xs text-gray-400 font-normal">/ {propuestasPorAlcance.length}</span>
               </span>
             </div>
 
@@ -246,7 +257,7 @@ export default function AutoConciliacionModal({
                     : 'text-gray-500 hover:text-gray-900 dark:hover:text-gray-200'
                 }`}
               >
-                Todos ({propuestas.length})
+                Todos ({propuestasPorAlcance.length})
               </button>
               <button
                 onClick={() => setFiltroTipo('retiros')}
@@ -256,7 +267,7 @@ export default function AutoConciliacionModal({
                     : 'text-gray-500 hover:text-gray-900 dark:hover:text-gray-200'
                 }`}
               >
-                Egresos ({propuestas.filter(p => p.tipo === 'retiro_gasto').length})
+                Egresos ({propuestasPorAlcance.filter(p => p.tipo === 'retiro_gasto').length})
               </button>
               <button
                 onClick={() => setFiltroTipo('depositos')}
@@ -266,7 +277,7 @@ export default function AutoConciliacionModal({
                     : 'text-gray-500 hover:text-gray-900 dark:hover:text-gray-200'
                 }`}
               >
-                Ingresos ({propuestas.filter(p => p.tipo === 'deposito_pedido').length})
+                Ingresos ({propuestasPorAlcance.filter(p => p.tipo === 'deposito_pedido').length})
               </button>
               <button
                 onClick={() => setFiltroTipo('efectivo')}
@@ -276,9 +287,32 @@ export default function AutoConciliacionModal({
                     : 'text-gray-500 hover:text-gray-900 dark:hover:text-gray-200'
                 }`}
               >
-                Efectivo ({propuestas.filter(p => p.tipo === 'retiro_efectivo').length})
+                Efectivo ({propuestasPorAlcance.filter(p => p.tipo === 'retiro_efectivo').length})
               </button>
             </div>
+
+            {/* Opción de solo activos en el mes vs mostrar facturas de otros meses */}
+            <button
+              type="button"
+              onClick={() => setSoloMismoMes(prev => !prev)}
+              className={`px-3 py-1.5 rounded-xl border text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm ${
+                soloMismoMes
+                  ? 'bg-emerald-50 dark:bg-emerald-950/60 border-emerald-300 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300'
+                  : 'bg-amber-50 dark:bg-amber-950/60 border-amber-300 dark:border-amber-800 text-amber-700 dark:text-amber-300'
+              }`}
+              title={
+                soloMismoMes
+                  ? 'Mostrando únicamente facturas emitidas dentro del mismo mes. Haz clic para ver coincidencias de otros meses.'
+                  : 'Mostrando también facturas de otros meses para asignación manual.'
+              }
+            >
+              <Calendar size={13} />
+              <span>
+                {soloMismoMes
+                  ? `Solo activos del mes${countOtrosMeses > 0 ? ` (+${countOtrosMeses} otros meses)` : ''}`
+                  : 'Mostrando todos los meses'}
+              </span>
+            </button>
           </div>
 
           <div className="flex items-center gap-2 flex-1 sm:flex-initial min-w-[240px]">
@@ -547,13 +581,13 @@ export default function AutoConciliacionModal({
         {/* PIE DEL MODAL CON BOTONES DE ACCIÓN */}
         <div className="p-4 sm:p-5 border-t border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-950 flex items-center justify-between gap-4 flex-wrap shrink-0">
           <div className="text-xs text-gray-500 dark:text-gray-400">
-            {selectedIds.length === 0 ? (
+            {propuestasSeleccionadas.length === 0 ? (
               <span className="text-amber-600 dark:text-amber-400 font-semibold">
                 Selecciona al menos una propuesta para aplicar la conciliación.
               </span>
             ) : (
               <span>
-                Se aplicarán <strong>{selectedIds.length}</strong> conciliaciones seleccionadas.
+                Se aplicarán <strong>{propuestasSeleccionadas.length}</strong> conciliaciones seleccionadas.
               </span>
             )}
           </div>
@@ -571,7 +605,7 @@ export default function AutoConciliacionModal({
             <button
               type="button"
               onClick={() => onApply(propuestasSeleccionadas)}
-              disabled={selectedIds.length === 0 || isApplying}
+              disabled={propuestasSeleccionadas.length === 0 || isApplying}
               className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-xl text-xs font-black shadow-lg hover:shadow-emerald-500/20 transition-all flex items-center gap-2"
             >
               {isApplying ? (
@@ -582,7 +616,7 @@ export default function AutoConciliacionModal({
               ) : (
                 <>
                   <CheckCircle2 size={16} />
-                  <span>Aplicar {selectedIds.length} Conciliaciones</span>
+                  <span>Aplicar {propuestasSeleccionadas.length} Conciliaciones</span>
                 </>
               )}
             </button>

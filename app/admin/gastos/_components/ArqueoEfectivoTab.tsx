@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useMemo } from 'react';
+import { formatDate } from '@/lib/formatters';
 import {
   Banknote,
   Landmark,
@@ -90,7 +91,7 @@ interface ArqueoEfectivoTabProps {
   gastos?: any[];
   token?: string;
   onReloadMovimientos?: () => void;
-  onVincularComprobante?: (comprobanteId: string, movimientoId: string, montoAsociado?: number) => Promise<{ success: boolean; error?: string }>;
+  onVincularComprobante?: (comprobanteId: string, movimientoId: string, montoAsociado?: number, comentarioDiferencia?: string) => Promise<{ success: boolean; error?: string }>;
   onDesvincularComprobante?: (comprobanteId: string, movimientoId?: string | null) => Promise<{ success: boolean; error?: string }>;
 }
 
@@ -115,6 +116,7 @@ export function ArqueoEfectivoTab({
   const [activeCashDeposit, setActiveCashDeposit] = useState<CashDepositMovement | null>(null);
   const [dismissedNavigationDepositId, setDismissedNavigationDepositId] = useState('');
   const [selectedCashTicketIds, setSelectedCashTicketIds] = useState<Set<string>>(new Set());
+  const [cashDiscrepancyNote, setCashDiscrepancyNote] = useState('');
   const [savingCashAssignments, setSavingCashAssignments] = useState(false);
   const [cashCarryForwardByMonth, setCashCarryForwardByMonth] = useState<Record<string, CashCarryForwardRecord[]>>(() => {
     if (typeof window === 'undefined') return {};
@@ -372,6 +374,7 @@ export function ArqueoEfectivoTab({
   const openCashDeposit = (deposit: CashDepositMovement) => {
     setActiveCashDeposit(deposit);
     setSelectedCashTicketIds(new Set());
+    setCashDiscrepancyNote('');
   };
 
   const unlinkCashTicket = async (ticket: CashTicketRow) => {
@@ -387,16 +390,51 @@ export function ArqueoEfectivoTab({
   };
 
   const saveCashAssignments = async () => {
-    if (!activeCashDepositForModal || !onVincularComprobante || Math.abs(cashAssignmentDifference) > 0.05 || selectedCashTicketRows.length === 0) return;
+    if (!activeCashDepositForModal || !onVincularComprobante || selectedCashTicketRows.length === 0) return;
+    const hasDifference = Math.abs(cashAssignmentDifference) > 0.05;
+    let finalNote = cashDiscrepancyNote.trim();
+
+    if (hasDifference) {
+      if (!finalNote) {
+        const promptNote = window.prompt(
+          `⚠️ Aviso: Existe una diferencia de ${formatCurrency(cashAssignmentDifference)} entre el saldo del depósito (${formatCurrency(activeDepositPending)}) y los tickets seleccionados (${formatCurrency(selectedCashTicketTotal)}).\n\nIngresa una nota o descripción para justificar y conciliar esta diferencia:`,
+          `Ajuste por diferencia de efectivo (${formatCurrency(cashAssignmentDifference)})`
+        );
+        if (promptNote === null) return;
+        finalNote = promptNote.trim() || `Ajuste por diferencia de efectivo (${formatCurrency(cashAssignmentDifference)})`;
+      } else {
+        const confirmed = window.confirm(
+          `⚠️ Aviso de diferencia: ${formatCurrency(cashAssignmentDifference)}\n` +
+          `• Depósito pendiente: ${formatCurrency(activeDepositPending)}\n` +
+          `• Tickets seleccionados: ${formatCurrency(selectedCashTicketTotal)}\n` +
+          `• Nota registrada: "${finalNote}"\n\n` +
+          `¿Deseas continuar y conciliar con esta diferencia?`
+        );
+        if (!confirmed) return;
+      }
+    }
+
     setSavingCashAssignments(true);
     try {
-      for (const ticket of selectedCashTicketRows) {
-        const result = await onVincularComprobante(ticket.id, activeCashDepositForModal.id, Number(ticket._cashPending.toFixed(2)));
+      const comentarioGuardar = hasDifference
+        ? `[Diferencia Efectivo ${formatCurrency(cashAssignmentDifference)}]: ${finalNote}`
+        : undefined;
+
+      for (let i = 0; i < selectedCashTicketRows.length; i++) {
+        const ticket = selectedCashTicketRows[i];
+        const isLast = i === selectedCashTicketRows.length - 1;
+        const result = await onVincularComprobante(
+          ticket.id,
+          activeCashDepositForModal.id,
+          Number(ticket._cashPending.toFixed(2)),
+          isLast ? comentarioGuardar : undefined
+        );
         if (result && !result.success) throw new Error(result.error || 'No se pudo vincular el ticket.');
       }
       setActiveCashDeposit(null);
       setDismissedNavigationDepositId(cashNavigationTarget?.depositId || '');
       setSelectedCashTicketIds(new Set());
+      setCashDiscrepancyNote('');
       onReloadMovimientos?.();
     } catch (error: unknown) {
       alert(error instanceof Error ? error.message : 'No se pudieron guardar las asignaciones.');
@@ -408,6 +446,7 @@ export function ArqueoEfectivoTab({
   const closeCashDepositModal = () => {
     setActiveCashDeposit(null);
     setDismissedNavigationDepositId(cashNavigationTarget?.depositId || '');
+    setCashDiscrepancyNote('');
   };
 
   const saveUnassignedCashTicketsForNextMonth = () => {
@@ -797,7 +836,7 @@ export function ArqueoEfectivoTab({
                   <tr><td colSpan={8} className="p-8 text-center text-gray-400 italic">No hay ventas en efectivo pendientes o registradas en este período.</td></tr>
                 ) : visibleCashTicketRows.map(ticket => (
                   <tr key={ticket.id} className="hover:bg-gray-50/80 dark:hover:bg-gray-800/40">
-                    <td className="p-3 whitespace-nowrap font-mono">{ticket.fecha ? String(ticket.fecha).slice(0, 10) : 'S/F'}</td>
+                    <td className="p-3 whitespace-nowrap font-mono">{ticket.fecha ? formatDate(ticket.fecha) : 'S/F'}</td>
                     <td className="p-3">
                       <span className="block font-bold text-emerald-700 dark:text-emerald-300">Corte de efectivo Parrot</span>
                       <span className="block text-[10px] text-gray-500 max-w-sm truncate" title={ticket.descripcion}>{ticket.descripcion || 'Desglose efectivo del ticket'}</span>
@@ -837,7 +876,7 @@ export function ArqueoEfectivoTab({
             <div className="p-4 border-b border-gray-200 dark:border-gray-800 flex items-start justify-between gap-3">
               <div>
                 <h4 className="text-sm font-black flex items-center gap-2"><Link2 size={16} className="text-blue-600" /> Asignar tickets a depósito de efectivo</h4>
-                <p className="text-xs text-gray-500 mt-1">{String(activeCashDepositForModal.fecha || '').slice(0, 10)} · {activeCashDepositForModal.concepto || 'Depósito BBVA'} · Total depósito: <strong>{formatCurrency(activeCashDepositForModal._cashAmount)}</strong></p>
+                <p className="text-xs text-gray-500 mt-1">{formatDate(activeCashDepositForModal.fecha)} · {activeCashDepositForModal.concepto || 'Depósito BBVA'} · Total depósito: <strong>{formatCurrency(activeCashDepositForModal._cashAmount)}</strong></p>
               </div>
               <button type="button" onClick={closeCashDepositModal} className="p-1.5 rounded-lg text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800" aria-label="Cerrar"><X size={17} /></button>
             </div>
@@ -888,7 +927,7 @@ export function ArqueoEfectivoTab({
                         })} />
                         <span className="min-w-0 flex-1">
                           <span className="block text-xs font-bold truncate">{ticket.descripcion || 'Corte de efectivo Parrot'}</span>
-                          <span className="block text-[10px] text-gray-500">{String(ticket.fecha || '').slice(0, 10)} · {ticket._cashSalesPeriod === 'anterior' ? 'Arrastre' : 'Este mes'}</span>
+                          <span className="block text-[10px] text-gray-500">{formatDate(ticket.fecha)} · {ticket._cashSalesPeriod === 'anterior' ? 'Arrastre' : 'Este mes'}</span>
                         </span>
                         <span className="text-right font-mono text-xs font-black">{formatCurrency(ticket._cashPending)}</span>
                       </label>
@@ -897,17 +936,50 @@ export function ArqueoEfectivoTab({
                   {eligibleCashTicketRows.filter(ticket => ticket._cashPending > 0.005 && !ticket._cashLinks.some(link => link.movimiento_id === activeCashDepositForModal.id)).length === 0 && <p className="p-5 text-center text-xs text-gray-400">No hay tickets de efectivo pendientes para este depósito.</p>}
                 </div>
               </section>
-              <div className={`p-3 rounded-xl border flex items-center justify-between gap-3 ${Math.abs(cashAssignmentDifference) <= 0.05 ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-amber-50 border-amber-200 text-amber-800'}`}>
-                <div><span className="text-xs font-black block">Diferencia de esta asignación de efectivo</span><span className="text-[10px]">Saldo por asignar del depósito menos efectivo de tickets seleccionados; no compara la venta total del corte.</span></div>
-                <strong className="font-mono text-right">Depósito pendiente {formatCurrency(activeDepositPending)} − tickets nuevos {formatCurrency(selectedCashTicketTotal)} = {formatCurrency(cashAssignmentDifference)}</strong>
+              <div className={`p-3 rounded-xl border space-y-2.5 ${Math.abs(cashAssignmentDifference) <= 0.05 ? 'bg-emerald-50 border-emerald-200 text-emerald-800 dark:bg-emerald-950/30 dark:border-emerald-900/50 dark:text-emerald-200' : 'bg-amber-50 border-amber-200 text-amber-800 dark:bg-amber-950/30 dark:border-amber-900/50 dark:text-amber-200'}`}>
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <span className="text-xs font-black block">Diferencia de esta asignación de efectivo</span>
+                    <span className="text-[10px]">Saldo por asignar del depósito menos efectivo de tickets seleccionados; no compara la venta total del corte.</span>
+                  </div>
+                  <strong className="font-mono text-right">Depósito pendiente {formatCurrency(activeDepositPending)} − tickets nuevos {formatCurrency(selectedCashTicketTotal)} = {formatCurrency(cashAssignmentDifference)}</strong>
+                </div>
+                {selectedCashTicketRows.length > 0 && Math.abs(cashAssignmentDifference) > 0.05 && (
+                  <div className="pt-2 border-t border-amber-200/70 dark:border-amber-800/50 space-y-1.5">
+                    <label className="text-[11px] font-bold flex items-center gap-1.5 text-amber-900 dark:text-amber-200">
+                      <AlertTriangle size={13} className="text-amber-600 shrink-0" />
+                      <span>Nota / Descripción por diferencia de importe ({formatCurrency(cashAssignmentDifference)}):</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={cashDiscrepancyNote}
+                      onChange={(e) => setCashDiscrepancyNote(e.target.value)}
+                      placeholder="Ej. Redondeo de centavos en cajero / diferencia de $0.50 en efectivo..."
+                      className="w-full rounded-lg border border-amber-300 dark:border-amber-700 bg-white dark:bg-gray-900 px-3 py-1.5 text-xs text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                    />
+                  </div>
+                )}
               </div>
             </div>
             <div className="p-3 border-t border-gray-200 dark:border-gray-800 flex items-center justify-between gap-3">
               <span className="text-[10px] text-gray-500">Tickets pendientes sin depósito se pueden pasar al siguiente mes desde la pestaña de tickets.</span>
               <div className="flex gap-2 shrink-0">
                 <button type="button" onClick={closeCashDepositModal} className="px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 text-xs font-bold">Cerrar</button>
-                <button type="button" onClick={saveCashAssignments} disabled={savingCashAssignments || selectedCashTicketRows.length === 0 || Math.abs(cashAssignmentDifference) > 0.05} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-xs font-bold disabled:opacity-50">
-                  {savingCashAssignments ? 'Guardando...' : 'Confirmar suma exacta'}
+                <button
+                  type="button"
+                  onClick={saveCashAssignments}
+                  disabled={savingCashAssignments || selectedCashTicketRows.length === 0}
+                  className={`px-3 py-2 rounded-lg text-white text-xs font-bold disabled:opacity-50 cursor-pointer transition-colors ${
+                    Math.abs(cashAssignmentDifference) <= 0.05
+                      ? 'bg-emerald-600 hover:bg-emerald-700'
+                      : 'bg-amber-600 hover:bg-amber-700'
+                  }`}
+                >
+                  {savingCashAssignments
+                    ? 'Guardando...'
+                    : Math.abs(cashAssignmentDifference) <= 0.05
+                      ? 'Confirmar suma exacta'
+                      : `Conciliar con diferencia (${formatCurrency(cashAssignmentDifference)})`}
                 </button>
               </div>
             </div>
@@ -957,7 +1029,7 @@ export function ArqueoEfectivoTab({
                   dailyCashRows.map(row => (
                     <tr key={row.fecha} className="hover:bg-gray-50/80 dark:hover:bg-gray-800/40 transition-colors">
                       <td className="p-3 font-semibold text-gray-800 dark:text-gray-200">
-                        {row.fecha}
+                        {formatDate(row.fecha)}
                       </td>
                       <td className="p-3 text-right font-bold text-emerald-600 dark:text-emerald-400">
                         {formatCurrency(row.ventasEfectivo)}
@@ -1039,7 +1111,7 @@ export function ArqueoEfectivoTab({
                   depositosEfectivoBanco.map(m => (
                     <tr key={m.id} className="hover:bg-gray-50/80 dark:hover:bg-gray-800/40 transition-colors">
                       <td className="p-3 whitespace-nowrap font-mono font-semibold text-gray-700 dark:text-gray-300">
-                        {m.fecha ? m.fecha.split('T')[0] : 'S/F'}
+                        {m.fecha ? formatDate(m.fecha) : 'S/F'}
                       </td>
                       <td className="p-3 font-medium text-gray-900 dark:text-white max-w-sm truncate" title={m.concepto}>
                         {m.concepto}

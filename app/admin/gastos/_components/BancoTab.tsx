@@ -17,6 +17,7 @@ import {
   History, Sparkles, ShieldAlert, Banknote, Clock, Calendar, Globe
 } from 'lucide-react';
 import { formatCurrency, formatDate } from '../../../../lib/formatters';
+import DateInput from '@/components/ui/DateInput';
 import type { MovimientoBancario, EstatusConciliacion, GastoReconciliable, FormaPago, ComprobanteDeposito } from '../../types';
 import { supabase } from '../../../../lib/supabase';
 import { getMetodoPagoLabel } from '../../../../lib/constants/sat';
@@ -201,7 +202,7 @@ export interface BancoTabProps {
   onActualizarComprobante?: (id: string, payload: any) => Promise<any>;
   onEliminarComprobante?: (id: string) => Promise<any>;
   onEliminarMultiplesComprobantes?: (ids: string[]) => Promise<any>;
-  onVincularComprobante?: (comprobanteId: string, movimientoBancarioId: string, montoAsociado?: number) => Promise<any>;
+  onVincularComprobante?: (comprobanteId: string, movimientoBancarioId: string, montoAsociado?: number, comentarioDiferencia?: string) => Promise<any>;
   onDesvincularComprobante?: (comprobanteId: string, movimientoBancarioId?: string | null) => Promise<any>;
   onFusionarReembolso?: (movId1: string, movId2: string, payload: { soporteReembolsoUrl?: string | null; comentarios?: string | null }) => Promise<any>;
   onConsolidarComisiones?: () => void;
@@ -4610,7 +4611,7 @@ export default function BancoTab({
                               className="w-full text-left px-2 py-1.5 bg-white dark:bg-gray-900 hover:bg-emerald-100 dark:hover:bg-emerald-900/40 border border-emerald-100 dark:border-emerald-800/30 rounded text-[10px] text-gray-700 dark:text-gray-300 transition-colors flex justify-between items-center cursor-pointer"
                             >
                               <span className="font-bold flex items-center gap-1.5">
-                                {g.fecha}
+                                {formatDate(g.fecha)}
                                 <span className="text-[9px] font-normal text-emerald-600 dark:text-emerald-400 font-mono">
                                   ({g.tickets?.length || 0} tickets)
                                 </span>
@@ -4657,8 +4658,7 @@ export default function BancoTab({
                       <div className="grid grid-cols-2 gap-3">
                         <div>
                           <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block mb-1">Fecha</label>
-                          <input
-                            type="date"
+                          <DateInput
                             value={newCompForm.fecha ?? ''}
                             onChange={(e) => setNewCompForm(p => ({ ...p, fecha: e.target.value }))}
                             className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs text-gray-900 dark:text-white focus:ring-1 focus:ring-amber-500 outline-none"
@@ -7764,7 +7764,8 @@ export default function BancoTab({
       {/* MODAL DE ASOCIACIÓN DE COMPROBANTES DE DEPÓSITO (TICKETS Y CORTES) */}
       {activeDepositMov && (() => {
         const movMonto = Number(activeDepositMov.deposito || activeDepositMov.monto);
-        const associated = (comprobantes || []).filter(c => 
+        const compPool = allComprobantes && allComprobantes.length > 0 ? allComprobantes : (comprobantes || []);
+        const associated = compPool.filter(c => 
           c.comprobantes_deposito_movimientos?.some(rel => rel.movimiento_id === activeDepositMov.id)
         );
         const compsSum = associated.reduce((acc, c) => {
@@ -7774,7 +7775,7 @@ export default function BancoTab({
         const dif = movMonto - compsSum;
         const match = Math.abs(dif) < 0.05;
 
-        const availableToLink = (comprobantes || []).filter(
+        const availableToLink = compPool.filter(
           c => !associated.some(ac => ac.id === c.id) &&
                (!c.cuenta_bancaria_id || c.cuenta_bancaria_id === activeDepositMov.cuenta_bancaria_id)
         );
@@ -8091,8 +8092,7 @@ export default function BancoTab({
                     <div className="grid grid-cols-2 gap-2 text-xs">
                       <div>
                         <label className="text-[9px] font-bold text-gray-400 uppercase tracking-wider block mb-0.5">Fecha</label>
-                        <input
-                          type="date"
+                        <DateInput
                           value={newCompForm.fecha ?? ''}
                           onChange={(e) => setNewCompForm(p => ({ ...p, fecha: e.target.value }))}
                           className="w-full bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 p-1.5 rounded-lg text-xs text-gray-900 dark:text-white"
@@ -8366,7 +8366,7 @@ export default function BancoTab({
           ? (allMovimientos && allMovimientos.length > 0 ? allMovimientos : movimientos)
           : linkScopeMonth === 'next'
           ? (allMovimientos && allMovimientos.length > 0
-              ? allMovimientos.filter(m => (m.mes_conciliacion || m.fecha?.substring(0, 7)) === nextMonthStr)
+              ? allMovimientos.filter(m => (m.mes_conciliacion || m.fecha?.substring(0, 7)) === nextMonthStr || m.fecha?.substring(0, 7) === nextMonthStr)
               : movimientos)
           : movimientos;
 
@@ -8577,15 +8577,13 @@ export default function BancoTab({
                     {/* Filtro por fechas */}
                     <div className="flex items-center gap-2">
                       <label className="text-[10px] text-gray-500 font-semibold">Desde:</label>
-                      <input
-                        type="date"
+                      <DateInput
                         value={linkDateFrom}
                         onChange={(e) => setLinkDateFrom(e.target.value)}
                         className="bg-transparent border border-gray-300 dark:border-gray-700 px-1.5 py-0.5 rounded text-[10px] text-gray-900 dark:text-white"
                       />
                       <label className="text-[10px] text-gray-500 font-semibold">Hasta:</label>
-                      <input
-                        type="date"
+                      <DateInput
                         value={linkDateTo}
                         onChange={(e) => setLinkDateTo(e.target.value)}
                         className="bg-transparent border border-gray-300 dark:border-gray-700 px-1.5 py-0.5 rounded text-[10px] text-gray-900 dark:text-white"
@@ -8701,16 +8699,22 @@ export default function BancoTab({
                         );
                       });
 
+                      let notaDiferencia: string | undefined;
+
                       if (!isExactMatch && !isPlatformWithCommission) {
-                        alert(
-                          `⛔ No se permite vincular este movimiento.\n\n` +
-                          `Para movimientos bancarios normales (BBVA), el importe depositado debe coincidir al 100% con el ticket.\n\n` +
+                        const notaPrompt = window.prompt(
+                          `⚠️ Aviso: El importe depositado no coincide al 100% con el ticket.\n\n` +
                           `• Monto Ticket: ${formatCurrency(currentCompToLink.monto)}\n` +
                           `• Ya Vinculados: ${formatCurrency(movsSum)}\n` +
                           `• Depósitos Seleccionados: ${formatCurrency(selectedSum)}\n` +
-                          `• Diferencia pendiente: ${formatCurrency(dif)}`
+                          `• Diferencia: ${formatCurrency(dif)}\n\n` +
+                          `Si deseas conciliar con esta diferencia, ingresa una descripción o nota justificativa:`,
+                          `Ajuste por diferencia (${formatCurrency(dif)})`
                         );
-                        return;
+                        if (notaPrompt === null) {
+                          return;
+                        }
+                        notaDiferencia = `[Diferencia ${formatCurrency(dif)}]: ${notaPrompt.trim() || `Ajuste por diferencia (${formatCurrency(dif)})`}`;
                       }
 
                       if (!isExactMatch && isPlatformWithCommission) {
@@ -8736,10 +8740,11 @@ export default function BancoTab({
 
                       setLinkingBatch(true);
                       try {
-                        for (const movId of ids) {
+                        for (let i = 0; i < ids.length; i++) {
+                          const movId = ids[i];
                           const mov = availableMovs.find(x => x.id === movId);
                           const montoAsoc = mov ? Number(mov.deposito || mov.monto) : undefined;
-                          const res = await onVincularComprobante?.(currentCompToLink.id, movId, montoAsoc);
+                          const res = await onVincularComprobante?.(currentCompToLink.id, movId, montoAsoc, i === ids.length - 1 ? notaDiferencia : undefined);
                           if (res && !res.success) {
                             alert(`Error vinculando movimiento: ${res.error}`);
                             break;

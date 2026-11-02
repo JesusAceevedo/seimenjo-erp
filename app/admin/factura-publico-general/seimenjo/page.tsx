@@ -20,6 +20,7 @@ import { useSessionToken } from '../../../../lib/hooks/useSessionToken';
 import { useFacturaPublicoGeneralData } from '../_hooks/useFacturaPublicoGeneralData';
 import { crearPedidoDesdeFacturaSeimenjo, vincularFacturaAPedidoSeimenjo } from './actions';
 import { ComparativoContableSeimenjoTab } from './_components/ComparativoContableSeimenjoTab';
+import { formatDate } from '@/lib/formatters';
 
 interface PedidoResumen {
   id: string;
@@ -473,7 +474,7 @@ export default function SeimenjoPedidosPage() {
                       return (
                         <tr key={pedido.id}>
                           <td className="p-3 font-mono font-bold">#{pedido.numero_pedido || '—'}</td>
-                          <td className="p-3 text-gray-500">{pedido.fecha_pedido || '—'}</td>
+                          <td className="p-3 text-gray-500">{formatDate(pedido.fecha_pedido)}</td>
                           <td className="p-3">
                             <span className="font-medium">{clienteDisplay}</span>
                             {rfc && <span className="block text-[10px] text-gray-500 font-mono">{rfc}</span>}
@@ -544,7 +545,7 @@ export default function SeimenjoPedidosPage() {
                       return (
                         <tr key={facturaId || factura.uuid_fiscal}>
                           <td className="p-3 font-mono">
-                            {factura.fecha_emision || factura.fecha || '—'}
+                            {formatDate(factura.fecha_emision || factura.fecha)}
                             <span className="block text-[10px] text-gray-500">{factura.serie_folio || factura.uuid_fiscal || 'Sin folio'}</span>
                           </td>
                           <td className="p-3">
@@ -576,7 +577,7 @@ export default function SeimenjoPedidosPage() {
                                       }
                                       return (
                                         <option key={pedido.id} value={pedido.id}>
-                                          {prefix}#{pedido.numero_pedido || '—'} · {clientStr} · {formatCurrency(pedido.precio_total || 0)} · {pedido.fecha_pedido || '—'}{folioTag}
+                                          {prefix}#{pedido.numero_pedido || '—'} · {clientStr} · {formatCurrency(pedido.precio_total || 0)} · {formatDate(pedido.fecha_pedido)}{folioTag}
                                         </option>
                                       );
                                     })}

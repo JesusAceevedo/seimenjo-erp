@@ -6,6 +6,7 @@
 import React from 'react';
 import { Plus, Search, RefreshCw, Users, ExternalLink, X, AlertTriangle } from 'lucide-react';
 import { formatCurrency } from '../../../../lib/formatters';
+import { formatDate } from '../../../../lib/formatters';
 import type { Proveedor } from '../../types';
 
 interface ProveedorModalState {
@@ -299,7 +300,7 @@ export default function ProveedoresTab({
                       <tbody className="divide-y divide-gray-100 dark:divide-gray-800/50 text-xs">
                         {proveedorFacturas.map((f) => (
                           <tr key={f.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/10 transition-colors">
-                            <td className="p-3 text-gray-500 dark:text-gray-400 font-mono text-[10px]">{f.fecha_gasto || 'S/F'}</td>
+                            <td className="p-3 text-gray-500 dark:text-gray-400 font-mono text-[10px]">{f.fecha_gasto ? formatDate(f.fecha_gasto) : 'S/F'}</td>
                             <td className="p-3">
                               <div className="flex items-center gap-1.5">
                                 <span className="font-semibold text-gray-900 dark:text-white">{f.concepto}</span>

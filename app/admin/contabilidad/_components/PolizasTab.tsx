@@ -6,6 +6,7 @@ import { useEmpresaId } from '../../../../lib/hooks/useEmpresaId';
 import { useSessionToken } from '../../../../lib/hooks/useSessionToken';
 import { sincronizarAsientos, revertirAsiento, obtenerCatalogoCuentas } from '../actions';
 import { formatCurrency } from '../../../../lib/formatters';
+import { formatDate } from '../../../../lib/formatters';
 import AsientoModal from './AsientoModal';
 import { RefreshCw, Plus, RotateCcw, FileText, CheckCircle, AlertTriangle, Eye, X } from 'lucide-react';
 
@@ -170,7 +171,7 @@ export default function PolizasTab({ selectedMonth }: PolizasTabProps) {
                   return (
                     <tr key={a.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/30 transition-colors">
                       <td className="p-3 font-mono font-bold text-blue-600 dark:text-blue-400">#{a.numero_folio}</td>
-                      <td className="p-3 font-mono text-gray-600 dark:text-gray-400">{a.fecha}</td>
+                      <td className="p-3 font-mono text-gray-600 dark:text-gray-400">{formatDate(a.fecha)}</td>
                       <td className="p-3 uppercase text-[10px] font-bold">
                         <span className={`px-2 py-0.5 rounded-full ${
                           a.tipo === 'ingreso' ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-400' :
@@ -232,7 +233,7 @@ export default function PolizasTab({ selectedMonth }: PolizasTabProps) {
                 <h3 className="text-base font-bold text-gray-900 dark:text-white">
                   Póliza #{selectedAsiento.numero_folio} ({selectedAsiento.tipo?.toUpperCase()})
                 </h3>
-                <p className="text-xs text-gray-500">{selectedAsiento.concepto} | Fecha: {selectedAsiento.fecha}</p>
+                <p className="text-xs text-gray-500">{selectedAsiento.concepto} | Fecha: {formatDate(selectedAsiento.fecha)}</p>
               </div>
               <button onClick={() => setSelectedAsiento(null)} className="p-1 rounded-lg text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800">
                 <X size={20} />

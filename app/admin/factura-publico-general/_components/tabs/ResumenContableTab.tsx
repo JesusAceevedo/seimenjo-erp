@@ -1,6 +1,7 @@
 'use client';
 
 import React from 'react';
+import { formatDate } from '@/lib/formatters';
 import {
   ArrowRight,
   AlertTriangle,
@@ -228,7 +229,7 @@ export const ResumenContableTab: React.FC<ResumenContableTabProps> = ({
             <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
               {facturasTercerosMes.map(invoice => (
                 <tr key={invoice.id || invoice.uuid_fiscal}>
-                  <td className="p-2.5 font-mono">{invoice.fecha_emision || invoice.fecha || '-'}<span className="block text-gray-400">{invoice.serie_folio || invoice.uuid_fiscal || '-'}</span></td>
+                  <td className="p-2.5 font-mono">{formatDate(invoice.fecha_emision || invoice.fecha)}<span className="block text-gray-400">{invoice.serie_folio || invoice.uuid_fiscal || '-'}</span></td>
                   <td className="p-2.5">{invoice.rfc_receptor || invoice.rfc || '-'}<span className="block text-gray-400">{invoice._clienteNombre || invoice.cliente_nombre || invoice.nombre_receptor || 'Cliente'}</span></td>
                   <td className="p-2.5 text-right font-mono">{formatCurrency(invoice._subtotal || invoice.subtotal || 0)}</td>
                   <td className="p-2.5 text-right font-mono">{formatCurrency(invoice._iva ?? invoice.iva_trasladado ?? 0)}</td>

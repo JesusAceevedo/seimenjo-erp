@@ -3,6 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { X, Check } from 'lucide-react';
 import { supabase } from '../../../../lib/supabase';
 import { editarMovimientoBancario } from '../reconciliationActions';
+import DateInput from '@/components/ui/DateInput';
 
 // ── EDITAR GASTO ────────────────────────────────────────────────────────────
 export function EditGastoModal({ gasto, categorias, onClose, onSuccess }: any) {
@@ -42,7 +43,7 @@ export function EditGastoModal({ gasto, categorias, onClose, onSuccess }: any) {
         <div className="space-y-4">
           <div>
             <label className="text-xs font-bold text-gray-500 block mb-1">Fecha</label>
-            <input type="date" value={fecha} onChange={e => setFecha(e.target.value)} className="w-full border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950 p-2 rounded text-sm outline-none focus:ring-1 focus:ring-blue-500" />
+            <DateInput value={fecha} onChange={e => setFecha(e.target.value)} className="w-full border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950 p-2 rounded text-sm outline-none focus:ring-1 focus:ring-blue-500" />
           </div>
           <div>
             <label className="text-xs font-bold text-gray-500 block mb-1">Descripción / Concepto</label>
@@ -105,7 +106,7 @@ export function EditVentaModal({ venta, onClose, onSuccess }: any) {
         <div className="space-y-4">
           <div>
             <label className="text-xs font-bold text-gray-500 block mb-1">Fecha</label>
-            <input type="date" value={fecha} onChange={e => setFecha(e.target.value)} className="w-full border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950 p-2 rounded text-sm outline-none focus:ring-1 focus:ring-blue-500" />
+            <DateInput value={fecha} onChange={e => setFecha(e.target.value)} className="w-full border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950 p-2 rounded text-sm outline-none focus:ring-1 focus:ring-blue-500" />
           </div>
           <div>
             <label className="text-xs font-bold text-gray-500 block mb-1">Cliente</label>
@@ -165,7 +166,7 @@ export function EditMovimientoModal({ movimiento, categorias = [], token, onClos
         <div className="space-y-4">
           <div>
             <label className="text-xs font-bold text-gray-500 block mb-1">Fecha</label>
-            <input type="date" value={fecha} onChange={e => setFecha(e.target.value)} className="w-full border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950 p-2 rounded text-sm outline-none focus:ring-1 focus:ring-blue-500" />
+            <DateInput value={fecha} onChange={e => setFecha(e.target.value)} className="w-full border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950 p-2 rounded text-sm outline-none focus:ring-1 focus:ring-blue-500" />
           </div>
           <div>
             <label className="text-xs font-bold text-gray-500 block mb-1">Concepto / Referencia</label>

@@ -767,7 +767,9 @@ export default function VentasFacturadasModule() {
                     selectedCuentaId={selectedCuentaId}
                     setSelectedCuentaId={setSelectedCuentaId}
                     comprobantes={comprobantesForSelectedMonth}
+                    allComprobantes={comprobantes}
                     movimientos={depositosForSelectedMonth}
+                    allMovimientos={movimientosBancarios}
                     cuentasBancarias={cuentasBancarias}
                     estatusCatalog={estatusCatalog}
                     categoriasMovimiento={categoriasMovimiento}
@@ -881,9 +883,9 @@ export default function VentasFacturadasModule() {
                       }
                       return res;
                     }}
-                    onVincularComprobante={async (comprobanteId, movimientoBancarioId, montoAsociado) => {
+                    onVincularComprobante={async (comprobanteId, movimientoBancarioId, montoAsociado, comentarioDiferencia) => {
                       const token = await getSessionToken();
-                      const res = await vincularComprobanteAMovimiento(comprobanteId, movimientoBancarioId, token, montoAsociado);
+                      const res = await vincularComprobanteAMovimiento(comprobanteId, movimientoBancarioId, token, montoAsociado, comentarioDiferencia);
                       if (res.success) {
                         setMessage({ text: 'Movimiento vinculado correctamente.', type: 'success' });
                         await fetchData();

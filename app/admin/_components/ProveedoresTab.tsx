@@ -6,6 +6,7 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Search, RefreshCw, Users, ExternalLink, X, AlertTriangle, Eye, DollarSign, History, ArrowDownRight, ArrowUpRight, CheckCircle2 } from 'lucide-react';
 import { formatCurrency } from '../../../lib/formatters';
+import { formatDate } from '../../../lib/formatters';
 import type { Proveedor } from '../types';
 import type { ProveedorModalState, FacturaProveedor } from '@/lib/modules/proveedores/types/proveedor.types';
 import { useCfdiViewer } from './CfdiViewerContext';
@@ -427,7 +428,7 @@ export default function ProveedoresTab({
                       <tbody className="divide-y divide-gray-100 dark:divide-gray-800/50 text-xs">
                         {proveedorFacturas.map((f) => (
                           <tr key={f.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/10 transition-colors">
-                            <td className="p-3 text-gray-500 dark:text-gray-400 font-mono text-[10px]">{f.fecha_gasto || 'S/F'}</td>
+                            <td className="p-3 text-gray-500 dark:text-gray-400 font-mono text-[10px]">{f.fecha_gasto ? formatDate(f.fecha_gasto) : 'S/F'}</td>
                             <td className="p-3">
                               <div className="flex items-center gap-1.5">
                                 <span className="font-semibold text-gray-900 dark:text-white">{f.concepto}</span>
@@ -729,7 +730,7 @@ export default function ProveedoresTab({
                   <option value="">-- Seleccionar Factura --</option>
                   {proveedorFacturas.map(f => (
                     <option key={f.id} value={f.id}>
-                      {f.fecha_gasto ? `${f.fecha_gasto} - ` : ''}{f.concepto} ({formatCurrency(f.monto)})
+                      {f.fecha_gasto ? `${formatDate(f.fecha_gasto)} - ` : ''}{f.concepto} ({formatCurrency(f.monto)})
                     </option>
                   ))}
                 </select>

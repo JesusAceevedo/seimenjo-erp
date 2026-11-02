@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { RefreshCw, Clock, Users, Fingerprint, Scan, Settings, Power, HardDrive, Wifi, Bell, History, Trash2, Database, Camera, DoorOpen, AlertTriangle, Info, Terminal, CheckCircle, XCircle, Download } from 'lucide-react';
 import type { ZkTecoComando, EmpleadoDetalle } from '../types';
 import { loadComandosPendientes, encolarComandoZkTeco } from '../actions';
+import DateInput from '@/components/ui/DateInput';
 
 interface Props {
   empresaId: string | null;
@@ -362,8 +363,8 @@ export default function RelojTab({ empresaId, empleados, checadasRaw, onSyncTime
                 <div className="p-4 rounded-xl bg-gray-50 dark:bg-gray-900 border border-gray-100 dark:border-gray-800 space-y-3">
                   <p className="text-xs font-bold text-gray-700 dark:text-gray-300">Solicitar Checadas por Rango</p>
                   <div className="flex gap-2">
-                    <input type="date" value={logStart} onChange={e => setLogStart(e.target.value)} className="flex-1 px-3 py-2 rounded-lg bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 text-xs" />
-                    <input type="date" value={logEnd} onChange={e => setLogEnd(e.target.value)} className="flex-1 px-3 py-2 rounded-lg bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 text-xs" />
+                    <DateInput value={logStart} onChange={e => setLogStart(e.target.value)} className="flex-1 px-3 py-2 rounded-lg bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 text-xs" />
+                    <DateInput value={logEnd} onChange={e => setLogEnd(e.target.value)} className="flex-1 px-3 py-2 rounded-lg bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 text-xs" />
                   </div>
                   <div className="flex gap-2">
                     <button onClick={() => {
@@ -447,7 +448,7 @@ export default function RelojTab({ empresaId, empleados, checadasRaw, onSyncTime
                 <div className="p-4 rounded-xl bg-gray-50 dark:bg-gray-900 border border-gray-100 dark:border-gray-800 space-y-3">
                   <p className="text-xs font-bold text-gray-700 dark:text-gray-300">Festivos (HOLIDAY)</p>
                   <div className="flex gap-2">
-                    <input type="date" id="holidayDate" className="flex-1 px-2 py-1.5 rounded bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 text-xs" />
+                    <DateInput id="holidayDate" className="flex-1 px-2 py-1.5 rounded bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 text-xs" />
                     <button onClick={() => {
                       const el = document.getElementById('holidayDate') as HTMLInputElement;
                       if (el.value) sendCmd(`DATA UPDATE HOLIDAY Date=${el.value}`, 'config');

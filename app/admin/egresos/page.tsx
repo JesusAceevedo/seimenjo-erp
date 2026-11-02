@@ -14,6 +14,7 @@ import {
 import { toggleMovimientoVisibilidad, conciliarGastoEfectivoAutomatico } from '../gastos/reconciliationActions';
 import { SAT_FORMAS_PAGO, getMetodoPagoLabel } from '../../../lib/constants/sat';
 import { formatDate } from '../../../lib/formatters';
+import DateInput from '@/components/ui/DateInput';
 
 export const dynamic = 'force-dynamic';
 
@@ -701,16 +702,14 @@ export default function AdminGastos() {
             {/* Inputs de Rango Personalizado */}
             {filtroRango === 'rango' && (
               <div className="flex gap-2 items-center animate-in fade-in duration-200">
-                <input 
-                  type="date" 
+                <DateInput 
                   value={fechaInicio}
                   onChange={e => setFechaInicio(e.target.value)}
                   style={{ colorScheme: isDarkMode ? 'dark' : 'light' }}
                   className="border border-gray-200 dark:border-gray-800 p-2 rounded-lg text-sm bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-white focus:border-blue-500 outline-none focus:ring-1 focus:ring-blue-500" 
                 />
                 <span className="text-xs text-gray-400 font-bold">a</span>
-                <input 
-                  type="date" 
+                <DateInput 
                   value={fechaFin}
                   onChange={e => setFechaFin(e.target.value)}
                   style={{ colorScheme: isDarkMode ? 'dark' : 'light' }}
@@ -1055,8 +1054,7 @@ export default function AdminGastos() {
                   {/* Fecha */}
                   <div>
                     <label className="text-xs font-semibold text-gray-500 dark:text-gray-400">Fecha del Gasto</label>
-                    <input 
-                      type="date" 
+                    <DateInput 
                       value={nuevoGasto.fecha_gasto}
                       style={{ colorScheme: isDarkMode ? 'dark' : 'light' }}
                       className="w-full mt-1 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2.5 rounded-lg text-sm text-gray-900 dark:text-white" 

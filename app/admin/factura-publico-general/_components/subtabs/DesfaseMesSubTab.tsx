@@ -323,7 +323,7 @@ export const DesfaseMesSubTab: React.FC<DesfaseMesSubTabProps> = ({
                     Detectados {ticketsBbvaSinDeposito.length} tickets de terminal BBVA sin depósito en banco al cierre ({formatCurrency(ticketsBbvaSinDeposito.reduce((acc, t) => acc + Number(t.monto || 0), 0))})
                   </span>
                   <span className="text-[11px] text-sky-700 dark:text-sky-300 font-sans block mt-0.5">
-                    {ticketsBbvaSinDeposito.map(t => `${t.fecha ? String(t.fecha).substring(0, 10) : ''}: ${formatCurrency(t.monto)}`).join(' · ')}
+                    {ticketsBbvaSinDeposito.map(t => `${t.fecha ? formatDate(t.fecha) : ''}: ${formatCurrency(t.monto)}`).join(' · ')}
                   </span>
                 </div>
               </div>

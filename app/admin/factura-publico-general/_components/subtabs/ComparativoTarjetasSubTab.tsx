@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { Scale } from 'lucide-react';
+import { formatDate } from '@/lib/formatters';
 
 interface ComparativoTarjetasSubTabProps {
   comparativoTarjetas: any;
@@ -101,7 +102,7 @@ export const ComparativoTarjetasSubTab: React.FC<ComparativoTarjetasSubTabProps>
               return (
                 <tr key={r.fecha} className="hover:bg-gray-50/80 dark:hover:bg-gray-800/40 transition-colors">
                   <td className="p-3 font-mono font-medium text-gray-700 dark:text-gray-300">
-                    {r.fecha}
+                    {formatDate(r.fecha)}
                   </td>
                   <td className="p-3 text-right font-mono text-gray-600 dark:text-gray-400">
                     {formatCurrency(r.parrotDebito)}

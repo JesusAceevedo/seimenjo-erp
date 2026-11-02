@@ -38,6 +38,8 @@ import {
   Loader2
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
+import DateInput from '@/components/ui/DateInput';
+import { formatDate } from '@/lib/formatters';
 
 interface WizardConfiguracionGlobalModalProps {
   isOpen: boolean;
@@ -872,7 +874,7 @@ export const WizardConfiguracionGlobalModal: React.FC<WizardConfiguracionGlobalM
                         {ticketsFinDeMesPendientes.map(t => (
                           <div key={t.id} className="flex justify-between items-center py-1 px-2 rounded bg-white/60 dark:bg-gray-800/60">
                             <div>
-                              <span className="font-bold text-gray-800 dark:text-gray-200">{t.fecha ? String(t.fecha).substring(0, 10) : ''}</span>
+                              <span className="font-bold text-gray-800 dark:text-gray-200">{t.fecha ? formatDate(t.fecha) : ''}</span>
                               <span className="ml-2 text-gray-500 font-sans">{t.descripcion || 'Ticket POS'}</span>
                             </div>
                             <div className="flex items-center gap-2">
@@ -927,7 +929,7 @@ export const WizardConfiguracionGlobalModal: React.FC<WizardConfiguracionGlobalM
                         return (
                           <div key={t.id} className="flex justify-between items-center py-1 px-2.5 rounded-lg bg-white/80 dark:bg-gray-800/80 border border-sky-100 dark:border-sky-900/40">
                             <div>
-                              <span className="font-bold text-gray-800 dark:text-gray-200">{t.fecha ? String(t.fecha).substring(0, 10) : ''}</span>
+                              <span className="font-bold text-gray-800 dark:text-gray-200">{t.fecha ? formatDate(t.fecha) : ''}</span>
                               <span className="ml-2 text-gray-600 dark:text-gray-300 font-sans">{t.descripcion || 'Corte BBVA'}</span>
                             </div>
                             <div className="flex items-center gap-2">
@@ -1151,7 +1153,7 @@ export const WizardConfiguracionGlobalModal: React.FC<WizardConfiguracionGlobalM
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center gap-2 flex-wrap">
                                 <span className="font-bold text-gray-900 dark:text-white">
-                                  {d.fecha ? String(d.fecha).substring(0, 10) : 'Fecha N/A'}
+                                  {d.fecha ? formatDate(d.fecha) : 'Fecha N/A'}
                                 </span>
                                 {isNoVenta && (
                                   <span className="px-2 py-0.5 rounded-full text-[9px] font-black uppercase bg-rose-100 text-rose-800 dark:bg-rose-955 dark:text-rose-300">
@@ -1424,7 +1426,7 @@ export const WizardConfiguracionGlobalModal: React.FC<WizardConfiguracionGlobalM
                             <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2 pb-2 border-b border-gray-200/60 dark:border-gray-800/60">
                               <div className="flex items-center gap-2 flex-wrap">
                                 <span className="font-bold text-gray-900 dark:text-white">
-                                  {t.fecha ? String(t.fecha).substring(0, 10) : 'Fecha N/A'}
+                                  {t.fecha ? formatDate(t.fecha) : 'Fecha N/A'}
                                 </span>
                                 <span className="font-sans font-bold text-gray-700 dark:text-gray-300">
                                   {t.descripcion || 'Ticket de Venta / Corte POS'}
@@ -1505,7 +1507,7 @@ export const WizardConfiguracionGlobalModal: React.FC<WizardConfiguracionGlobalM
                                     >
                                       <div className="min-w-0 flex-1 pr-2">
                                         <div className="flex items-center gap-1.5">
-                                          <span className="text-[10px] font-bold text-gray-400">{am.fecha ? String(am.fecha).substring(0, 10) : ''}</span>
+                                          <span className="text-[10px] font-bold text-gray-400">{am.fecha ? formatDate(am.fecha) : ''}</span>
                                           <p className="font-bold text-gray-800 dark:text-gray-200 truncate text-[11px]">{am.concepto}</p>
                                         </div>
                                       </div>
@@ -1564,7 +1566,7 @@ export const WizardConfiguracionGlobalModal: React.FC<WizardConfiguracionGlobalM
                           Vincular Depósitos Bancarios al Ticket
                         </h4>
                         <p className="text-xs text-gray-500 mt-0.5">
-                          {activeCompToLink.descripcion || 'Ticket de Venta'} &bull; Fecha: {activeCompToLink.fecha ? String(activeCompToLink.fecha).substring(0, 10) : ''} &bull; Monto: <strong>{formatCurrency(activeCompToLink.monto)}</strong>
+                          {activeCompToLink.descripcion || 'Ticket de Venta'} &bull; Fecha: {activeCompToLink.fecha ? formatDate(activeCompToLink.fecha) : ''} &bull; Monto: <strong>{formatCurrency(activeCompToLink.monto)}</strong>
                         </p>
                       </div>
                       <button
@@ -1617,7 +1619,7 @@ export const WizardConfiguracionGlobalModal: React.FC<WizardConfiguracionGlobalM
                                   className="p-2.5 rounded-xl bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 flex justify-between items-center"
                                 >
                                   <div className="min-w-0 flex-1 pr-2">
-                                    <span className="text-[9.5px] text-gray-400 block">{am.fecha ? String(am.fecha).substring(0, 10) : ''}</span>
+                                    <span className="text-[9.5px] text-gray-400 block">{am.fecha ? formatDate(am.fecha) : ''}</span>
                                     <p className="font-bold text-gray-800 dark:text-gray-200 truncate">{am.concepto}</p>
                                   </div>
                                   <div className="flex items-center gap-2 shrink-0">
@@ -1727,15 +1729,13 @@ export const WizardConfiguracionGlobalModal: React.FC<WizardConfiguracionGlobalM
                             {/* Filtro de Fechas */}
                             <div className="flex items-center gap-1.5 text-[10px] font-bold text-gray-500">
                               <span>Desde:</span>
-                              <input
-                                type="date"
+                              <DateInput
                                 value={linkDateFrom}
                                 onChange={e => setLinkDateFrom(e.target.value)}
                                 className="px-1.5 py-0.5 rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-[10px]"
                               />
                               <span>Hasta:</span>
-                              <input
-                                type="date"
+                              <DateInput
                                 value={linkDateTo}
                                 onChange={e => setLinkDateTo(e.target.value)}
                                 className="px-1.5 py-0.5 rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-[10px]"
@@ -1778,7 +1778,7 @@ export const WizardConfiguracionGlobalModal: React.FC<WizardConfiguracionGlobalM
                                       className="rounded text-purple-600 focus:ring-purple-500 w-4 h-4 cursor-pointer"
                                     />
                                     <div className="min-w-0 flex-1">
-                                      <span className="text-[9.5px] text-gray-400 block">{m.fecha ? String(m.fecha).substring(0, 10) : ''}</span>
+                                      <span className="text-[9.5px] text-gray-400 block">{m.fecha ? formatDate(m.fecha) : ''}</span>
                                       <p className="font-bold text-gray-800 dark:text-gray-200 truncate text-[11px]">{m.concepto}</p>
                                     </div>
                                     <span className="font-black text-gray-900 dark:text-white shrink-0">
@@ -1943,7 +1943,7 @@ export const WizardConfiguracionGlobalModal: React.FC<WizardConfiguracionGlobalM
                   {facturasTercerosMes.map(f => (
                     <div key={f.id || f.uuid_fiscal} className="p-2.5 flex items-center justify-between">
                       <div>
-                        <div className="font-bold text-gray-800 dark:text-gray-200">{f.fecha_emision || f.fecha || '-'} • {f.rfc_receptor || f.rfc || 'RFC'}</div>
+                        <div className="font-bold text-gray-800 dark:text-gray-200">{formatDate(f.fecha_emision || f.fecha)} • {f.rfc_receptor || f.rfc || 'RFC'}</div>
                         <div className="text-[10px] text-gray-400 truncate max-w-sm">{f.cliente_nombre || f.nombre_receptor || 'Cliente'}</div>
                       </div>
                       <span className="font-bold text-purple-600 dark:text-purple-400">-{formatCurrency(f._total || f.total || 0)}</span>
@@ -2334,7 +2334,7 @@ export const WizardConfiguracionGlobalModal: React.FC<WizardConfiguracionGlobalM
                         </div>
                         {ticketsPendientesDeposito.map((tp: any) => (
                           <div key={tp.id} className="flex justify-between pl-2 text-[10px] text-gray-400">
-                            <span>• {tp.fecha ? String(tp.fecha).substring(0, 10) : ''} ({tp.descripcion || 'Corte BBVA'}):</span>
+                            <span>• {tp.fecha ? formatDate(tp.fecha) : ''} ({tp.descripcion || 'Corte BBVA'}):</span>
                             <span className="font-mono text-sky-300">{formatCurrency(tp._difPendiente ?? tp.monto)}</span>
                           </div>
                         ))}
@@ -2476,7 +2476,7 @@ export const WizardConfiguracionGlobalModal: React.FC<WizardConfiguracionGlobalM
                     <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
                       {facturasTercerosMes.map(invoice => (
                         <tr key={invoice.id || invoice.uuid_fiscal}>
-                          <td className="p-2.5 font-mono text-gray-600 dark:text-gray-300">{invoice.fecha_emision || invoice.fecha || '-'}<span className="block text-gray-400">{invoice.serie_folio || invoice.uuid_fiscal || '-'}</span></td>
+                          <td className="p-2.5 font-mono text-gray-600 dark:text-gray-300">{formatDate(invoice.fecha_emision || invoice.fecha)}<span className="block text-gray-400">{invoice.serie_folio || invoice.uuid_fiscal || '-'}</span></td>
                           <td className="p-2.5 text-gray-700 dark:text-gray-200">{invoice.rfc_receptor || invoice.rfc || '-'}<span className="block text-gray-400">{invoice._clienteNombre || invoice.cliente_nombre || invoice.nombre_receptor || 'Cliente'}</span></td>
                           <td className="p-2.5 text-right font-mono">{formatCurrency(invoice._subtotal || invoice.subtotal || 0)}</td>
                           <td className="p-2.5 text-right font-mono text-emerald-700 dark:text-emerald-300">{formatCurrency(invoice._iva ?? invoice.iva_trasladado ?? 0)}</td>

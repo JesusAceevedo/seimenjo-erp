@@ -1338,9 +1338,13 @@ export async function autoConciliarMovimientos(token: string): Promise<{ success
             const sameAmount = Math.abs(Number(g.monto) - absMonto) < 0.05;
             if (!sameAmount) return false;
 
-            const gDate = parseDateOnly(g.fecha_gasto || g.fecha);
+          const gDate = parseDateOnly( g.fecha_gasto || g.fecha );
             const mDate = parseDateOnly(mov.fecha);
             if (!gDate || !mDate) return false;
+
+            // De manera automática solo emparejar facturas que estén dentro del mismo mes del movimiento
+            const sameMonth = gDate.getFullYear() === mDate.getFullYear() && gDate.getMonth() === mDate.getMonth();
+            if (!sameMonth) return false;
 
             // La fecha de la factura (gDate) es anterior o igual al pago (mDate)
             const validDate = gDate.getTime() <= mDate.getTime();
@@ -1446,6 +1450,10 @@ export async function autoConciliarMovimientos(token: string): Promise<{ success
             const mDate = parseDateOnly(mov.fecha);
             if (!pDate || !mDate) return false;
 
+            // De manera automática solo emparejar pedidos/facturas que estén dentro del mismo mes del movimiento
+            const sameMonth = pDate.getFullYear() === mDate.getFullYear() && pDate.getMonth() === mDate.getMonth();
+            if (!sameMonth) return false;
+
             // La fecha del pedido/factura (pDate) es anterior o igual al pago (mDate)
             const validDate = pDate.getTime() <= mDate.getTime();
 
@@ -1526,6 +1534,7 @@ export interface PropuestaConciliacionItem {
   tipo: 'retiro_gasto' | 'deposito_pedido' | 'retiro_efectivo';
   confianza: 'exacta' | 'alta' | 'media';
   motivoConfianza: string;
+  mismoMes?: boolean;
   movimiento: {
     id: string;
     fecha: string;
@@ -1716,6 +1725,7 @@ export async function obtenerPropuestasAutoConciliacion(
             tipo: 'retiro_efectivo',
             confianza: 'alta',
             motivoConfianza: hasTicket ? 'Retiro en efectivo con comprobante/ticket' : 'Retiro/Disposición en efectivo en cajero',
+            mismoMes: true,
             movimiento: {
               id: mov.id,
               fecha: mov.fecha,
@@ -1771,16 +1781,20 @@ export async function obtenerPropuestasAutoConciliacion(
 
               const itemDate = parseDateOnly(item.fecha_gasto || item.fecha);
               const mDate = parseDateOnly(mov.fecha);
+              const isSameMonth = !!(itemDate && mDate && itemDate.getFullYear() === mDate.getFullYear() && itemDate.getMonth() === mDate.getMonth());
               const diffDays = itemDate && mDate ? Math.round((mDate.getTime() - itemDate.getTime()) / (1000 * 3600 * 24)) : 999;
               const absDays = Math.abs(diffDays);
 
               let score = 0;
 
-              // 1. Coincidencia de RFC / Nombre (Máxima prioridad)
+              // 1. Pertenecer al mismo mes activo (Máxima prioridad para evitar emparejar facturas de otros meses)
+              if (isSameMonth) score += 2000;
+
+              // 2. Coincidencia de RFC / Nombre
               if (hasRfcMatch) score += 1000;
               else if (hasNameMatch) score += 600;
 
-              // 2. Proximidad de fecha (priorizar fechas cercanas pero sin descartar lejanas)
+              // 3. Proximidad de fecha
               if (absDays <= 3) score += 300;
               else if (absDays <= 15) score += 200;
               else if (absDays <= 30) score += 150;
@@ -1796,33 +1810,38 @@ export async function obtenerPropuestasAutoConciliacion(
 
         if (candidateGastos.length > 0) {
           const bestMatch = candidateGastos[0];
-          usedGastoIds.add(bestMatch.id);
+          const gDate = parseDateOnly(bestMatch.fecha_gasto || bestMatch.fecha);
+          const mDate = parseDateOnly(mov.fecha);
+          const isSameMonth = !!(gDate && mDate && gDate.getFullYear() === mDate.getFullYear() && gDate.getMonth() === mDate.getMonth());
+
+          // Solo bloquear como "usada" automáticamente si es del mismo mes, para no secuestrar facturas de otros meses
+          if (isSameMonth) {
+            usedGastoIds.add(bestMatch.id);
+          }
 
           const provRfc = (bestMatch.proveedores?.rfc || '').toUpperCase();
           const provNombre = bestMatch.proveedores?.nombre_comercial || bestMatch.proveedores?.razon_social || 'Proveedor sin nombre';
           const rfcExactMatch = !!(rfcEnConcepto && provRfc && rfcEnConcepto === provRfc);
           const nameMatch = provNombre.length > 3 && movConceptoUpper.includes(provNombre.substring(0, 8).toUpperCase());
 
-          const gDate = parseDateOnly(bestMatch.fecha_gasto || bestMatch.fecha);
-          const mDate = parseDateOnly(mov.fecha);
           const diffDays = gDate && mDate ? Math.round((mDate.getTime() - gDate.getTime()) / (1000 * 3600 * 24)) : 0;
           const absDays = Math.abs(diffDays);
 
           let confianza: 'exacta' | 'alta' | 'media' = 'media';
           let motivoConfianza = '';
 
-          if (rfcExactMatch) {
+          if (!isSameMonth) {
+            confianza = 'media';
+            motivoConfianza = `Factura de otro mes (${absDays}d diff) — Asignación manual`;
+          } else if (rfcExactMatch) {
             confianza = 'exacta';
-            motivoConfianza = absDays <= 15 ? 'RFC y Monto coinciden exactamente' : `RFC y Monto exactos (Fecha: ${absDays}d)`;
+            motivoConfianza = 'RFC y Monto coinciden en el mes';
           } else if (nameMatch) {
             confianza = 'alta';
-            motivoConfianza = absDays <= 15 ? 'Proveedor y Monto coinciden' : `Proveedor y Monto exactos (Fecha: ${absDays}d)`;
-          } else if (absDays <= 15) {
-            confianza = 'alta';
-            motivoConfianza = `Monto exacto ($${absMonto.toFixed(2)}) con fecha cercana (${absDays}d)`;
+            motivoConfianza = 'Proveedor y Monto coinciden en el mes';
           } else {
-            confianza = 'media';
-            motivoConfianza = `Monto exacto ($${absMonto.toFixed(2)}) — Fecha lejana (${absDays} días)`;
+            confianza = 'alta';
+            motivoConfianza = `Monto exacto ($${absMonto.toFixed(2)}) dentro del mes (${absDays}d)`;
           }
 
           const disc = detectarDiscrepanciaPago(mov.concepto, bestMatch.metodo_pago || bestMatch.formas_pago?.codigo);
@@ -1843,6 +1862,7 @@ export async function obtenerPropuestasAutoConciliacion(
             tipo: 'retiro_gasto',
             confianza,
             motivoConfianza,
+            mismoMes: isSameMonth,
             movimiento: {
               id: mov.id,
               fecha: mov.fecha,
@@ -1903,16 +1923,20 @@ export async function obtenerPropuestasAutoConciliacion(
 
               const itemDate = parseDateOnly(item.fecha_pedido || item.creado_en);
               const mDate = parseDateOnly(mov.fecha);
+              const isSameMonth = !!(itemDate && mDate && itemDate.getFullYear() === mDate.getFullYear() && itemDate.getMonth() === mDate.getMonth());
               const diffDays = itemDate && mDate ? Math.round((mDate.getTime() - itemDate.getTime()) / (1000 * 3600 * 24)) : 999;
               const absDays = Math.abs(diffDays);
 
               let score = 0;
 
-              // 1. Coincidencia de Cliente
+              // 1. Pertenecer al mismo mes activo (Máxima prioridad)
+              if (isSameMonth) score += 2000;
+
+              // 2. Coincidencia de Cliente
               if (hasRfcMatch) score += 1000;
               else if (hasNameMatch) score += 600;
 
-              // 2. Proximidad de fecha
+              // 3. Proximidad de fecha
               if (absDays <= 3) score += 300;
               else if (absDays <= 15) score += 200;
               else if (absDays <= 30) score += 150;
@@ -1928,29 +1952,33 @@ export async function obtenerPropuestasAutoConciliacion(
 
         if (candidatePedidos.length > 0) {
           const bestMatch = candidatePedidos[0];
-          usedPedidoIds.add(bestMatch.id);
+          const pDate = parseDateOnly(bestMatch.fecha_pedido || bestMatch.creado_en);
+          const mDate = parseDateOnly(mov.fecha);
+          const isSameMonth = !!(pDate && mDate && pDate.getFullYear() === mDate.getFullYear() && pDate.getMonth() === mDate.getMonth());
+
+          if (isSameMonth) {
+            usedPedidoIds.add(bestMatch.id);
+          }
 
           const clientNombre = bestMatch.clientes?.nombre_local || bestMatch.clientes?.razon_social || `Pedido #${bestMatch.numero_pedido}`;
           const clientRfc = bestMatch.clientes?.rfc || null;
           const matchClient = clientNombre.length > 3 && movConceptoUpper.includes(clientNombre.substring(0, 8).toUpperCase());
 
-          const pDate = parseDateOnly(bestMatch.fecha_pedido || bestMatch.creado_en);
-          const mDate = parseDateOnly(mov.fecha);
           const diffDays = pDate && mDate ? Math.round((mDate.getTime() - pDate.getTime()) / (1000 * 3600 * 24)) : 0;
           const absDays = Math.abs(diffDays);
 
           let confianza: 'exacta' | 'alta' | 'media' = 'media';
           let motivoConfianza = '';
 
-          if (matchClient) {
-            confianza = 'exacta';
-            motivoConfianza = absDays <= 15 ? 'Cliente y Monto coinciden' : `Cliente y Monto exactos (Fecha: ${absDays}d)`;
-          } else if (absDays <= 15) {
-            confianza = 'alta';
-            motivoConfianza = `Monto exacto ($${absMonto.toFixed(2)}) con fecha cercana (${diffDays} días)`;
-          } else {
+          if (!isSameMonth) {
             confianza = 'media';
-            motivoConfianza = `Monto exacto ($${absMonto.toFixed(2)}) — Fecha lejana (${absDays} días)`;
+            motivoConfianza = `Pedido de otro mes (${absDays}d diff) — Asignación manual`;
+          } else if (matchClient) {
+            confianza = 'exacta';
+            motivoConfianza = 'Cliente y Monto coinciden en el mes';
+          } else {
+            confianza = 'alta';
+            motivoConfianza = `Monto exacto ($${absMonto.toFixed(2)}) dentro del mes (${absDays}d)`;
           }
 
           const factFiles = Array.isArray(bestMatch.facturas_clientes) && bestMatch.facturas_clientes.length > 0
@@ -1973,6 +2001,7 @@ export async function obtenerPropuestasAutoConciliacion(
             tipo: 'deposito_pedido',
             confianza,
             motivoConfianza,
+            mismoMes: isSameMonth,
             movimiento: {
               id: mov.id,
               fecha: mov.fecha,
@@ -4061,7 +4090,8 @@ export async function vincularComprobanteAMovimiento(
   comprobanteId: string,
   movimientoBancarioId: string,
   token: string,
-  montoAsociadoCustom?: number
+  montoAsociadoCustom?: number,
+  comentarioDiferencia?: string
 ) {
   try {
     const { empresaId } = await getUserEmpresaId(token);
@@ -4087,7 +4117,7 @@ export async function vincularComprobanteAMovimiento(
 
     if (error) throw error;
 
-    await autoActualizarEstatusMovimiento(movimientoBancarioId, empresaId);
+    await autoActualizarEstatusMovimiento(movimientoBancarioId, empresaId, comentarioDiferencia);
 
     return { success: true };
   } catch (err: any) {
@@ -4163,10 +4193,10 @@ export async function obtenerComprobantesDeposito(token: string) {
   }
 }
 
-async function autoActualizarEstatusMovimiento(movimientoId: string, empresaId: string) {
+async function autoActualizarEstatusMovimiento(movimientoId: string, empresaId: string, comentarioDiferencia?: string) {
   const { data: mov } = await supabaseAdmin
     .from('movimientos_bancarios')
-    .select('monto, estatus_conciliacion_id')
+    .select('monto, estatus_conciliacion_id, comentarios')
     .eq('id', movimientoId)
     .single();
 
@@ -4201,16 +4231,25 @@ async function autoActualizarEstatusMovimiento(movimientoId: string, empresaId: 
   let targetStatusId = statusPendiente?.id;
 
   if (totalComprobantes > 0) {
-    if (Math.abs(totalComprobantes - absMontoMov) < 0.05) {
+    if (Math.abs(totalComprobantes - absMontoMov) < 0.05 || (comentarioDiferencia && comentarioDiferencia.trim().length > 0)) {
       targetStatusId = statusConciliado?.id;
     } else {
       targetStatusId = statusParcial?.id || statusConciliado?.id;
     }
   }
 
+  const updatePayload: Record<string, any> = { estatus_conciliacion_id: targetStatusId };
+  if (comentarioDiferencia && comentarioDiferencia.trim()) {
+    const notaClean = comentarioDiferencia.trim();
+    const prevComment = (mov.comentarios || '').trim();
+    updatePayload.comentarios = prevComment
+      ? (prevComment.includes(notaClean) ? prevComment : `${prevComment} | ${notaClean}`)
+      : notaClean;
+  }
+
   await supabaseAdmin
     .from('movimientos_bancarios')
-    .update({ estatus_conciliacion_id: targetStatusId })
+    .update(updatePayload)
     .eq('id', movimientoId)
     .eq('empresa_id', empresaId);
 }

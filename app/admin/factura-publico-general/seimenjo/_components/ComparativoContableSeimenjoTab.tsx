@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useMemo, useState } from 'react';
+import { formatDate } from '@/lib/formatters';
 import {
   FileSpreadsheet,
   CheckCircle2,
@@ -304,7 +305,7 @@ export function ComparativoContableSeimenjoTab({
 
     const rows = filasComparativo.map((f, idx) => [
       idx + 1,
-      f.fechaBanco || 'N/A',
+      f.fechaBanco ? formatDate(f.fechaBanco) : 'N/A',
       `"${(f.conceptoBanco || '').replace(/"/g, '""')}"`,
       f.montoBanco.toFixed(2),
       f.numeroPedido ? `#${f.numeroPedido}` : 'N/A',
@@ -584,7 +585,7 @@ export function ComparativoContableSeimenjoTab({
                       {fila.fechaBanco ? (
                         <div>
                           <div className="font-bold text-gray-900 dark:text-white flex items-center gap-1.5">
-                            <span className="font-mono text-emerald-600 dark:text-emerald-400 font-extrabold">{fila.fechaBanco}</span>
+                            <span className="font-mono text-emerald-600 dark:text-emerald-400 font-extrabold">{formatDate(fila.fechaBanco)}</span>
                           </div>
                           <p className="text-[10px] text-gray-500 dark:text-gray-400 truncate" title={fila.conceptoBanco}>
                             {fila.conceptoBanco}

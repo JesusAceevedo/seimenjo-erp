@@ -1,7 +1,17 @@
 const { createClient } = require('@supabase/supabase-js');
+require('dotenv').config({ path: '.env.local' });
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+if (!supabaseUrl || !supabaseServiceKey) {
+  console.error('Faltan variables NEXT_PUBLIC_SUPABASE_URL o SUPABASE_SERVICE_ROLE_KEY en .env.local');
+  process.exit(1);
+}
+
 const c = createClient(
-  'https://ioxfhgmeapwyfrgvtyjd.supabase.co',
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlveGZoZ21lYXB3eWZyZ3Z0eWpkIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3OTEyNjU0MywiZXhwIjoyMDk0NzAyNTQzfQ.g-swmU-l8fL57RYNAQmAZPzHHhb9k8zlnFCWhYIGESk',
+  supabaseUrl,
+  supabaseServiceKey,
   { auth: { autoRefreshToken: false, persistSession: false } }
 );
 

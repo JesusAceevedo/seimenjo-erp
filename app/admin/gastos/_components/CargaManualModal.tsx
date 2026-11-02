@@ -7,6 +7,7 @@ import { SAT_FORMAS_PAGO } from '../../../../lib/constants/sat';
 import { useSessionToken } from '../../../../lib/hooks/useSessionToken';
 import { useEmpresaId } from '../../../../lib/hooks/useEmpresaId';
 import { enviarFacturaPorCorreo } from '../actions';
+import DateInput from '@/components/ui/DateInput';
 
 interface CargaManualModalProps {
   onClose: () => void;
@@ -1264,8 +1265,7 @@ export default function CargaManualModal({ onClose, onSuccess, tipo, registroId,
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="text-xs font-bold text-gray-700 dark:text-gray-300">Fecha <span className="text-red-550">*</span></label>
-                <input
-                  type="date"
+                <DateInput
                   required
                   value={manualFields.fecha}
                   onChange={e => setManualFields(prev => ({ ...prev, fecha: e.target.value }))}

@@ -14,15 +14,12 @@ function escapeTgHtml(text: string | number | null | undefined): string {
     .replace(/>/g, '&gt;');
 }
 
-const DEFAULT_TELEGRAM_BOT_TOKEN = '8730760276:AAGembds6r_tP8g1hD9t4M74CNUh-aQGl6Y';
-const DEFAULT_TELEGRAM_CHAT_ID = '-1004303384153';
-
 /**
- * Obtiene las credenciales del bot de Telegram desde process.env o defaults configurados
+ * Obtiene las credenciales del bot de Telegram desde process.env
  */
 function getTelegramCredentials(customChatId?: string): { botToken?: string; chatId?: string } {
-  const botToken = (process.env.TELEGRAM_BOT_TOKEN || DEFAULT_TELEGRAM_BOT_TOKEN)?.trim();
-  const chatId = customChatId?.trim() || (process.env.TELEGRAM_CHAT_ID || DEFAULT_TELEGRAM_CHAT_ID)?.trim();
+  const botToken = process.env.TELEGRAM_BOT_TOKEN?.trim();
+  const chatId = customChatId?.trim() || process.env.TELEGRAM_CHAT_ID?.trim();
 
   return { botToken, chatId };
 }

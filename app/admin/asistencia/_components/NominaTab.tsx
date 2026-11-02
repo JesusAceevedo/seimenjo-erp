@@ -4,6 +4,8 @@ import { useState, useMemo } from 'react';
 import { DollarSign, Sliders, CheckCircle, RefreshCw, Info, Calendar, Award, AlertTriangle, Settings, ChevronRight, X, Clock, Eye, ShieldCheck, FileText, Check, Download, Printer } from 'lucide-react';
 import type { EmpleadoDetalle, Puesto, ChecadaRaw, Turno, Incidencia } from '../types';
 import { calcularNominaCompleta, createIncidencia } from '../actions';
+import DateInput from '@/components/ui/DateInput';
+import { formatDate } from '@/lib/formatters';
 
 interface Props {
   empleados: EmpleadoDetalle[];
@@ -948,7 +950,7 @@ export default function NominaTab({
         </div>
         <div className="flex items-center gap-2">
           <span className="text-[11px] font-bold text-amber-600 dark:text-amber-400 bg-amber-500/10 px-3 py-1 rounded-xl border border-amber-500/20">
-            Período Activo: <strong>{periodo.fecha_inicio}</strong> al <strong>{periodo.fecha_fin}</strong>
+            Período Activo: <strong>{formatDate(periodo.fecha_inicio)}</strong> al <strong>{formatDate(periodo.fecha_fin)}</strong>
           </span>
         </div>
       </div>
@@ -998,8 +1000,7 @@ export default function NominaTab({
           {periodoMode === 'diario' && (
             <div className="col-span-2">
               <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Fecha / Día *</label>
-              <input
-                type="date"
+              <DateInput
                 value={periodo.fecha_inicio}
                 onChange={e => {
                   const val = e.target.value;
@@ -1047,8 +1048,7 @@ export default function NominaTab({
             <>
               <div>
                 <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Fecha Inicio *</label>
-                <input
-                  type="date"
+                <DateInput
                   value={periodo.fecha_inicio}
                   onChange={e => setPeriodo(prev => ({ ...prev, fecha_inicio: e.target.value }))}
                   className="w-full px-3 py-2 rounded-lg bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 text-gray-900 dark:text-white font-bold"
@@ -1056,8 +1056,7 @@ export default function NominaTab({
               </div>
               <div>
                 <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Fecha Fin *</label>
-                <input
-                  type="date"
+                <DateInput
                   value={periodo.fecha_fin}
                   onChange={e => setPeriodo(prev => ({ ...prev, fecha_fin: e.target.value }))}
                   className="w-full px-3 py-2 rounded-lg bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 text-gray-900 dark:text-white font-bold"
@@ -1406,7 +1405,7 @@ export default function NominaTab({
                 <Calendar size={12} className="text-amber-500" /> Días Transcurridos
               </p>
               <p className="text-xl font-bold text-gray-900 dark:text-white mt-1">{propinasDiariasCalc.elapsedDaysCount} / {propinasDiariasCalc.dateList.length} Días</p>
-              <p className="text-[9px] text-gray-400 mt-0.5">{periodo.fecha_inicio} al {periodo.fecha_fin}</p>
+              <p className="text-[9px] text-gray-400 mt-0.5">{formatDate(periodo.fecha_inicio)} al {formatDate(periodo.fecha_fin)}</p>
             </div>
 
             <div className="bg-white dark:bg-gray-950 p-4 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm">
@@ -1782,7 +1781,7 @@ export default function NominaTab({
                     </span>
                   )}
                 </div>
-                <p className="text-xs text-gray-500 font-semibold">{selectedEmpDetail.puesto} · Período del {periodo.fecha_inicio} al {periodo.fecha_fin}</p>
+                <p className="text-xs text-gray-500 font-semibold">{selectedEmpDetail.puesto} · Período del {formatDate(periodo.fecha_inicio)} al {formatDate(periodo.fecha_fin)}</p>
               </div>
               <button onClick={() => setSelectedEmpDetail(null)} className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-white rounded-full transition-colors">
                 <X size={20} />
@@ -1842,7 +1841,7 @@ export default function NominaTab({
                       <tbody className="divide-y divide-gray-100 dark:divide-gray-800/40 text-xs">
                         {selectedEmpDetail.detallesDias.map((d: any, idx: number) => (
                           <tr key={idx} className="hover:bg-gray-50 dark:hover:bg-gray-900/10">
-                            <td className="p-2.5 font-bold text-gray-800 dark:text-gray-200 font-mono">{d.fecha}</td>
+                            <td className="p-2.5 font-bold text-gray-800 dark:text-gray-200 font-mono">{formatDate(d.fecha)}</td>
                             <td className="p-2.5 capitalize text-gray-600 dark:text-gray-400">{d.diaSemana}</td>
                             <td className="p-2.5">
                               {d.estado === 'asistencia' && <span className="px-2 py-0.5 bg-emerald-500/10 text-emerald-600 rounded text-[10px] font-bold">✅ Asistencia</span>}
@@ -2018,7 +2017,7 @@ export default function NominaTab({
 
                       return (
                         <tr key={idx} className={`hover:bg-gray-50 dark:hover:bg-gray-900/50 ${hrsExtrasDia > 0 ? 'bg-amber-500/5 font-bold' : ''}`}>
-                          <td className="p-2.5 font-mono text-gray-900 dark:text-white font-bold">{d.fecha}</td>
+                          <td className="p-2.5 font-mono text-gray-900 dark:text-white font-bold">{formatDate(d.fecha)}</td>
                           <td className="p-2.5 text-gray-500 capitalize">{d.diaSemana}</td>
                           <td className="p-2.5">
                             {d.entradas && d.entradas.length > 0 ? (

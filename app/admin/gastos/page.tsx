@@ -882,9 +882,9 @@ export default function EgresosModule() {
                       if (res.success) fetchData();
                       return res;
                     }}
-                    onVincularComprobante={async (comprobanteId, movimientoBancarioId, montoAsociado) => {
+                    onVincularComprobante={async (comprobanteId, movimientoBancarioId, montoAsociado, comentarioDiferencia) => {
                       const token = await getSessionToken();
-                      const res = await vincularComprobanteAMovimiento(comprobanteId, movimientoBancarioId, token, montoAsociado);
+                      const res = await vincularComprobanteAMovimiento(comprobanteId, movimientoBancarioId, token, montoAsociado, comentarioDiferencia);
                       if (res.success) fetchData();
                       return res;
                     }}
