@@ -506,6 +506,7 @@ export default function TrayectoriaPedidoModal({
       {showVincularModal && (
         <VincularXmlPedidoModal
           pedidoId={pedidoId}
+          pedidoData={pedido}
           onClose={() => setShowVincularModal(false)}
           onSuccess={async () => {
             setShowVincularModal(false);

@@ -4,7 +4,7 @@
 // Tab de Ingresos (Ventas) — con paginación, búsqueda, columnas enriquecidas.
 
 import React, { useState, useMemo, useEffect } from 'react';
-import { UploadCloud, Plus, FileCode, FileText, CreditCard, Mail, Search, ChevronLeft, ChevronRight, CheckCircle, Clock, Eye, Edit3, Trash2, Activity, Link as LinkIcon, SlidersHorizontal, Globe, X, RefreshCw, AlertTriangle } from 'lucide-react';
+import { UploadCloud, Plus, FileCode, FileText, CreditCard, Mail, Search, ChevronLeft, ChevronRight, CheckCircle, Clock, Eye, Edit3, Trash2, Activity, Link as LinkIcon, SlidersHorizontal, Globe, X, RefreshCw, AlertTriangle, AlertCircle } from 'lucide-react';
 import { formatCurrency, formatDate } from '../../../../lib/formatters';
 import { getMetodoPagoLabel } from '../../../../lib/constants/sat';
 import CargaXmlMasivaModal from './CargaXmlMasivaModal';
@@ -813,6 +813,7 @@ export default function IngresosTab({
       {vincularModalPedidoId && (
         <VincularXmlPedidoModal
           pedidoId={vincularModalPedidoId}
+          pedidoData={ventasFacturadas.find((v: any) => v.id === vincularModalPedidoId)}
           onClose={() => setVincularModalPedidoId(null)}
           onSuccess={() => {
             setVincularModalPedidoId(null);
@@ -918,17 +919,65 @@ function VincularSueltaAPedidoModal({ factura, onClose, onSuccess }: {
     }
   };
 
-  const filtrados = pedidos.filter(p => {
-    const q = search.toLowerCase();
-    if (!q) return true;
-    return (
-      p.numero_pedido?.toString().includes(q) ||
-      p.cliente_nombre?.toLowerCase().includes(q) ||
-      p.clientes?.nombre_local?.toLowerCase().includes(q) ||
-      p.clientes?.rfc?.toLowerCase().includes(q) ||
-      p.precio_total?.toString().includes(q)
-    );
-  });
+  const montoFactura = Number(facturaData.total || factura.precio_total || 0);
+
+  const pedidosConAnalisis = useMemo(() => {
+    const q = search.trim().toLowerCase();
+
+    return pedidos
+      .filter(p => {
+        if (!q) return true;
+        return (
+          p.numero_pedido?.toString().includes(q) ||
+          p.cliente_nombre?.toLowerCase().includes(q) ||
+          p.clientes?.nombre_local?.toLowerCase().includes(q) ||
+          p.clientes?.rfc?.toLowerCase().includes(q) ||
+          p.precio_total?.toString().includes(q)
+        );
+      })
+      .map(p => {
+        const totalPedido = Number(p.precio_total || 0);
+        const diferencia = totalPedido - montoFactura;
+        const esExacto = montoFactura > 0 && Math.abs(diferencia) <= 0.05;
+
+        const rfcFactura = (facturaData.clientes?.rfc || factura.clientes?.rfc || '').trim().toUpperCase();
+        const rfcPedido = (p.clientes?.rfc || '').trim().toUpperCase();
+        const mismoRfc = Boolean(rfcFactura && rfcPedido && rfcFactura === rfcPedido);
+
+        let score = 0;
+        if (esExacto && mismoRfc) score = 100;
+        else if (esExacto) score = 75;
+        else if (mismoRfc) score = 50;
+
+        return {
+          ...p,
+          totalNum: totalPedido,
+          diferencia,
+          esExacto,
+          mismoRfc,
+          score
+        };
+      })
+      .sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score;
+        const dateA = new Date(a.fecha_pedido || 0).getTime();
+        const dateB = new Date(b.fecha_pedido || 0).getTime();
+        return dateB - dateA;
+      });
+  }, [pedidos, search, montoFactura, facturaData, factura]);
+
+  useEffect(() => {
+    if (!selectedPedidoId && pedidosConAnalisis.length > 0) {
+      const sugerido = pedidosConAnalisis.find(p => p.score === 100) || pedidosConAnalisis.find(p => p.esExacto);
+      if (sugerido) {
+        setSelectedPedidoId(sugerido.id);
+      }
+    }
+  }, [pedidosConAnalisis, selectedPedidoId]);
+
+  const pedidoSeleccionado = useMemo(() => {
+    return pedidosConAnalisis.find(p => p.id === selectedPedidoId) || null;
+  }, [pedidosConAnalisis, selectedPedidoId]);
 
   const clienteNombre = facturaData.clientes?.nombre_local || factura.clientes?.nombre_local || facturaData.nombreReceptor || 'Cliente Desconocido';
   const clienteRfc = facturaData.clientes?.rfc || factura.clientes?.rfc || 'S/N';
@@ -994,7 +1043,7 @@ function VincularSueltaAPedidoModal({ factura, onClose, onSuccess }: {
               <RefreshCw className="animate-spin text-blue-500" size={24} />
               <span className="text-xs">Cargando pedidos...</span>
             </div>
-          ) : filtrados.length === 0 ? (
+          ) : pedidosConAnalisis.length === 0 ? (
             <div className="text-center py-12 text-gray-400 space-y-2">
               <FileCode size={36} className="mx-auto text-gray-300 dark:text-gray-700" />
               <p className="text-sm font-semibold">No se encontraron pedidos disponibles para vincular.</p>
@@ -1002,11 +1051,19 @@ function VincularSueltaAPedidoModal({ factura, onClose, onSuccess }: {
             </div>
           ) : (
             <div className="space-y-2">
-              <span className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider block">
-                Pedidos candidatos ({filtrados.length})
-              </span>
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider block">
+                  Pedidos candidatos ({pedidosConAnalisis.length})
+                </span>
+                {pedidosConAnalisis.some(p => p.esExacto) && (
+                  <span className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
+                    <CheckCircle size={13} /> Coincidencia exacta de importe disponible
+                  </span>
+                )}
+              </div>
+
               <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
-                {filtrados.map((p) => {
+                {pedidosConAnalisis.map((p) => {
                   const isSelected = selectedPedidoId === p.id;
                   return (
                     <div
@@ -1014,18 +1071,32 @@ function VincularSueltaAPedidoModal({ factura, onClose, onSuccess }: {
                       onClick={() => setSelectedPedidoId(p.id)}
                       className={`p-3.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-3 ${
                         isSelected
-                          ? 'bg-blue-50 dark:bg-blue-950/40 border-blue-500 ring-2 ring-blue-500/20'
+                          ? p.esExacto
+                            ? 'bg-emerald-50/70 dark:bg-emerald-950/40 border-emerald-500 ring-2 ring-emerald-500/30 shadow-xs'
+                            : 'bg-blue-50 dark:bg-blue-950/40 border-blue-500 ring-2 ring-blue-500/20 shadow-xs'
+                          : p.esExacto
+                          ? 'bg-emerald-50/25 dark:bg-emerald-950/15 border-emerald-200 dark:border-emerald-800/60 hover:border-emerald-400 hover:bg-emerald-50/40'
                           : 'bg-white dark:bg-gray-900 border-gray-200 dark:border-gray-800 hover:border-blue-300 dark:hover:border-blue-800'
                       }`}
                     >
                       <div className="min-w-0 flex-1 space-y-1">
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center flex-wrap gap-2">
                           <span className="font-bold text-xs text-gray-900 dark:text-white">
                             Pedido #{p.numero_pedido}
                           </span>
                           <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 font-bold uppercase">
                             {p.estatus_pago || '—'}
                           </span>
+                          {p.esExacto && (
+                            <span className="px-2 py-0.5 rounded-md text-[10px] font-black bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-500/30 flex items-center gap-1">
+                              ✓ Monto Exacto
+                            </span>
+                          )}
+                          {p.mismoRfc && (
+                            <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-blue-100 dark:bg-blue-500/20 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-500/30">
+                              👤 Mismo RFC
+                            </span>
+                          )}
                         </div>
                         <div className="flex items-center gap-3 text-[11px] text-gray-600 dark:text-gray-400">
                           <span className="font-medium truncate max-w-[220px]">
@@ -1034,10 +1105,22 @@ function VincularSueltaAPedidoModal({ factura, onClose, onSuccess }: {
                           {p.clientes?.rfc && <span className="font-mono text-[10px] text-gray-400">({p.clientes.rfc})</span>}
                         </div>
                       </div>
-                      <div className="text-right shrink-0">
-                        <div className="font-extrabold text-sm font-mono text-blue-600 dark:text-blue-400">
-                          {formatCurrency(Number(p.precio_total || 0))}
+
+                      <div className="text-right shrink-0 space-y-0.5">
+                        <div className={`font-extrabold text-sm font-mono ${
+                          p.esExacto ? 'text-emerald-600 dark:text-emerald-400 text-base' : 'text-blue-600 dark:text-blue-400'
+                        }`}>
+                          {formatCurrency(p.totalNum)}
                         </div>
+
+                        {montoFactura > 0 && !p.esExacto && (
+                          <div className={`text-[10px] font-mono font-bold ${
+                            p.diferencia > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-red-500 dark:text-red-400'
+                          }`}>
+                            Dif: {p.diferencia > 0 ? `+${formatCurrency(p.diferencia)}` : `-${formatCurrency(Math.abs(p.diferencia))}`}
+                          </div>
+                        )}
+
                         <div className="text-[10px] text-gray-400 font-mono">
                           {p.fecha_pedido ? formatDate(p.fecha_pedido) : '—'}
                         </div>
@@ -1045,6 +1128,33 @@ function VincularSueltaAPedidoModal({ factura, onClose, onSuccess }: {
                     </div>
                   );
                 })}
+              </div>
+            </div>
+          )}
+
+          {pedidoSeleccionado && (
+            <div className={`p-3 rounded-xl border text-xs flex items-center justify-between gap-3 animate-in fade-in duration-150 ${
+              pedidoSeleccionado.esExacto
+                ? 'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-300 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300'
+                : 'bg-amber-50 dark:bg-amber-950/30 border-amber-300 dark:border-amber-800 text-amber-800 dark:text-amber-300'
+            }`}>
+              <div className="flex items-center gap-2">
+                {pedidoSeleccionado.esExacto ? (
+                  <CheckCircle size={16} className="text-emerald-600 dark:text-emerald-400 shrink-0" />
+                ) : (
+                  <AlertCircle size={16} className="text-amber-600 dark:text-amber-400 shrink-0" />
+                )}
+                <span>
+                  {pedidoSeleccionado.esExacto ? (
+                    <>
+                      <strong>Coincidencia Exacta:</strong> El importe del pedido ({formatCurrency(pedidoSeleccionado.totalNum)}) es exactamente igual al total de la factura ({formatCurrency(montoFactura)}).
+                    </>
+                  ) : (
+                    <>
+                      <strong>Atención:</strong> Pedido {formatCurrency(pedidoSeleccionado.totalNum)} vs Factura {formatCurrency(montoFactura)} (Diferencia de {pedidoSeleccionado.diferencia > 0 ? `+${formatCurrency(pedidoSeleccionado.diferencia)}` : `-${formatCurrency(Math.abs(pedidoSeleccionado.diferencia))}`}).
+                    </>
+                  )}
+                </span>
               </div>
             </div>
           )}
