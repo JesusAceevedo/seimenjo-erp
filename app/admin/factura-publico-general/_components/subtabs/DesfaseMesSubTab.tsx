@@ -20,9 +20,10 @@ import {
   Layers,
   ArrowRight,
   X,
-  CreditCard
+  CreditCard,
+  ExternalLink
 } from 'lucide-react';
-import { formatDate } from '@/lib/formatters';
+import { formatDate, extractReferenciaBancaria } from '@/lib/formatters';
 
 interface DesfaseMesSubTabProps {
   movimientosOtroMes: any[];
@@ -43,6 +44,8 @@ interface DesfaseMesSubTabProps {
   ventasDiaSiguienteMes?: number;
   setVentasDiaSiguienteMonto?: (monto: number) => void;
   diferenciaBolsaCierre?: number;
+  handleDownloadFile?: (filePath: string, fileName?: string) => void;
+  formatTicketIdentificador?: (ticket: any) => string;
   depositosMes?: any[];
   depositosNoEsVentaExcluidos?: number;
   depositosPendientesDeVincular?: number;
@@ -92,6 +95,8 @@ export const DesfaseMesSubTab: React.FC<DesfaseMesSubTabProps> = ({
   ticketsPendientesDeposito = [],
   montoTicketsPendientesDeposito = 0,
   ticketsBbvaSinDeposito = [],
+  handleDownloadFile,
+  formatTicketIdentificador,
 }) => {
   const router = useRouter();
   const [inputDiaSig, setInputDiaSig] = useState<string>(
@@ -122,7 +127,7 @@ export const DesfaseMesSubTab: React.FC<DesfaseMesSubTabProps> = ({
     if (filtroDeposito === 'mes_actual') return !m._isExcluded && !m._isNoVenta;
     if (filtroDeposito === 'mes_pasado') return m._isExcluded;
     if (filtroDeposito === 'no_es_venta') return m._isNoVenta;
-    if (filtroDeposito === 'cuadrados_100') return m._vinculadoCuadrado100;
+    if (filtroDeposito === 'cuadrados_100') return m._vinculadoCuadrado100 && !m._isExcluded && !m._isNoVenta;
     if (filtroDeposito === 'incompletos_o_pendientes') return !m._vinculadoCuadrado100 && !m._isNoVenta && !m._isExcluded;
     return true;
   });
@@ -250,10 +255,12 @@ export const DesfaseMesSubTab: React.FC<DesfaseMesSubTabProps> = ({
               </span>
             </div>
             <div className="p-2.5 rounded-lg bg-purple-50 dark:bg-purple-955/30 border border-purple-200 dark:border-purple-900">
-              <span className="text-purple-600 dark:text-purple-400 block font-sans">3. (-) Ventas Día Siguiente:</span>
-              <strong className="text-purple-700 dark:text-purple-300 font-bold block mt-0.5">-{formatCurrency(ventasDiaSiguienteMes)}</strong>
+              <span className="text-purple-600 dark:text-purple-400 block font-sans">3. (+/-) Cortes Flotantes y Base:</span>
+              <strong className="text-purple-700 dark:text-purple-300 font-bold block mt-0.5">
+                {formatCurrency(-(bolsaTotalVentasMes - depositosNetosMes - diferenciaBolsaCierre))}
+              </strong>
               <span className="text-[9.5px] text-purple-600/80 dark:text-purple-400/80 font-sans block mt-0.5">
-                {montoTicketsFinDeMesPendientes > 0 ? `Sugerido por tickets: ${formatCurrency(montoTicketsFinDeMesPendientes)}` : 'Ventas flotantes pendientes'}
+                Cortes BBVA pend., efectivo pend. y ajuste propinas tarjeta
               </span>
             </div>
             <div className={`p-2.5 rounded-lg border ${
@@ -510,7 +517,7 @@ export const DesfaseMesSubTab: React.FC<DesfaseMesSubTabProps> = ({
                   {f === 'mes_actual' && 'Ventas de este Mes'}
                   {f === 'mes_pasado' && 'Mes Pasado'}
                   {f === 'no_es_venta' && `🚫 No es Venta (${depositosMes.filter(m => m._isNoVenta).length})`}
-                  {f === 'cuadrados_100' && `✅ Cuadrados 100% (${depositosMes.filter(m => m._vinculadoCuadrado100).length})`}
+                  {f === 'cuadrados_100' && `✅ Cuadrados 100% (${depositosMes.filter(m => m._vinculadoCuadrado100 && !m._isExcluded && !m._isNoVenta).length})`}
                   {f === 'incompletos_o_pendientes' && 'Incompletos / Pendientes'}
                 </button>
               ))}
@@ -641,7 +648,7 @@ export const DesfaseMesSubTab: React.FC<DesfaseMesSubTabProps> = ({
                     </td>
                     <td className="p-3 text-center">
                       <div className="flex items-center justify-center gap-1.5 relative">
-                        {/* Botón y menú "No es Venta" */}
+                        {/* Botón y menú de reclasificación "No es Venta" */}
                         <div className="relative">
                           <button
                             type="button"
@@ -649,12 +656,12 @@ export const DesfaseMesSubTab: React.FC<DesfaseMesSubTabProps> = ({
                             className={`px-2 py-1 rounded text-[10px] font-bold transition flex items-center gap-1 cursor-pointer border ${
                               isNoVenta
                                 ? 'bg-rose-600 text-white border-rose-700'
-                                : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 border-gray-300 dark:border-gray-700 hover:bg-rose-50'
+                                : 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 border-gray-300 dark:border-gray-700 hover:bg-rose-50'
                             }`}
-                            title="Marcar como reembolso, traspaso u otro concepto no operativo"
+                            title="Marcar o desmarcar como reembolso, traspaso u otro concepto que no es venta"
                           >
                             <Ban size={11} />
-                            <span>{isNoVenta ? 'No es Venta ✓' : 'No es Venta'}</span>
+                            <span>{isNoVenta ? 'Excluido (No es Venta) ✓' : 'Marcar No Venta'}</span>
                             <ChevronDown size={10} />
                           </button>
 
@@ -704,11 +711,11 @@ export const DesfaseMesSubTab: React.FC<DesfaseMesSubTabProps> = ({
                           className={`px-2 py-1 rounded text-[10px] font-bold transition cursor-pointer border ${
                             isMesPasado
                               ? 'bg-amber-600 text-white border-amber-700'
-                              : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 border-gray-300 dark:border-gray-700 hover:bg-amber-50'
+                              : 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 border-gray-300 dark:border-gray-700 hover:bg-amber-50'
                           }`}
                           title="Excluir porque la venta contable corresponde al mes anterior"
                         >
-                          {isMesPasado ? 'Mes Pasado ✓' : 'Mes Pasado'}
+                          {isMesPasado ? 'Excluido (Mes Pasado) ✓' : 'Marcar Mes Pasado'}
                         </button>
                       </div>
                     </td>
@@ -914,28 +921,73 @@ export const DesfaseMesSubTab: React.FC<DesfaseMesSubTabProps> = ({
               <tbody className="divide-y divide-gray-100 dark:divide-gray-800/60">
                 {movimientosOtroMes.map((m: any) => {
                   const cdms = m._cdms || [];
+                  const associatedMap = new Map<string, { comp: any; montoAsociado: number }>();
+                  (m._ticketsAsociados || []).forEach((item: any) => {
+                    if (item?.ticket?.id) {
+                      associatedMap.set(item.ticket.id, { comp: item.ticket, montoAsociado: item.montoAsociado || 0 });
+                    }
+                  });
+                  cdms.forEach((c: any) => {
+                    const comp = c.comprobantes_deposito;
+                    if (comp?.id && !associatedMap.has(comp.id)) {
+                      associatedMap.set(comp.id, { comp, montoAsociado: Number(c.monto_asociado || comp.monto || 0) });
+                    }
+                  });
+                  if (associatedMap.size === 0 && m.pdf_ticket_url) {
+                    associatedMap.set(`mov_ticket_${m.id}`, {
+                      comp: {
+                        id: `mov_ticket_${m.id}`,
+                        fecha: m.fecha,
+                        descripcion: m.fecha ? `Cierre del día ${parseInt(m.fecha.split('-')[2], 10)}` : 'Ticket bancario adjunto',
+                        archivo_url: m.pdf_ticket_url
+                      },
+                      montoAsociado: m._monto
+                    });
+                  }
+                  const ticketsList = Array.from(associatedMap.values());
+                  const refStr = extractReferenciaBancaria(m.referencia, m.concepto);
+
                   return (
                     <tr key={m.id} className="hover:bg-gray-50/80 dark:hover:bg-gray-800/40 transition-colors">
                       <td className="p-3 font-mono font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">
                         {formatDate(m.fecha)}
                       </td>
-                      <td className="p-3 font-bold text-gray-800 dark:text-gray-200 max-w-xs truncate" title={m.concepto}>
-                        {m.concepto || 'Depósito bancario'}
+                      <td className="p-3">
+                        <div className="font-bold text-gray-800 dark:text-gray-200 max-w-xs truncate" title={m.concepto}>
+                          {m.concepto || 'Depósito bancario'}
+                        </div>
+                        {refStr && (
+                          <div className="font-mono text-[10px] text-gray-500 dark:text-gray-400 mt-0.5">
+                            Ref: {refStr}
+                          </div>
+                        )}
                       </td>
                       <td className="p-3 text-right font-mono font-black text-emerald-600 dark:text-emerald-400">
                         {formatCurrency(m._monto)}
                       </td>
                       <td className="p-3">
-                        {cdms.length > 0 ? (
+                        {ticketsList.length > 0 ? (
                           <div className="flex flex-col gap-1">
-                            {cdms.map((c: any, idx: number) => {
-                              const comp = c.comprobantes_deposito;
-                              const title = comp?.descripcion || `Ticket ${c.comprobante_id?.substring(0, 6)}`;
+                            {ticketsList.map(({ comp, montoAsociado }, idx) => {
+                              const title = formatTicketIdentificador ? formatTicketIdentificador(comp) : (comp?.descripcion || `Ticket ${comp?.id?.substring(0, 6) || ''}`);
                               const fechaComp = formatDate(comp?.fecha);
                               return (
-                                <span key={idx} className="font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950 px-2 py-0.5 rounded border border-indigo-200 dark:border-indigo-800 text-[10px] inline-flex items-center gap-1 max-w-[200px] truncate" title={`${title} (${fechaComp})`}>
-                                  🎫 {title} {fechaComp ? `(${fechaComp})` : ''}
-                                </span>
+                                <div key={idx} className="inline-flex items-center gap-1 max-w-[220px]">
+                                  {comp?.archivo_url && handleDownloadFile ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDownloadFile(comp.archivo_url, `${title}.pdf`)}
+                                      className="font-bold text-indigo-700 hover:text-indigo-900 dark:text-indigo-300 dark:hover:text-indigo-100 bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950 dark:hover:bg-indigo-900/60 px-2 py-0.5 rounded border border-indigo-200 dark:border-indigo-800 text-[10px] inline-flex items-center gap-1 max-w-[210px] truncate cursor-pointer transition shadow-xs"
+                                      title={`Ver ticket: ${title} (${fechaComp}) - Asociado: ${formatCurrency(montoAsociado || comp?.monto || 0)}`}
+                                    >
+                                      🎫 {title} {fechaComp ? `(${fechaComp})` : ''} <ExternalLink size={10} className="shrink-0 text-indigo-500" />
+                                    </button>
+                                  ) : (
+                                    <span className="font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950 px-2 py-0.5 rounded border border-indigo-200 dark:border-indigo-800 text-[10px] inline-flex items-center gap-1 max-w-[200px] truncate" title={`${title} (${fechaComp})`}>
+                                      🎫 {title} {fechaComp ? `(${fechaComp})` : ''}
+                                    </span>
+                                  )}
+                                </div>
                               );
                             })}
                           </div>

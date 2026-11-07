@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useMemo } from 'react';
-import { DollarSign, Sliders, CheckCircle, RefreshCw, Info, Calendar, Award, AlertTriangle, Settings, ChevronRight, X, Clock, Eye, ShieldCheck, FileText, Check, Download, Printer } from 'lucide-react';
+import { DollarSign, Sliders, CheckCircle, RefreshCw, Info, Calendar, Award, AlertTriangle, Settings, ChevronRight, X, Clock, Eye, ShieldCheck, FileText, Check, Download, Printer, FileSpreadsheet } from 'lucide-react';
 import type { EmpleadoDetalle, Puesto, ChecadaRaw, Turno, Incidencia } from '../types';
 import { calcularNominaCompleta, createIncidencia } from '../actions';
 import DateInput from '@/components/ui/DateInput';
@@ -25,9 +25,11 @@ export default function NominaTab({
   const [searchHorasExtra, setSearchHorasExtra] = useState('');
   const [filtroSoloConExtras, setFiltroSoloConExtras] = useState(false);
   const [selectedEmpHorasExtraModal, setSelectedEmpHorasExtraModal] = useState<any | null>(null);
+  const [vistaHorasExtra, setVistaHorasExtra] = useState<'resumen' | 'detalle_diario'>('resumen');
 
   // Fecha actual en formato YYYY-MM-DD
-  const todayLocalStr = new Date().toLocaleDateString('en-CA');
+  const TIMEZONE = process.env.NEXT_PUBLIC_TIMEZONE || 'America/Cancun';
+  const todayLocalStr = new Date().toLocaleDateString('en-CA', { timeZone: TIMEZONE });
 
   // Modo de selección de fecha (por defecto 'diario')
   const [periodoMode, setPeriodoMode] = useState<'diario' | 'quincena' | 'personalizado'>('diario');
@@ -240,6 +242,262 @@ export default function NominaTab({
     document.body.removeChild(link);
   };
 
+  const exportToExcelHorasExtras = async (selectedEmp?: any) => {
+    if (!resultados || resultados.length === 0) {
+      alert('Primero debes calcular la nómina para generar el reporte de Horas Extras.');
+      return;
+    }
+
+    const XLSX = await import('xlsx');
+
+    const emps = selectedEmp ? [selectedEmp] : resultados.filter(r => {
+      const q = searchHorasExtra.toLowerCase();
+      const matchSearch = !q || (r.nombre || '').toLowerCase().includes(q) || (r.puesto || '').toLowerCase().includes(q);
+      const totalHE = (r.horasDobles || 0) + (r.horasTriples || 0);
+      const matchExtras = !filtroSoloConExtras || totalHE > 0;
+      return matchSearch && matchExtras;
+    });
+
+    if (emps.length === 0) {
+      alert('No hay empleados que coincidan con los filtros actuales.');
+      return;
+    }
+
+    // --- HOJA 1: DETALLE DIARIO DE HORAS EXTRAS ---
+    const headersDetalle = [
+      'Empleado',
+      'Puesto',
+      'Fecha',
+      'Día',
+      'Turno Programado',
+      'Entrada Prog.',
+      'Salida Prog.',
+      'Hora Entrada Real',
+      'Hora Salida Real',
+      'Estado',
+      'Horas Laboradas',
+      'Horas Extras',
+      'Horas Dobles (LFT)',
+      'Horas Triples (LFT)',
+      'Sueldo Diario ($)',
+      'Valor Hora Base ($)',
+      'Pago Hora Simple ($)',
+      'Pago Horas Extras LFT ($)',
+      'Checadas Registradas'
+    ];
+
+    const dataDetalle: any[][] = [];
+    let totTrabajadas = 0;
+    let totExtras = 0;
+    let totDobles = 0;
+    let totTriples = 0;
+    let totPagoSimple = 0;
+    let totPagoLFT = 0;
+
+    emps.forEach(r => {
+      const horaSimple = (r.sueldoDiario || 0) / 8;
+      (r.detallesDias || []).forEach((d: any) => {
+        const dateObj = new Date(d.fecha + 'T12:00:00');
+        const dow = dateObj.getDay();
+        const schedule = horariosEmpleados.find((h: any) => h.empleado_id === r.empleado_id && h.dia_semana === dow);
+        const turno = schedule?.turno_id ? turnos.find((t: any) => t.id === schedule.turno_id) : null;
+
+        const hInProg = d.horaEntradaProgramada || (d.esDescanso ? 'Descanso' : (turno ? (turno.hora_entrada_1?.substring(0, 5) || '09:00') : '09:00'));
+        const hOutProg = d.horaSalidaProgramada || (d.esDescanso ? 'Descanso' : (turno ? (turno.hora_salida_1?.substring(0, 5) || '17:00') : '17:00'));
+        const turnoProg = d.esDescanso ? 'Descanso' : `${hInProg} - ${hOutProg}`;
+
+        const entradaReal = d.horaEntradaReal && d.horaEntradaReal !== '-'
+          ? d.horaEntradaReal
+          : (d.entradas && d.entradas.length >= 1 ? d.entradas[0] : '-');
+        const salidaReal = d.horaSalidaReal && d.horaSalidaReal !== '-'
+          ? d.horaSalidaReal
+          : (d.entradas && d.entradas.length >= 2 ? d.entradas[d.entradas.length - 1] : '-');
+
+        const hrsTrab = Number(d.horasTrabajadas || 0);
+        const hrsExtras = Number(d.horasExtra || 0);
+        const hrsDobles = Number(d.horasDobles || 0);
+        const hrsTriples = Number(d.horasTriples || 0);
+
+        const pagoSimple = hrsExtras * horaSimple;
+        const pagoLFT = d.pagoTotalLFT !== undefined ? d.pagoTotalLFT : ((hrsDobles * 2 + hrsTriples * 3) * horaSimple);
+
+        totTrabajadas += hrsTrab;
+        totExtras += hrsExtras;
+        totDobles += hrsDobles;
+        totTriples += hrsTriples;
+        totPagoSimple += pagoSimple;
+        totPagoLFT += pagoLFT;
+
+        const checadasStr = d.entradas && d.entradas.length > 0 ? d.entradas.join(' → ') : '';
+
+        dataDetalle.push([
+          r.nombre || '',
+          r.puesto || 'General',
+          d.fecha,
+          d.diaSemana || '',
+          turnoProg,
+          hInProg,
+          hOutProg,
+          entradaReal,
+          salidaReal,
+          d.estado?.toUpperCase() || '',
+          Number(hrsTrab.toFixed(2)),
+          Number(hrsExtras.toFixed(2)),
+          Number(hrsDobles.toFixed(2)),
+          Number(hrsTriples.toFixed(2)),
+          Number((r.sueldoDiario || 0).toFixed(2)),
+          Number(horaSimple.toFixed(2)),
+          Number(pagoSimple.toFixed(2)),
+          Number(pagoLFT.toFixed(2)),
+          checadasStr
+        ]);
+      });
+    });
+
+    // Fila de totales hoja detalle
+    dataDetalle.push([
+      'TOTAL GENERAL',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      Number(totTrabajadas.toFixed(2)),
+      Number(totExtras.toFixed(2)),
+      Number(totDobles.toFixed(2)),
+      Number(totTriples.toFixed(2)),
+      '',
+      '',
+      Number(totPagoSimple.toFixed(2)),
+      Number(totPagoLFT.toFixed(2)),
+      ''
+    ]);
+
+    // --- HOJA 2: RESUMEN POR EMPLEADO ---
+    const headersResumen = [
+      'Empleado',
+      'Puesto',
+      'Sueldo Diario ($)',
+      'Días Pagados',
+      'Total Horas Laboradas',
+      'Total Horas Extras',
+      'Horas Dobles (LFT)',
+      'Horas Triples (LFT)',
+      'Valor Hora Base ($)',
+      'Pago a Horas Simples ($)',
+      'Pago LFT Dobles ($)',
+      'Pago LFT Triples ($)',
+      'Total Pago Horas Extras LFT ($)'
+    ];
+
+    const dataResumen: any[][] = [];
+    let resTotTrab = 0, resTotHE = 0, resTotDob = 0, resTotTrip = 0;
+    let resTotSimple = 0, resTotLFT = 0;
+
+    emps.forEach(r => {
+      const horaSimple = (r.sueldoDiario || 0) / 8;
+      const totalHE = (r.horasDobles || 0) + (r.horasTriples || 0);
+      const pagoSimple = totalHE * horaSimple;
+      const pagoDobles = (r.horasDobles || 0) * 2 * horaSimple;
+      const pagoTriples = (r.horasTriples || 0) * 3 * horaSimple;
+      const pagoLFT = (r.percepciones?.horasExtraDobles || 0) + (r.percepciones?.horasExtraTriples || 0) || (pagoDobles + pagoTriples);
+
+      resTotTrab += (r.totalHorasTrabajadas || 0);
+      resTotHE += totalHE;
+      resTotDob += (r.horasDobles || 0);
+      resTotTrip += (r.horasTriples || 0);
+      resTotSimple += pagoSimple;
+      resTotLFT += pagoLFT;
+
+      dataResumen.push([
+        r.nombre || '',
+        r.puesto || 'General',
+        Number((r.sueldoDiario || 0).toFixed(2)),
+        r.diasTrabajados || 0,
+        Number((r.totalHorasTrabajadas || 0).toFixed(2)),
+        Number(totalHE.toFixed(2)),
+        Number((r.horasDobles || 0).toFixed(2)),
+        Number((r.horasTriples || 0).toFixed(2)),
+        Number(horaSimple.toFixed(2)),
+        Number(pagoSimple.toFixed(2)),
+        Number(pagoDobles.toFixed(2)),
+        Number(pagoTriples.toFixed(2)),
+        Number(pagoLFT.toFixed(2))
+      ]);
+    });
+
+    dataResumen.push([
+      'TOTAL GENERAL',
+      '',
+      '',
+      '',
+      Number(resTotTrab.toFixed(2)),
+      Number(resTotHE.toFixed(2)),
+      Number(resTotDob.toFixed(2)),
+      Number(resTotTrip.toFixed(2)),
+      '',
+      Number(resTotSimple.toFixed(2)),
+      '',
+      '',
+      Number(resTotLFT.toFixed(2))
+    ]);
+
+    const wb = XLSX.utils.book_new();
+
+    const wsDetalle = XLSX.utils.aoa_to_sheet([headersDetalle, ...dataDetalle]);
+    wsDetalle['!cols'] = [
+      { wch: 32 }, // Empleado
+      { wch: 18 }, // Puesto
+      { wch: 12 }, // Fecha
+      { wch: 8 },  // Día
+      { wch: 18 }, // Turno Programado
+      { wch: 14 }, // Entrada Prog.
+      { wch: 14 }, // Salida Prog.
+      { wch: 18 }, // Hora Entrada Real
+      { wch: 18 }, // Hora Salida Real
+      { wch: 14 }, // Estado
+      { wch: 16 }, // Horas Laboradas
+      { wch: 14 }, // Horas Extras
+      { wch: 18 }, // Horas Dobles
+      { wch: 18 }, // Horas Triples
+      { wch: 16 }, // Sueldo Diario
+      { wch: 18 }, // Valor Hora Base
+      { wch: 20 }, // Pago Hora Simple
+      { wch: 24 }, // Pago Horas Extras LFT
+      { wch: 28 }, // Checadas
+    ];
+
+    const wsResumen = XLSX.utils.aoa_to_sheet([headersResumen, ...dataResumen]);
+    wsResumen['!cols'] = [
+      { wch: 32 }, // Empleado
+      { wch: 18 }, // Puesto
+      { wch: 16 }, // Sueldo Diario
+      { wch: 14 }, // Días Pagados
+      { wch: 22 }, // Total Horas Laboradas
+      { wch: 18 }, // Total Horas Extras
+      { wch: 18 }, // Horas Dobles
+      { wch: 18 }, // Horas Triples
+      { wch: 18 }, // Valor Hora Base
+      { wch: 22 }, // Pago a Horas Simples
+      { wch: 18 }, // Pago LFT Dobles
+      { wch: 18 }, // Pago LFT Triples
+      { wch: 28 }, // Total Pago LFT
+    ];
+
+    XLSX.utils.book_append_sheet(wb, wsDetalle, 'Detalle Diario HE');
+    XLSX.utils.book_append_sheet(wb, wsResumen, 'Resumen por Empleado');
+
+    const fileName = selectedEmp
+      ? `Reporte_Horas_Extras_${(selectedEmp.nombre || 'Empleado').replace(/[^a-zA-Z0-9_-]/g, '_')}_${periodo.fecha_inicio}_al_${periodo.fecha_fin}.xlsx`
+      : `Reporte_Horas_Extras_${periodo.fecha_inicio}_al_${periodo.fecha_fin}.xlsx`;
+
+    XLSX.writeFile(wb, fileName);
+  };
+
   const exportToCsvHorasExtras = () => {
     if (!resultados || resultados.length === 0) {
       alert('Primero debes calcular la nómina para generar el reporte de Horas Extras.');
@@ -251,16 +509,21 @@ export default function NominaTab({
       '"Puesto"',
       '"Fecha"',
       '"Día"',
+      '"Turno Programado"',
       '"Horario Entrada (Prog)"',
       '"Horario Salida (Prog)"',
-      '"Entrada (Real)"',
-      '"Salida (Real)"',
+      '"Hora Entrada (Real)"',
+      '"Hora Salida (Real)"',
       '"Estado"',
       '"Horas Laboradas"',
       '"Horas Extras"',
+      '"Horas Dobles (LFT)"',
+      '"Horas Triples (LFT)"',
       '"Sueldo Diario ($)"',
-      '"Valor Hora Simple ($)"',
-      '"Pago Hora Simple ($)"'
+      '"Valor Hora Base ($)"',
+      '"Pago Hora Simple ($)"',
+      '"Pago Horas Extras LFT ($)"',
+      '"Checadas Registradas"'
     ];
 
     const emps = resultados.filter(r => {
@@ -274,37 +537,53 @@ export default function NominaTab({
     const rows: string[][] = [];
 
     emps.forEach(r => {
-      const horaSimple = r.sueldoDiario / 8;
+      const horaSimple = (r.sueldoDiario || 0) / 8;
       (r.detallesDias || []).forEach((d: any) => {
         const dateObj = new Date(d.fecha + 'T12:00:00');
         const dow = dateObj.getDay();
         const schedule = horariosEmpleados.find((h: any) => h.empleado_id === r.empleado_id && h.dia_semana === dow);
         const turno = schedule?.turno_id ? turnos.find((t: any) => t.id === schedule.turno_id) : null;
 
-        const hInProg = d.esDescanso ? 'Descanso' : (turno ? (turno.hora_entrada_1?.substring(0, 5) || '09:00') : '09:00');
-        const hOutProg = d.esDescanso ? 'Descanso' : (turno ? (turno.hora_salida_1?.substring(0, 5) || '17:00') : '17:00');
+        const hInProg = d.horaEntradaProgramada || (d.esDescanso ? 'Descanso' : (turno ? (turno.hora_entrada_1?.substring(0, 5) || '09:00') : '09:00'));
+        const hOutProg = d.horaSalidaProgramada || (d.esDescanso ? 'Descanso' : (turno ? (turno.hora_salida_1?.substring(0, 5) || '17:00') : '17:00'));
+        const turnoProg = d.esDescanso ? 'Descanso' : `${hInProg} - ${hOutProg}`;
 
-        const entradaReal = d.entradas && d.entradas.length >= 1 ? d.entradas[0] : '-';
-        const salidaReal = d.entradas && d.entradas.length >= 2 ? d.entradas[d.entradas.length - 1] : '-';
+        const entradaReal = d.horaEntradaReal && d.horaEntradaReal !== '-'
+          ? d.horaEntradaReal
+          : (d.entradas && d.entradas.length >= 1 ? d.entradas[0] : '-');
+        const salidaReal = d.horaSalidaReal && d.horaSalidaReal !== '-'
+          ? d.horaSalidaReal
+          : (d.entradas && d.entradas.length >= 2 ? d.entradas[d.entradas.length - 1] : '-');
 
-        const hrsExtrasDia = d.horasExtra || 0;
+        const hrsTrab = Number(d.horasTrabajadas || 0);
+        const hrsExtrasDia = Number(d.horasExtra || 0);
+        const hrsDobles = Number(d.horasDobles || 0);
+        const hrsTriples = Number(d.horasTriples || 0);
+
         const pagoDiaSimple = hrsExtrasDia * horaSimple;
+        const pagoDiaLFT = d.pagoTotalLFT !== undefined ? d.pagoTotalLFT : ((hrsDobles * 2 + hrsTriples * 3) * horaSimple);
+        const checadasStr = d.entradas && d.entradas.length > 0 ? d.entradas.join(' → ') : '';
 
         rows.push([
           `"${r.nombre || ''}"`,
           `"${r.puesto || 'General'}"`,
           `"${d.fecha}"`,
-          `"${d.diaSemana}"`,
+          `"${d.diaSemana || ''}"`,
+          `"${turnoProg}"`,
           `"${hInProg}"`,
           `"${hOutProg}"`,
           `"${entradaReal}"`,
           `"${salidaReal}"`,
-          `"${d.estado}"`,
-          (d.horasTrabajadas || 0).toFixed(1),
-          hrsExtrasDia.toFixed(1),
-          r.sueldoDiario.toFixed(2),
+          `"${d.estado || ''}"`,
+          hrsTrab.toFixed(2),
+          hrsExtrasDia.toFixed(2),
+          hrsDobles.toFixed(2),
+          hrsTriples.toFixed(2),
+          (r.sueldoDiario || 0).toFixed(2),
           horaSimple.toFixed(2),
-          pagoDiaSimple.toFixed(2)
+          pagoDiaSimple.toFixed(2),
+          pagoDiaLFT.toFixed(2),
+          `"${checadasStr}"`
         ]);
       });
     });
@@ -314,7 +593,7 @@ export default function NominaTab({
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.setAttribute('download', `Reporte_Individual_Horas_Extras_${periodo.fecha_inicio}_al_${periodo.fecha_fin}.csv`);
+    link.setAttribute('download', `Reporte_Horas_Extras_${periodo.fecha_inicio}_al_${periodo.fecha_fin}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -571,144 +850,369 @@ export default function NominaTab({
 
     const formatMoney = (val: number) => `$${val.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
+    // Totales Generales KPI
+    const totHorasExtras = emps.reduce((s, r) => s + (r.horasDobles || 0) + (r.horasTriples || 0), 0);
+    const totDobles = emps.reduce((s, r) => s + (r.horasDobles || 0), 0);
+    const totTriples = emps.reduce((s, r) => s + (r.horasTriples || 0), 0);
+    const totPagoSimple = emps.reduce((s, r) => s + (((r.horasDobles || 0) + (r.horasTriples || 0)) * (r.sueldoDiario / 8)), 0);
+    const totPagoLFT = emps.reduce((s, r) => s + (r.percepciones?.horasExtraDobles || 0) + (r.percepciones?.horasExtraTriples || 0), 0);
+    const empsConExtras = emps.filter(r => ((r.horasDobles || 0) + (r.horasTriples || 0)) > 0).length;
+
+    // Recopilar todos los días con horas extras de todos los empleados
+    const diasConExtrasList: any[] = [];
+    emps.forEach(r => {
+      const horaSimple = (r.sueldoDiario || 0) / 8;
+      (r.detallesDias || []).forEach((d: any) => {
+        if ((d.horasExtra || 0) > 0) {
+          const entradaReal = d.horaEntradaReal && d.horaEntradaReal !== '-'
+            ? d.horaEntradaReal
+            : (d.entradas && d.entradas.length >= 1 ? d.entradas[0] : '-');
+          const salidaReal = d.horaSalidaReal && d.horaSalidaReal !== '-'
+            ? d.horaSalidaReal
+            : (d.entradas && d.entradas.length >= 2 ? d.entradas[d.entradas.length - 1] : '-');
+          const hInProg = d.horaEntradaProgramada || (d.esDescanso ? 'Descanso' : '09:00');
+          const hOutProg = d.horaSalidaProgramada || (d.esDescanso ? 'Descanso' : '17:00');
+          const turnoProg = d.esDescanso ? 'Descanso' : `${hInProg} - ${hOutProg}`;
+          const pagoDiaSimple = (d.horasExtra || 0) * horaSimple;
+          const pagoDiaLFT = d.pagoTotalLFT !== undefined ? d.pagoTotalLFT : (((d.horasDobles || 0) * 2 + (d.horasTriples || 0) * 3) * horaSimple);
+
+          diasConExtrasList.push({
+            empleado: r.nombre,
+            puesto: r.puesto,
+            fecha: d.fecha,
+            diaSemana: d.diaSemana,
+            turnoProg,
+            entradaReal,
+            salidaReal,
+            horasTrabajadas: d.horasTrabajadas || 0,
+            horasExtra: d.horasExtra || 0,
+            horasDobles: d.horasDobles || 0,
+            horasTriples: d.horasTriples || 0,
+            sueldoDiario: r.sueldoDiario || 0,
+            pagoDiaSimple,
+            pagoDiaLFT
+          });
+        }
+      });
+    });
+
+    const totDiasTrabajadas = diasConExtrasList.reduce((s, d) => s + d.horasTrabajadas, 0);
+
     const htmlContent = `
       <!DOCTYPE html>
       <html>
         <head>
-          <title>Reporte Individual de Asistencia y Horas Extras</title>
+          <title>Reporte General de Horas Extras - ${periodo.fecha_inicio} a ${periodo.fecha_fin}</title>
           <style>
-            @page { size: landscape; margin: 8mm; }
-            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 12px; color: #111827; background: #fff; }
-            .emp-page { page-break-after: always; margin-bottom: 24px; }
-            .emp-page:last-child { page-break-after: avoid; }
-            .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #d97706; padding-bottom: 8px; margin-bottom: 12px; }
-            .header h1 { font-size: 16px; font-weight: 900; margin: 0; color: #d97706; }
-            .header p { font-size: 10px; color: #4b5563; margin: 2px 0 0 0; }
-            .kpi-container { display: flex; gap: 10px; margin-bottom: 12px; }
-            .kpi-card { flex: 1; padding: 6px 8px; border-radius: 6px; border: 1px solid #e5e7eb; background: #f9fafb; }
-            .kpi-card .title { font-size: 8px; font-weight: 700; color: #6b7280; text-transform: uppercase; }
-            .kpi-card .value { font-size: 13px; font-weight: 800; margin-top: 2px; }
-            table { width: 100%; border-collapse: collapse; font-size: 9px; }
-            th { background-color: #fffbeb; color: #92400e; font-weight: 800; text-align: left; padding: 5px 6px; border-bottom: 2px solid #d97706; text-transform: uppercase; font-size: 8px; }
-            td { padding: 4px 6px; border-bottom: 1px solid #e5e7eb; }
-            tr:nth-child(even) { background-color: #fcfcfc; }
+            @page {
+              size: landscape;
+              margin: 8mm;
+            }
+            body {
+              font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+              margin: 0;
+              padding: 12px;
+              color: #111827;
+              background: #fff;
+            }
+            .header {
+              display: flex;
+              justify-content: space-between;
+              align-items: center;
+              border-bottom: 2px solid #111827;
+              padding-bottom: 10px;
+              margin-bottom: 14px;
+            }
+            .header h1 {
+              font-size: 18px;
+              font-weight: 900;
+              margin: 0;
+              color: #111827;
+            }
+            .header p {
+              font-size: 11px;
+              color: #4b5563;
+              margin: 3px 0 0 0;
+            }
+            .kpi-container {
+              display: flex;
+              gap: 10px;
+              margin-bottom: 14px;
+            }
+            .kpi-card {
+              flex: 1;
+              padding: 8px 10px;
+              border-radius: 6px;
+              border: 1px solid #e5e7eb;
+              background: #f9fafb;
+            }
+            .kpi-card .title {
+              font-size: 8.5px;
+              font-weight: 700;
+              color: #6b7280;
+              text-transform: uppercase;
+            }
+            .kpi-card .value {
+              font-size: 14px;
+              font-weight: 800;
+              margin-top: 2px;
+            }
+            table {
+              width: 100%;
+              border-collapse: collapse;
+              font-size: 9px;
+            }
+            th {
+              background-color: #f3f4f6;
+              color: #111827;
+              font-weight: 800;
+              text-align: left;
+              padding: 6px 6px;
+              border-bottom: 2px solid #374151;
+              text-transform: uppercase;
+              font-size: 8px;
+            }
+            td {
+              padding: 5px 6px;
+              border-bottom: 1px solid #e5e7eb;
+            }
+            tr:nth-child(even) {
+              background-color: #fcfcfc;
+            }
             .text-right { text-align: right; }
             .text-center { text-align: center; }
             .font-bold { font-weight: 700; }
             .font-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
-            .total-row { background-color: #fffbeb !important; font-weight: 900; }
-            .signatures { display: flex; justify-content: space-around; margin-top: 35px; }
-            .sig-box { text-align: center; border-top: 1px solid #9ca3af; width: 230px; padding-top: 4px; font-size: 9.5px; font-weight: 700; color: #374151; }
+            .total-row {
+              background-color: #f3f4f6 !important;
+              font-weight: 900;
+              border-top: 2px solid #111827;
+              border-bottom: 2px solid #111827;
+            }
+            .section-title {
+              margin-top: 20px;
+              margin-bottom: 8px;
+              display: flex;
+              justify-content: space-between;
+              align-items: flex-end;
+              border-bottom: 2px solid #111827;
+              padding-bottom: 5px;
+            }
+            .section-title h2 {
+              font-size: 12px;
+              font-weight: 900;
+              margin: 0;
+              color: #111827;
+              text-transform: uppercase;
+            }
+            .section-title p {
+              font-size: 9px;
+              color: #6b7280;
+              margin: 2px 0 0 0;
+            }
+            .signatures {
+              display: flex;
+              justify-content: space-around;
+              margin-top: 35px;
+            }
+            .sig-box {
+              text-align: center;
+              border-top: 1px solid #9ca3af;
+              width: 220px;
+              padding-top: 4px;
+              font-size: 9px;
+              font-weight: 700;
+              color: #374151;
+            }
+            @media print {
+              body { padding: 0; }
+              .page-break { page-break-before: always; }
+            }
           </style>
         </head>
         <body>
-          ${emps.map((r, empIdx) => {
-            const horaSimple = r.sueldoDiario / 8;
-            const totalHE = (r.horasDobles || 0) + (r.horasTriples || 0);
-            const pagoSimples = totalHE * horaSimple;
-            const pagoLft = (r.percepciones?.horasExtraDobles || 0) + (r.percepciones?.horasExtraTriples || 0);
-            const horasTotales = r.totalHorasTrabajadas || (r.diasTrabajados * 8);
-            const diasPeriodo = r.diasTotalesPeriodo || 7;
-            const horasSemanales = (horasTotales / diasPeriodo) * 7;
+          <!-- ENCABEZADO GENERAL IDÉNTICO AL REPORTE DE NÓMINA -->
+          <div class="header">
+            <div>
+              <h1>REPORTE GENERAL DE HORAS EXTRAS</h1>
+              <p>Período Activo: <strong>${periodo.fecha_inicio}</strong> al <strong>${periodo.fecha_fin}</strong> | Cumplimiento LFT Arts. 66, 67 y 68 (Tiempo Extraordinario)</p>
+            </div>
+            <div style="text-align: right;">
+              <p style="font-size: 11px; font-weight: 800; color: #111827;">RAMEN DE PLAYA / SEIMENJO</p>
+              <p style="font-size: 9px; color: #6b7280;">Emisión: ${new Date().toLocaleDateString('es-MX')} ${new Date().toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })}</p>
+            </div>
+          </div>
 
-            return `
-              <div class="emp-page">
-                <div class="header">
-                  <div>
-                    <h1>DESGLOSE INDIVIDUAL DE ASISTENCIA Y HORAS EXTRAS (HOJA ${empIdx + 1} DE ${emps.length})</h1>
-                    <p>Empleado: <strong>${r.nombre || ''}</strong> | Puesto: <strong>${r.puesto || 'General'}</strong> | Período: <strong>${periodo.fecha_inicio}</strong> al <strong>${periodo.fecha_fin}</strong></p>
-                  </div>
-                  <div style="text-align: right; font-size: 9.5px; color: #4b5563;">
-                    Sueldo Diario: <strong>${formatMoney(r.sueldoDiario)}</strong><br/>
-                    Valor Hora Simple: <strong style="color: #059669;">${formatMoney(horaSimple)}/h</strong>
-                  </div>
-                </div>
+          <!-- TARJETAS DE RESUMEN KPI -->
+          <div class="kpi-container">
+            <div class="kpi-card">
+              <div class="title">Total Horas Extras</div>
+              <div class="value" style="color: #d97706;">${totHorasExtras.toFixed(1)} hrs</div>
+            </div>
+            <div class="kpi-card">
+              <div class="title">Horas Dobles (LFT)</div>
+              <div class="value" style="color: #2563eb;">${totDobles.toFixed(1)} hrs</div>
+            </div>
+            <div class="kpi-card">
+              <div class="title">Horas Triples (LFT)</div>
+              <div class="value" style="color: #dc2626;">${totTriples.toFixed(1)} hrs</div>
+            </div>
+            <div class="kpi-card">
+              <div class="title">Pago a Horas Simples</div>
+              <div class="value" style="color: #4b5563;">${formatMoney(totPagoSimple)}</div>
+            </div>
+            <div class="kpi-card">
+              <div class="title">Personal con Horas Extra</div>
+              <div class="value" style="color: #111827;">${empsConExtras} / ${emps.length} Emp.</div>
+            </div>
+            <div class="kpi-card" style="background: #ecfdf5; border-color: #a7f3d0;">
+              <div class="title" style="color: #047857;">Total Pago LFT (Doble/Triple)</div>
+              <div class="value" style="color: #047857;">${formatMoney(totPagoLFT)}</div>
+            </div>
+          </div>
 
-                <div class="kpi-container">
-                  <div class="kpi-card">
-                    <div class="title">Horas Trab. Período</div>
-                    <div class="value" style="color: #111827;">${horasTotales.toFixed(1)} hrs</div>
-                  </div>
-                  <div class="kpi-card">
-                    <div class="title">Promedio Horas / Semana</div>
-                    <div class="value" style="color: ${horasSemanales > 48 ? '#d97706' : '#111827'};">${horasSemanales.toFixed(1)} h/sem</div>
-                  </div>
-                  <div class="kpi-card">
-                    <div class="title">Total Horas Extras</div>
-                    <div class="value" style="color: #b45309;">${totalHE.toFixed(1)} hrs</div>
-                  </div>
-                  <div class="kpi-card">
-                    <div class="title">Pago a Horas Simples</div>
-                    <div class="value" style="color: #059669;">${formatMoney(pagoSimples)}</div>
-                  </div>
-                  <div class="kpi-card">
-                    <div class="title">Ref. Pago LFT (Dobles/Triples)</div>
-                    <div class="value" style="color: #2563eb;">${formatMoney(pagoLft)}</div>
-                  </div>
-                </div>
+          <!-- TABLA 1: RESUMEN DE HORAS EXTRAS POR EMPLEADO -->
+          <div class="section-title">
+            <div>
+              <h2>1. Resumen General de Horas Extras por Colaborador</h2>
+              <p>Totales acumulados del período evaluado y desglose de importes conforme a ley.</p>
+            </div>
+          </div>
 
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Fecha</th>
-                      <th>Día</th>
-                      <th>Horario Programado</th>
-                      <th class="text-center">Entrada Real</th>
-                      <th class="text-center">Salida Real</th>
-                      <th class="text-center">Estado</th>
-                      <th class="text-center">Horas Laboradas</th>
-                      <th class="text-center">Horas Extras</th>
-                      <th class="text-right">Pago Hora Simple</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    ${(r.detallesDias || []).map((d: any) => {
-                      const hrsExtrasDia = d.horasExtra || 0;
-                      const pagoDiaSimple = hrsExtrasDia * horaSimple;
+          <table>
+            <thead>
+              <tr>
+                <th>Empleado</th>
+                <th>Puesto</th>
+                <th class="text-right">Sueldo Diario</th>
+                <th class="text-right">Valor Hora Simple</th>
+                <th class="text-center">Días Trab.</th>
+                <th class="text-center">Total H. Extra</th>
+                <th class="text-center">H. Dobles</th>
+                <th class="text-center">H. Triples</th>
+                <th class="text-right">Pago Horas Simples</th>
+                <th class="text-right">Pago Dobles (LFT)</th>
+                <th class="text-right">Pago Triples (LFT)</th>
+                <th class="text-right">Total Pago LFT</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${emps.map((r: any) => {
+                const horaSimple = (r.sueldoDiario || 0) / 8;
+                const totalHE = (r.horasDobles || 0) + (r.horasTriples || 0);
+                const pagoSimple = totalHE * horaSimple;
+                const pagoDobles = (r.horasDobles || 0) * 2 * horaSimple;
+                const pagoTriples = (r.horasTriples || 0) * 3 * horaSimple;
+                const pagoLFT = (r.percepciones?.horasExtraDobles || 0) + (r.percepciones?.horasExtraTriples || 0) || (pagoDobles + pagoTriples);
 
-                      const dateObj = new Date(d.fecha + 'T12:00:00');
-                      const dow = dateObj.getDay();
-                      const schedule = horariosEmpleados.find((h: any) => h.empleado_id === r.empleado_id && h.dia_semana === dow);
-                      const turno = schedule?.turno_id ? turnos.find((t: any) => t.id === schedule.turno_id) : null;
-                      const horarioProg = d.esDescanso
-                        ? '☀️ Descanso'
-                        : turno
-                        ? `${turno.hora_entrada_1?.substring(0,5)} - ${turno.hora_salida_1?.substring(0,5)}`
-                        : '09:00 - 17:00';
+                return `
+                  <tr>
+                    <td class="font-bold">${r.nombre || ''} ${r.exentoReloj ? '<span style="font-size: 8px; color: #2563eb; background: #eff6ff; padding: 1px 4px; border-radius: 3px; border: 1px solid #bfdbfe;">Sueldo Fijo</span>' : ''}</td>
+                    <td style="color: #4b5563;">${r.puesto || 'General'}</td>
+                    <td class="text-right font-mono" style="color: #6b7280;">${formatMoney(r.sueldoDiario || 0)}</td>
+                    <td class="text-right font-mono" style="color: #059669;">${formatMoney(horaSimple)}</td>
+                    <td class="text-center font-mono font-bold">${r.diasTrabajados || 0}</td>
+                    <td class="text-center font-mono font-bold" style="color: ${totalHE > 0 ? '#d97706' : '#9ca3af'};">${totalHE.toFixed(1)} hrs</td>
+                    <td class="text-center font-mono" style="color: #2563eb;">${(r.horasDobles || 0).toFixed(1)}</td>
+                    <td class="text-center font-mono" style="color: #dc2626;">${(r.horasTriples || 0).toFixed(1)}</td>
+                    <td class="text-right font-mono">${formatMoney(pagoSimple)}</td>
+                    <td class="text-right font-mono" style="color: #2563eb;">${formatMoney(pagoDobles)}</td>
+                    <td class="text-right font-mono" style="color: #dc2626;">${formatMoney(pagoTriples)}</td>
+                    <td class="text-right font-mono font-bold" style="color: #047857; font-size: 10px;">${formatMoney(pagoLFT)}</td>
+                  </tr>
+                `;
+              }).join('')}
+              <tr class="total-row">
+                <td colspan="2">TOTALES GENERALES</td>
+                <td class="text-right font-mono">${formatMoney(emps.reduce((s, r) => s + (r.sueldoDiario || 0), 0))}</td>
+                <td class="text-right font-mono">-</td>
+                <td class="text-center font-mono">${emps.reduce((s, r) => s + (r.diasTrabajados || 0), 0)}</td>
+                <td class="text-center font-mono" style="color: #d97706;">${totHorasExtras.toFixed(1)} hrs</td>
+                <td class="text-center font-mono" style="color: #2563eb;">${totDobles.toFixed(1)}</td>
+                <td class="text-center font-mono" style="color: #dc2626;">${totTriples.toFixed(1)}</td>
+                <td class="text-right font-mono">${formatMoney(totPagoSimple)}</td>
+                <td class="text-right font-mono" style="color: #2563eb;">${formatMoney(emps.reduce((s, r) => s + (r.horasDobles || 0) * 2 * ((r.sueldoDiario || 0) / 8), 0))}</td>
+                <td class="text-right font-mono" style="color: #dc2626;">${formatMoney(emps.reduce((s, r) => s + (r.horasTriples || 0) * 3 * ((r.sueldoDiario || 0) / 8), 0))}</td>
+                <td class="text-right font-mono" style="font-size: 11px; color: #047857;">${formatMoney(totPagoLFT)}</td>
+              </tr>
+            </tbody>
+          </table>
 
-                      const entradaReal = d.entradas && d.entradas.length >= 1 ? d.entradas[0] : '-';
-                      const salidaReal = d.entradas && d.entradas.length >= 2 ? d.entradas[d.entradas.length - 1] : '-';
+          <!-- TABLA 2: DESGLOSE DETALLADO DÍA POR DÍA CON ENTRADA Y SALIDA -->
+          <div class="section-title ${diasConExtrasList.length > 6 ? 'page-break' : ''}">
+            <div>
+              <h2>2. Desglose Detallado Día por Día (Hora de Entrada y Hora de Salida Real)</h2>
+              <p>Relación específica de cada jornada con horas extras generadas, turnos programados y checadas biométricas.</p>
+            </div>
+            <div style="font-size: 9px; font-weight: 700; color: #b45309; background: #fffbeb; border: 1px solid #fef3c7; padding: 2px 8px; border-radius: 4px;">
+              ${diasConExtrasList.length} Jornada(s) con Horas Extras
+            </div>
+          </div>
 
-                      return `
-                        <tr style="${hrsExtrasDia > 0 ? 'background-color: #fffbeb;' : ''}">
-                          <td class="font-bold font-mono">${d.fecha}</td>
-                          <td style="color: #4b5563;" class="capitalize">${d.diaSemana}</td>
-                          <td class="font-mono" style="color: #374151;">${horarioProg}</td>
-                          <td class="text-center font-mono font-bold" style="color: ${entradaReal !== '-' ? '#059669' : '#9ca3af'};">${entradaReal}</td>
-                          <td class="text-center font-mono font-bold" style="color: ${salidaReal !== '-' ? '#2563eb' : '#9ca3af'};">${salidaReal}</td>
-                          <td class="text-center">${d.estado === 'descanso' ? '☀️ Descanso' : d.estado === 'justificado' ? '🛡️ Justificado' : d.estado === 'exento' ? 'Sueldo Fijo' : d.tieneChecadas ? '✅ Asistencia' : '❌ Sin checada'}</td>
-                          <td class="text-center font-mono font-bold">${d.horasTrabajadas ? `${d.horasTrabajadas.toFixed(1)} h` : '-'}</td>
-                          <td class="text-center font-mono font-bold" style="color: ${hrsExtrasDia > 0 ? '#b45309' : '#9ca3af'};">${hrsExtrasDia > 0 ? `+${hrsExtrasDia.toFixed(1)} h` : '0.0 h'}</td>
-                          <td class="text-right font-mono font-bold" style="color: #059669;">${formatMoney(pagoDiaSimple)}</td>
-                        </tr>
-                      `;
-                    }).join('')}
-                    <tr class="total-row">
-                      <td colspan="6">TOTALES DÍAS EVALUADOS</td>
-                      <td class="text-center font-mono" style="color: #111827;">${horasTotales.toFixed(1)} h</td>
-                      <td class="text-center font-mono" style="color: #b45309;">${totalHE.toFixed(1)} hrs</td>
-                      <td class="text-right font-mono" style="color: #059669; font-size: 11px;">${formatMoney(pagoSimples)}</td>
-                    </tr>
-                  </tbody>
-                </table>
+          ${diasConExtrasList.length === 0 ? `
+            <div style="padding: 20px; text-align: center; color: #6b7280; font-size: 11px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px;">
+              No se registraron jornadas con horas extras en el período seleccionado.
+            </div>
+          ` : `
+            <table>
+              <thead>
+                <tr>
+                  <th>Empleado</th>
+                  <th>Puesto</th>
+                  <th>Fecha</th>
+                  <th>Día</th>
+                  <th>Horario Programado</th>
+                  <th class="text-center">Hora Entrada Real</th>
+                  <th class="text-center">Hora Salida Real</th>
+                  <th class="text-center">Horas Laboradas</th>
+                  <th class="text-center">Horas Extras</th>
+                  <th class="text-center">Tipo LFT</th>
+                  <th class="text-right">Sueldo Diario</th>
+                  <th class="text-right">Pago Simple</th>
+                  <th class="text-right">Total Pago LFT</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${diasConExtrasList.map((d: any) => `
+                  <tr>
+                    <td class="font-bold">${d.empleado}</td>
+                    <td style="color: #4b5563;">${d.puesto}</td>
+                    <td class="font-mono font-bold">${d.fecha}</td>
+                    <td style="color: #4b5563;" class="capitalize">${d.diaSemana}</td>
+                    <td class="font-mono" style="color: #374151;">${d.turnoProg}</td>
+                    <td class="text-center font-mono font-bold" style="color: #059669; background: #ecfdf5;">${d.entradaReal}</td>
+                    <td class="text-center font-mono font-bold" style="color: #2563eb; background: #eff6ff;">${d.salidaReal}</td>
+                    <td class="text-center font-mono font-bold">${d.horasTrabajadas.toFixed(2)} h</td>
+                    <td class="text-center font-mono font-bold" style="color: #b45309; background: #fffbeb;">+${d.horasExtra.toFixed(2)} h</td>
+                    <td class="text-center font-mono" style="font-size: 8px;">
+                      ${d.horasDobles > 0 ? `<span style="color: #2563eb; font-weight: 700;">${d.horasDobles.toFixed(1)} Dobles</span>` : ''}
+                      ${d.horasTriples > 0 ? `<span style="color: #dc2626; font-weight: 700;"> / ${d.horasTriples.toFixed(1)} Triples</span>` : ''}
+                    </td>
+                    <td class="text-right font-mono" style="color: #6b7280;">${formatMoney(d.sueldoDiario)}</td>
+                    <td class="text-right font-mono">${formatMoney(d.pagoDiaSimple)}</td>
+                    <td class="text-right font-mono font-bold" style="color: #047857;">${formatMoney(d.pagoDiaLFT)}</td>
+                  </tr>
+                `).join('')}
+                <tr class="total-row">
+                  <td colspan="7">TOTAL HORAS EXTRAS EN EL PERÍODO</td>
+                  <td class="text-center font-mono">${totDiasTrabajadas.toFixed(2)} h</td>
+                  <td class="text-center font-mono" style="color: #d97706;">+${totHorasExtras.toFixed(2)} h</td>
+                  <td class="text-center font-mono" style="font-size: 8px;">
+                    <span style="color: #2563eb;">${totDobles.toFixed(1)} D</span> / <span style="color: #dc2626;">${totTriples.toFixed(1)} T</span>
+                  </td>
+                  <td class="text-right font-mono">-</td>
+                  <td class="text-right font-mono">${formatMoney(totPagoSimple)}</td>
+                  <td class="text-right font-mono" style="font-size: 11px; color: #047857;">${formatMoney(totPagoLFT)}</td>
+                </tr>
+              </tbody>
+            </table>
+          `}
 
-                <div class="signatures">
-                  <div class="sig-box">Firma del Empleado (Recibí de Conformidad)</div>
-                  <div class="sig-box">Autorizado por (Recursos Humanos / Nómina)</div>
-                </div>
-              </div>
-            `;
-          }).join('')}
+          <div class="signatures">
+            <div class="sig-box">Elaborado por (Recursos Humanos)</div>
+            <div class="sig-box">Revisado por (Gerencia Operativa)</div>
+            <div class="sig-box">Autorizado por (Dirección General)</div>
+          </div>
 
           <script>
             window.onload = function() {
@@ -768,7 +1272,7 @@ export default function NominaTab({
       const dayEmps = empleados.map(emp => {
         const empLogs = checadasRaw.filter(l => l.zkteco_user_id === emp.zkteco_user_id);
         const dayLogs = empLogs
-          .filter(l => new Date(l.timestamp).toLocaleDateString('en-CA') === dateStr)
+          .filter(l => new Date(l.timestamp).toLocaleDateString('en-CA', { timeZone: TIMEZONE }) === dateStr)
           .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 
         const hasChecked = dayLogs.length > 0;
@@ -1121,18 +1625,25 @@ export default function NominaTab({
                 {calculando ? <><RefreshCw size={15} className="animate-spin" /> Actualizando...</> : <><Clock size={15} /> Generar / Actualizar Reporte HE</>}
               </button>
               <button
-                onClick={exportToCsvHorasExtras}
-                title="Exportar Reporte de Horas Extras a Excel (.csv)"
-                className="px-4 bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2 rounded-xl transition-colors flex items-center gap-2 text-xs h-10 shadow-sm whitespace-nowrap"
+                onClick={() => exportToExcelHorasExtras()}
+                title="Descargar Reporte Detallado de Horas Extras en Excel (.xlsx)"
+                className="px-4 bg-emerald-700 hover:bg-emerald-600 text-white font-bold py-2 rounded-xl transition-colors flex items-center gap-2 text-xs h-10 shadow-sm whitespace-nowrap"
               >
-                <Download size={15} /> Exportar Excel (.csv)
+                <FileSpreadsheet size={15} /> Descargar Excel (.xlsx)
+              </button>
+              <button
+                onClick={exportToCsvHorasExtras}
+                title="Descargar Reporte de Horas Extras en CSV (.csv)"
+                className="px-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2 rounded-xl transition-colors flex items-center gap-1.5 text-xs h-10 shadow-sm whitespace-nowrap"
+              >
+                <Download size={14} /> CSV
               </button>
               <button
                 onClick={exportToPdfPrintHorasExtras}
                 title="Imprimir / Exportar Reporte de Horas Extras en PDF"
                 className="px-4 bg-blue-600 hover:bg-blue-500 text-white font-bold py-2 rounded-xl transition-colors flex items-center gap-2 text-xs h-10 shadow-sm whitespace-nowrap"
               >
-                <Printer size={15} /> Imprimir Reporte PDF
+                <Printer size={15} /> Imprimir PDF
               </button>
             </div>
           ) : subTab === 'general' ? (
@@ -1633,16 +2144,42 @@ export default function NominaTab({
 
           {/* Tabla de Horas Extras */}
           <div className="bg-white dark:bg-gray-950 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-sm overflow-hidden space-y-4 p-5">
-            <div className="flex justify-between items-center pb-2 border-b border-gray-100 dark:border-gray-800">
+            <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-3 pb-3 border-b border-gray-100 dark:border-gray-800">
               <div>
                 <h3 className="text-sm font-bold text-gray-800 dark:text-gray-100 uppercase tracking-wide flex items-center gap-2">
-                  <Clock className="text-amber-500" size={18} /> Reporte de Horas Extras Evaluadas en Hora Simple (Sueldo ÷ 8)
+                  <Clock className="text-amber-500" size={18} /> Reporte General de Horas Extras
                 </h3>
                 <p className="text-[11px] text-gray-400 mt-0.5">
-                  Desglose de horas trabajadas en el período ({periodo.fecha_inicio} a {periodo.fecha_fin}), horas promedio por semana y su equivalente pagado a cuota por hora simple.
+                  Período: {formatDate(periodo.fecha_inicio)} al {formatDate(periodo.fecha_fin)} · Cumplimiento LFT Arts. 66, 67 y 68.
                 </p>
               </div>
+              <div className="flex items-center gap-1.5 bg-gray-100 dark:bg-gray-900 p-1 rounded-xl border border-gray-200 dark:border-gray-800 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setVistaHorasExtra('resumen')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+                    vistaHorasExtra === 'resumen'
+                      ? 'bg-white dark:bg-gray-800 text-amber-600 dark:text-amber-400 shadow-xs'
+                      : 'text-gray-500 hover:text-gray-800 dark:hover:text-gray-200'
+                  }`}
+                >
+                  📊 Resumen por Empleado
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setVistaHorasExtra('detalle_diario')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+                    vistaHorasExtra === 'detalle_diario'
+                      ? 'bg-white dark:bg-gray-800 text-amber-600 dark:text-amber-400 shadow-xs'
+                      : 'text-gray-500 hover:text-gray-800 dark:hover:text-gray-200'
+                  }`}
+                >
+                  📅 Desglose Diario (Entrada / Salida)
+                </button>
+              </div>
             </div>
+
+            {vistaHorasExtra === 'resumen' ? (
 
             <div className="overflow-x-auto">
               <table className="w-full text-xs text-left">
@@ -1762,9 +2299,124 @@ export default function NominaTab({
                 )}
               </table>
             </div>
-          </div>
+          ) : (
+            /* TABLA DESGLOSE DETALLADO DÍA POR DÍA CON ENTRADA Y SALIDA */
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs text-left whitespace-nowrap">
+                <thead className="bg-gray-50 dark:bg-gray-900 text-gray-500 dark:text-gray-400 uppercase text-[10px] font-bold border-b border-gray-200 dark:border-gray-800">
+                  <tr>
+                    <th className="p-3">Empleado</th>
+                    <th className="p-3">Puesto</th>
+                    <th className="p-3">Fecha</th>
+                    <th className="p-3">Día</th>
+                    <th className="p-3">Turno Programado</th>
+                    <th className="p-3 text-center">Hora Entrada Real</th>
+                    <th className="p-3 text-center">Hora Salida Real</th>
+                    <th className="p-3 text-center">Horas Laboradas</th>
+                    <th className="p-3 text-center">Horas Extras</th>
+                    <th className="p-3 text-center">Tipo LFT</th>
+                    <th className="p-3 text-right">Pago Hora Simple</th>
+                    <th className="p-3 text-right">Total Pago LFT</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+                  {(() => {
+                    const list: any[] = [];
+                    const empsFiltrados = resultados.filter(r => {
+                      const q = searchHorasExtra.toLowerCase();
+                      const matchSearch = !q || (r.nombre || '').toLowerCase().includes(q) || (r.puesto || '').toLowerCase().includes(q);
+                      const totalHE = (r.horasDobles || 0) + (r.horasTriples || 0);
+                      const matchExtras = !filtroSoloConExtras || totalHE > 0;
+                      return matchSearch && matchExtras;
+                    });
+
+                    empsFiltrados.forEach(r => {
+                      const horaSimple = (r.sueldoDiario || 0) / 8;
+                      (r.detallesDias || []).forEach((d: any) => {
+                        if ((d.horasExtra || 0) > 0) {
+                          const entradaReal = d.horaEntradaReal && d.horaEntradaReal !== '-'
+                            ? d.horaEntradaReal
+                            : (d.entradas && d.entradas.length >= 1 ? d.entradas[0] : '-');
+                          const salidaReal = d.horaSalidaReal && d.horaSalidaReal !== '-'
+                            ? d.horaSalidaReal
+                            : (d.entradas && d.entradas.length >= 2 ? d.entradas[d.entradas.length - 1] : '-');
+                          const hInProg = d.horaEntradaProgramada || (d.esDescanso ? 'Descanso' : '09:00');
+                          const hOutProg = d.horaSalidaProgramada || (d.esDescanso ? 'Descanso' : '17:00');
+                          const turnoProg = d.esDescanso ? 'Descanso' : `${hInProg} - ${hOutProg}`;
+                          const pagoDiaSimple = (d.horasExtra || 0) * horaSimple;
+                          const pagoDiaLFT = d.pagoTotalLFT !== undefined ? d.pagoTotalLFT : (((d.horasDobles || 0) * 2 + (d.horasTriples || 0) * 3) * horaSimple);
+
+                          list.push({
+                            id: `${r.empleado_id}_${d.fecha}`,
+                            empleado: r.nombre,
+                            puesto: r.puesto,
+                            fecha: d.fecha,
+                            diaSemana: d.diaSemana,
+                            turnoProg,
+                            entradaReal,
+                            salidaReal,
+                            horasTrabajadas: d.horasTrabajadas || 0,
+                            horasExtra: d.horasExtra || 0,
+                            horasDobles: d.horasDobles || 0,
+                            horasTriples: d.horasTriples || 0,
+                            pagoDiaSimple,
+                            pagoDiaLFT
+                          });
+                        }
+                      });
+                    });
+
+                    if (list.length === 0) {
+                      return (
+                        <tr>
+                          <td colSpan={12} className="p-8 text-center text-gray-400 italic">
+                            No hay jornadas con horas extras registradas en este período.
+                          </td>
+                        </tr>
+                      );
+                    }
+
+                    return list.map((item) => (
+                      <tr key={item.id} className="hover:bg-amber-500/5 transition-colors bg-amber-500/5 font-medium">
+                        <td className="p-3 font-bold text-gray-900 dark:text-white">{item.empleado}</td>
+                        <td className="p-3 text-gray-500">{item.puesto}</td>
+                        <td className="p-3 font-mono font-bold text-gray-900 dark:text-white">{formatDate(item.fecha)}</td>
+                        <td className="p-3 text-gray-500 capitalize">{item.diaSemana}</td>
+                        <td className="p-3 font-mono text-[11px] text-gray-600 dark:text-gray-400">{item.turnoProg}</td>
+                        <td className="p-3 text-center font-mono font-bold text-emerald-600 dark:text-emerald-400">
+                          <span className="px-2 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/20">{item.entradaReal}</span>
+                        </td>
+                        <td className="p-3 text-center font-mono font-bold text-blue-600 dark:text-blue-400">
+                          <span className="px-2 py-0.5 rounded bg-blue-500/10 border border-blue-500/20">{item.salidaReal}</span>
+                        </td>
+                        <td className="p-3 text-center font-mono font-bold text-gray-900 dark:text-white">
+                          {item.horasTrabajadas.toFixed(2)} h
+                        </td>
+                        <td className="p-3 text-center font-mono font-bold">
+                          <span className="px-2.5 py-1 rounded-xl text-xs font-black bg-amber-500 text-white shadow-2xs">
+                            +{item.horasExtra.toFixed(2)} h
+                          </span>
+                        </td>
+                        <td className="p-3 text-center font-mono text-[11px]">
+                          {item.horasDobles > 0 && <span className="text-blue-600 dark:text-blue-400 font-bold">{item.horasDobles.toFixed(1)} Dobles</span>}
+                          {item.horasTriples > 0 && <span className="text-rose-600 dark:text-rose-400 font-bold"> / {item.horasTriples.toFixed(1)} Triples</span>}
+                        </td>
+                        <td className="p-3 text-right font-mono font-bold text-emerald-600 dark:text-emerald-400">
+                          ${item.pagoDiaSimple.toFixed(2)}
+                        </td>
+                        <td className="p-3 text-right font-mono font-extrabold text-blue-600 dark:text-blue-400">
+                          ${item.pagoDiaLFT.toFixed(2)}
+                        </td>
+                      </tr>
+                    ));
+                  })()}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
-      )}
+      </div>
+    )}
 
       {/* MODAL DE DETALLE DEL EMPLEADO Y JUSTIFICACIONES EN NÓMINA GENERAL */}
       {selectedEmpDetail && selectedEmpDetail.percepciones && (
@@ -2003,32 +2655,39 @@ export default function NominaTab({
                     <tr>
                       <th className="p-2.5">Fecha</th>
                       <th className="p-2.5">Día</th>
-                      <th className="p-2.5">Estado / Checadas</th>
+                      <th className="p-2.5">Turno Prog.</th>
+                      <th className="p-2.5 text-center">Entrada Real</th>
+                      <th className="p-2.5 text-center">Salida Real</th>
                       <th className="p-2.5 text-center">Horas Laboradas</th>
                       <th className="p-2.5 text-center">Horas Extras</th>
-                      <th className="p-2.5 text-right">Pago Hora Simple</th>
+                      <th className="p-2.5 text-right">Pago Simple</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
                     {(selectedEmpHorasExtraModal.detallesDias || []).map((d: any, idx: number) => {
-                      const horaSimple = selectedEmpHorasExtraModal.sueldoDiario / 8;
+                      const horaSimple = (selectedEmpHorasExtraModal.sueldoDiario || 0) / 8;
                       const hrsExtrasDia = d.horasExtra || 0;
                       const pagoDiaSimple = hrsExtrasDia * horaSimple;
+                      const entradaReal = d.horaEntradaReal && d.horaEntradaReal !== '-'
+                        ? d.horaEntradaReal
+                        : (d.entradas && d.entradas.length >= 1 ? d.entradas[0] : '-');
+                      const salidaReal = d.horaSalidaReal && d.horaSalidaReal !== '-'
+                        ? d.horaSalidaReal
+                        : (d.entradas && d.entradas.length >= 2 ? d.entradas[d.entradas.length - 1] : '-');
+                      const turnoProg = d.esDescanso
+                        ? '☀️ Descanso'
+                        : (d.horaEntradaProgramada && d.horaSalidaProgramada ? `${d.horaEntradaProgramada} - ${d.horaSalidaProgramada}` : '09:00 - 17:00');
 
                       return (
                         <tr key={idx} className={`hover:bg-gray-50 dark:hover:bg-gray-900/50 ${hrsExtrasDia > 0 ? 'bg-amber-500/5 font-bold' : ''}`}>
                           <td className="p-2.5 font-mono text-gray-900 dark:text-white font-bold">{formatDate(d.fecha)}</td>
                           <td className="p-2.5 text-gray-500 capitalize">{d.diaSemana}</td>
-                          <td className="p-2.5">
-                            {d.entradas && d.entradas.length > 0 ? (
-                              <span className="font-mono text-[11px] text-gray-700 dark:text-gray-300">
-                                🕒 {d.entradas.join(' → ')}
-                              </span>
-                            ) : (
-                              <span className="text-[10px] text-gray-400 italic">
-                                {d.estado === 'descanso' ? '☀️ Descanso' : d.estado === 'justificado' ? '🛡️ Justificado' : 'Sin checada'}
-                              </span>
-                            )}
+                          <td className="p-2.5 font-mono text-[11px] text-gray-600 dark:text-gray-400">{turnoProg}</td>
+                          <td className="p-2.5 text-center font-mono font-bold text-emerald-600 dark:text-emerald-400">
+                            {entradaReal !== '-' ? entradaReal : <span className="text-gray-400 font-normal italic">-</span>}
+                          </td>
+                          <td className="p-2.5 text-center font-mono font-bold text-blue-600 dark:text-blue-400">
+                            {salidaReal !== '-' ? salidaReal : <span className="text-gray-400 font-normal italic">-</span>}
                           </td>
                           <td className="p-2.5 text-center font-mono font-bold">
                             {d.horasTrabajadas ? `${d.horasTrabajadas.toFixed(1)} h` : '-'}
@@ -2049,16 +2708,24 @@ export default function NominaTab({
               </div>
             </div>
 
-            <div className="p-4 bg-gray-50 dark:bg-gray-900 border-t border-gray-200 dark:border-gray-800 flex justify-between items-center shrink-0">
+            <div className="p-4 bg-gray-50 dark:bg-gray-900 border-t border-gray-200 dark:border-gray-800 flex justify-between items-center shrink-0 flex-wrap gap-2">
               <div>
                 <span className="text-[10px] text-gray-400 uppercase font-bold block">Total Horas Extras / Pago a Horas Simples</span>
                 <span className="text-lg font-black text-emerald-600 dark:text-emerald-400">
                   {((selectedEmpHorasExtraModal.horasDobles || 0) + (selectedEmpHorasExtraModal.horasTriples || 0)).toFixed(1)} hrs = ${(((selectedEmpHorasExtraModal.horasDobles || 0) + (selectedEmpHorasExtraModal.horasTriples || 0)) * (selectedEmpHorasExtraModal.sueldoDiario / 8)).toFixed(2)}
                 </span>
               </div>
-              <button onClick={() => setSelectedEmpHorasExtraModal(null)} className="px-5 py-2 bg-gray-900 hover:bg-gray-800 dark:bg-gray-100 dark:hover:bg-white text-white dark:text-gray-900 text-xs font-bold rounded-xl transition-colors">
-                Cerrar
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => exportToExcelHorasExtras(selectedEmpHorasExtraModal)}
+                  className="px-4 py-2 bg-emerald-700 hover:bg-emerald-600 text-white font-bold text-xs rounded-xl transition-colors flex items-center gap-1.5 shadow-sm"
+                >
+                  <FileSpreadsheet size={15} /> Descargar Excel (.xlsx)
+                </button>
+                <button onClick={() => setSelectedEmpHorasExtraModal(null)} className="px-5 py-2 bg-gray-900 hover:bg-gray-800 dark:bg-gray-100 dark:hover:bg-white text-white dark:text-gray-900 text-xs font-bold rounded-xl transition-colors">
+                  Cerrar
+                </button>
+              </div>
             </div>
           </div>
         </div>

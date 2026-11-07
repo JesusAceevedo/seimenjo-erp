@@ -14,8 +14,11 @@ import { SAT_FORMAS_PAGO, getMetodoPagoLabel } from '../../../lib/constants/sat'
 import { useEmpresaId } from '../../../lib/hooks/useEmpresaId';
 import SubirFacturaPedidoModal from './_components/SubirFacturaPedidoModal';
 import CompletarDetallePedidoModal from './_components/CompletarDetallePedidoModal';
+import MonitorFiltros, { FiltroTiempoPreset, FiltroOperativo, FiltroFactura, FiltroPago } from './_components/MonitorFiltros';
 import { formatDate } from '../../../lib/formatters';
 import DateInput from '@/components/ui/DateInput';
+import { useCfdiViewer } from '../_components/CfdiViewerContext';
+
 
 // --- ESTADOS INICIALES (Optimizados fuera del componente para no recrearlos en cada render) ---
 const getPedidoInicial = () => ({
@@ -32,6 +35,7 @@ const getPedidoInicial = () => ({
 });
 export const dynamic = 'force-dynamic';
 export default function AdminMonitor() {
+  const { openCfdi } = useCfdiViewer();
   const router = useRouter();
   const getEmpresaId = useEmpresaId();
 
@@ -135,10 +139,13 @@ export default function AdminMonitor() {
   const [clienteBusquedaInput, setClienteBusquedaInput] = useState('');
   const [isClienteDropdownOpen, setIsClienteDropdownOpen] = useState(false);
   const clienteDropdownRef = useRef<HTMLDivElement>(null);
-  const [filtroRango, setFiltroRango] = useState('mes_actual');
+  const [filtroRango, setFiltroRango] = useState<FiltroTiempoPreset>('mes_actual');
   const [fechaInicio, setFechaInicio] = useState('');
   const [fechaFin, setFechaFin] = useState('');
   const [busquedaGlobal, setBusquedaGlobal] = useState('');
+  const [filtroOperativo, setFiltroOperativo] = useState<FiltroOperativo>('todos');
+  const [filtroFactura, setFiltroFactura] = useState<FiltroFactura>('todos');
+  const [filtroPago, setFiltroPago] = useState<FiltroPago>('todos');
   const [popupBlockerWarning, setPopupBlockerWarning] = useState(false);
 
   // Buscar dinámicamente el ID de la empresa Sakura
@@ -162,11 +169,8 @@ export default function AdminMonitor() {
   }, []);
 
   const getTargetEmpresaId = useCallback(async (): Promise<string | null> => {
-    if (activeSubTab === 'sakura' && isSeimenjoEmpresa) {
-      return sakuraEmpresaId || 'b9fec2e3-75d5-4002-9071-f79c56bda732';
-    }
     return await getEmpresaId();
-  }, [activeSubTab, sakuraEmpresaId, getEmpresaId, isSeimenjoEmpresa]);
+  }, [getEmpresaId]);
 
   // Calcular pageSize dinámicamente según la altura del viewport para evitar scroll principal
   useEffect(() => {
@@ -323,12 +327,16 @@ export default function AdminMonitor() {
         startDateStr = `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, '0')}-01`;
       } else if (filtroRango === 'semana') {
         const haceUnaSemana = new Date();
-        haceUnaSemana.setDate(hoy.getDate() - 14);
+        haceUnaSemana.setDate(hoy.getDate() - 7);
         startDateStr = haceUnaSemana.toISOString().split('T')[0];
-      } else if (filtroRango === 'mes') {
-        const haceUnMes = new Date();
-        haceUnMes.setDate(hoy.getDate() - 45);
-        startDateStr = haceUnMes.toISOString().split('T')[0];
+      } else if (filtroRango === 'mes_anterior') {
+        const primerDiaMesAnt = new Date(hoy.getFullYear(), hoy.getMonth() - 1, 1);
+        const ultimoDiaMesAnt = new Date(hoy.getFullYear(), hoy.getMonth(), 0);
+        const yAnt = primerDiaMesAnt.getFullYear();
+        const mAnt = String(primerDiaMesAnt.getMonth() + 1).padStart(2, '0');
+        const dAntFin = String(ultimoDiaMesAnt.getDate()).padStart(2, '0');
+        startDateStr = `${yAnt}-${mAnt}-01`;
+        endDateStr = `${yAnt}-${mAnt}-${dAntFin}`;
       } else if (filtroRango === 'rango' && fechaInicio) {
         startDateStr = fechaInicio;
         endDateStr = fechaFin || null;
@@ -370,7 +378,18 @@ export default function AdminMonitor() {
   // Resetear página a 0 cuando cambian los filtros o la subpestaña
   useEffect(() => {
     setPage(0);
-  }, [filtroRango, fechaInicio, fechaFin, busquedaGlobal, activeSubTab]);
+  }, [filtroRango, fechaInicio, fechaFin, busquedaGlobal, activeSubTab, filtroOperativo, filtroFactura, filtroPago]);
+
+  const handleResetFiltros = () => {
+    setFiltroRango('mes_actual');
+    setFechaInicio('');
+    setFechaFin('');
+    setBusquedaGlobal('');
+    setFiltroOperativo('todos');
+    setFiltroFactura('todos');
+    setFiltroPago('todos');
+    setPage(0);
+  };
 
   useEffect(() => {
     const init = async () => {
@@ -435,13 +454,17 @@ export default function AdminMonitor() {
         const d = getFechaOrdenString(p);
         return d >= semStr;
       });
-    } else if (filtroRango === 'mes') {
-      const haceUnMes = new Date();
-      haceUnMes.setDate(hoy.getDate() - 30);
-      const mesStr = haceUnMes.toISOString().split('T')[0];
+    } else if (filtroRango === 'mes_anterior') {
+      const primerDiaMesAnt = new Date(hoy.getFullYear(), hoy.getMonth() - 1, 1);
+      const ultimoDiaMesAnt = new Date(hoy.getFullYear(), hoy.getMonth(), 0);
+      const yAnt = primerDiaMesAnt.getFullYear();
+      const mAnt = String(primerDiaMesAnt.getMonth() + 1).padStart(2, '0');
+      const dAntFin = String(ultimoDiaMesAnt.getDate()).padStart(2, '0');
+      const inicioMesAntStr = `${yAnt}-${mAnt}-01`;
+      const finMesAntStr = `${yAnt}-${mAnt}-${dAntFin}`;
       filtrados = filtrados.filter(p => {
         const d = getFechaOrdenString(p);
-        return d >= mesStr;
+        return d >= inicioMesAntStr && d <= finMesAntStr;
       });
     } else if (filtroRango === 'rango') {
       filtrados = filtrados.filter(p => {
@@ -453,14 +476,94 @@ export default function AdminMonitor() {
     }
     // 'todo': Muestra todos los pedidos sin restringir por fecha
 
+    // Filtro Estatus Operativo
+    if (filtroOperativo !== 'todos') {
+      filtrados = filtrados.filter(p => {
+        const status = p.estatus_pedido || 'Pendiente';
+        return status.toLowerCase() === filtroOperativo.toLowerCase();
+      });
+    }
+
+    // Filtro Estatus Facturación
+    if (filtroFactura !== 'todos') {
+      filtrados = filtrados.filter(p => {
+        const facRel = Array.isArray(p.facturas_clientes) ? p.facturas_clientes[0] : p.facturas_clientes;
+        const tieneFactura = Boolean(p.folio_factura || facRel?.serie_folio || facRel?.uuid_fiscal);
+        if (filtroFactura === 'facturado') return tieneFactura;
+        if (filtroFactura === 'sin_facturar') return !tieneFactura;
+        return true;
+      });
+    }
+
+    // Filtro Estatus Cobranza / Pago
+    if (filtroPago !== 'todos') {
+      filtrados = filtrados.filter(p => {
+        const pago = p.estatus_pago || 'Pendiente';
+        return pago.toLowerCase() === filtroPago.toLowerCase();
+      });
+    }
+
     if (busquedaGlobal.trim()) {
-      const term = busquedaGlobal.toLowerCase().trim();
+      const rawTerm = busquedaGlobal.trim();
+      const termLower = rawTerm.toLowerCase();
+      const cleanNumberTerm = rawTerm.replace(/[$,\s]/g, '');
+      const isNumeric = cleanNumberTerm.length > 0 && !isNaN(Number(cleanNumberTerm));
+      const searchNum = isNumeric ? Number(cleanNumberTerm) : null;
+
       filtrados = filtrados.filter(p => {
         const numPedido = p.numero_pedido ? String(p.numero_pedido) : '';
         const idCorto = p.id ? p.id.split('-')[0] : '';
-        const clienteNombre = (p.clientes?.nombre_local || p.cliente_nombre || '').toLowerCase();
+        const clienteNombre = (p.clientes?.nombre_local || p.cliente_nombre || p.clientes?.razon_social || '').toLowerCase();
         const clienteRfc = (p.clientes?.rfc || '').toLowerCase();
-        return numPedido.includes(term) || idCorto.includes(term) || clienteNombre.includes(term) || clienteRfc.includes(term);
+        const folioFactura = (p.folio_factura || '').toLowerCase();
+
+        // 1. Coincidencia por texto (# pedido, ID, cliente, RFC, folio)
+        if (
+          numPedido.includes(termLower) ||
+          idCorto.includes(termLower) ||
+          clienteNombre.includes(termLower) ||
+          clienteRfc.includes(termLower) ||
+          folioFactura.includes(termLower)
+        ) {
+          return true;
+        }
+
+        // 2. Coincidencia por folios en facturas_clientes vinculadas
+        if (Array.isArray(p.facturas_clientes)) {
+          const hasFolioMatch = p.facturas_clientes.some((f: any) =>
+            (f.serie_folio && f.serie_folio.toLowerCase().includes(termLower)) ||
+            (f.uuid_fiscal && f.uuid_fiscal.toLowerCase().includes(termLower))
+          );
+          if (hasFolioMatch) return true;
+        }
+
+        // 3. Coincidencia por Monto / Importe (precio_total)
+        const total = Number(p.precio_total || 0);
+        const totalStr = String(total);
+        const totalFixed2 = total.toFixed(2);
+        const totalFormatted = total.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+        // Coincidencia numérica (exacta o parcial de subcadena de importe)
+        if (isNumeric && searchNum !== null) {
+          if (Math.abs(total - searchNum) < 0.01) return true;
+          if (totalStr.includes(cleanNumberTerm) || totalFixed2.includes(cleanNumberTerm)) return true;
+        }
+
+        if (totalFormatted.includes(termLower) || totalStr.includes(termLower)) {
+          return true;
+        }
+
+        // 4. Coincidencia por nombre de productos en pedido_detalles
+        if (Array.isArray(p.pedido_detalles)) {
+          const hasProdMatch = p.pedido_detalles.some((d: any) => {
+            const pNombre = (d.producto_variantes?.productos?.nombre || '').toLowerCase();
+            const gramaje = (d.producto_variantes?.gramaje || '').toLowerCase();
+            return pNombre.includes(termLower) || gramaje.includes(termLower);
+          });
+          if (hasProdMatch) return true;
+        }
+
+        return false;
       });
     }
 
@@ -496,7 +599,7 @@ export default function AdminMonitor() {
       }
       return new Date(b.creado_en || '').getTime() - new Date(a.creado_en || '').getTime();
     });
-  }, [pedidos, filtroRango, fechaInicio, fechaFin, busquedaGlobal, isSeimenjoEmpresa, activeSubTab, sakuraEmpresaId]);
+  }, [pedidos, filtroRango, fechaInicio, fechaFin, busquedaGlobal, isSeimenjoEmpresa, activeSubTab, sakuraEmpresaId, filtroOperativo, filtroFactura, filtroPago]);
 
   // Paginación en memoria
   const paginatedPedidos = useMemo(() => {
@@ -687,12 +790,14 @@ export default function AdminMonitor() {
       const fac = Array.isArray(pedido.facturas_clientes) ? pedido.facturas_clientes[0] : pedido.facturas_clientes;
       let targetPath = tipo === 'pdf' ? fac?.pdf_url : fac?.xml_url;
 
+      let facDb: any = null;
       if (!targetPath) {
-        let { data: facDb } = await supabase
+        const { data: foundDb } = await supabase
           .from('facturas_clientes')
           .select('xml_url, pdf_url')
           .eq('pedido_id', pedido.id)
           .maybeSingle();
+        facDb = foundDb;
 
         if (!facDb && pedido.folio_factura) {
           const { data: facByFolio } = await supabase
@@ -708,6 +813,13 @@ export default function AdminMonitor() {
       }
 
       if (!targetPath) {
+        if (tipo === 'pdf') {
+          const xmlCandidate = fac?.xml_url || facDb?.xml_url;
+          if (xmlCandidate) {
+            openCfdi(xmlCandidate);
+            return;
+          }
+        }
         alert(`No se encontró el archivo ${tipo.toUpperCase()} de la factura para este pedido.`);
         return;
       }
@@ -1127,7 +1239,14 @@ export default function AdminMonitor() {
 
           {/* DASHBOARD KPIS */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6 font-sans compact-kpi-grid">
-            <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-5 rounded-2xl shadow-lg flex items-center gap-4 hover:border-amber-500/30 transition-all compact-kpi-card">
+            <div
+              onClick={() => {
+                setFiltroOperativo('todos');
+                setFiltroPago('todos');
+              }}
+              className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-5 rounded-2xl shadow-lg flex items-center gap-4 hover:border-amber-500/40 transition-all compact-kpi-card cursor-pointer"
+              title="Clic para ver todos los pedidos e ingresos"
+            >
               <div className="p-3 bg-emerald-500/10 text-emerald-500 rounded-xl compact-kpi-icon">
                 <DollarSign size={24} />
               </div>
@@ -1139,7 +1258,15 @@ export default function AdminMonitor() {
               </div>
             </div>
 
-            <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-5 rounded-2xl shadow-lg flex items-center gap-4 hover:border-amber-500/30 transition-all compact-kpi-card">
+            <div
+              onClick={() => {
+                setFiltroOperativo(prev => prev === 'Entregado' ? 'todos' : 'Entregado');
+              }}
+              className={`bg-white dark:bg-gray-950 border p-5 rounded-2xl shadow-lg flex items-center gap-4 hover:border-blue-500/40 transition-all compact-kpi-card cursor-pointer ${
+                filtroOperativo === 'Entregado' ? 'ring-2 ring-blue-500 border-blue-500 bg-blue-50/20 dark:bg-blue-950/20' : 'border-gray-200 dark:border-gray-800'
+              }`}
+              title="Clic para alternar filtro de órdenes entregadas"
+            >
               <div className="p-3 bg-amber-500/10 text-amber-500 rounded-xl compact-kpi-icon">
                 <Truck size={24} />
               </div>
@@ -1151,7 +1278,15 @@ export default function AdminMonitor() {
               </div>
             </div>
 
-            <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-5 rounded-2xl shadow-lg flex items-center gap-4 hover:border-amber-500/30 transition-all compact-kpi-card">
+            <div
+              onClick={() => {
+                setFiltroPago(prev => prev === 'Pendiente' ? 'todos' : 'Pendiente');
+              }}
+              className={`bg-white dark:bg-gray-950 border p-5 rounded-2xl shadow-lg flex items-center gap-4 hover:border-red-500/40 transition-all compact-kpi-card cursor-pointer ${
+                filtroPago === 'Pendiente' ? 'ring-2 ring-red-500 border-red-500 bg-red-50/20 dark:bg-red-950/20' : 'border-gray-200 dark:border-gray-800'
+              }`}
+              title="Clic para alternar filtro de cobros pendientes"
+            >
               <div className="p-3 bg-red-500/10 text-red-500 rounded-xl compact-kpi-icon">
                 <ShoppingCart size={24} />
               </div>
@@ -1174,40 +1309,26 @@ export default function AdminMonitor() {
             </div>
           )}
 
-          {/* FILTROS */}
-          <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-4 rounded-xl shadow-md mb-6 flex gap-4 items-center flex-wrap compact-filter-bar">
-            <Filter size={18} className="text-gray-400" />
-            <select value={filtroRango} className="border border-gray-200 dark:border-gray-800 p-2 rounded-lg text-sm bg-gray-50 dark:bg-gray-900 outline-none text-gray-900 dark:text-white font-semibold" onChange={(e) => setFiltroRango(e.target.value)}>
-              <option value="mes_actual">Mes actual</option>
-              <option value="mes">Últimos 30 días</option>
-              <option value="semana">Última semana</option>
-              <option value="rango">Rango personalizado</option>
-              <option value="todo">Todos los pedidos</option>
-            </select>
-
-            <div className="relative flex-1 min-w-[200px] font-sans">
-              <Search className="absolute left-3 top-2.5 text-gray-400" size={16} />
-              <input
-                type="text"
-                placeholder="Buscar por # pedido, cliente o RFC..."
-                value={busquedaGlobal}
-                onChange={e => setBusquedaGlobal(e.target.value)}
-                className="w-full pl-9 pr-4 py-2 border border-gray-200 dark:border-gray-800 rounded-lg text-sm bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-white outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition-all"
-              />
-            </div>
-            {filtroRango === 'rango' && (
-              <div className="flex gap-4 items-center">
-                <div className="flex flex-col">
-                  <label className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1">Fecha de Inicio</label>
-                  <DateInput className="border border-gray-200 dark:border-gray-800 p-2 rounded-lg text-sm bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-white" style={{ colorScheme: isDarkMode ? 'dark' : 'light' }} value={fechaInicio} onChange={e => setFechaInicio(e.target.value)} />
-                </div>
-                <div className="flex flex-col">
-                  <label className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1">Fecha de Fin</label>
-                  <DateInput className="border border-gray-200 dark:border-gray-800 p-2 rounded-lg text-sm bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-white" style={{ colorScheme: isDarkMode ? 'dark' : 'light' }} value={fechaFin} onChange={e => setFechaFin(e.target.value)} />
-                </div>
-              </div>
-            )}
-          </div>
+          {/* FILTROS MODERNIZADOS */}
+          <MonitorFiltros
+            filtroRango={filtroRango}
+            setFiltroRango={setFiltroRango}
+            fechaInicio={fechaInicio}
+            setFechaInicio={setFechaInicio}
+            fechaFin={fechaFin}
+            setFechaFin={setFechaFin}
+            busquedaGlobal={busquedaGlobal}
+            setBusquedaGlobal={setBusquedaGlobal}
+            filtroOperativo={filtroOperativo}
+            setFiltroOperativo={setFiltroOperativo}
+            filtroFactura={filtroFactura}
+            setFiltroFactura={setFiltroFactura}
+            filtroPago={filtroPago}
+            setFiltroPago={setFiltroPago}
+            pedidosFiltrados={pedidosFiltrados}
+            totalPedidosCargados={pedidos.length}
+            onResetFiltros={handleResetFiltros}
+          />
 
           {/* TABLA PRINCIPAL CON PAGINACIÓN */}
           <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-xl shadow-xl flex flex-col flex-1 overflow-hidden">

@@ -14,7 +14,7 @@ import {
   ArrowRightLeft, Play, RefreshCw, FileSpreadsheet, Plus, Trash2, Edit3,
   Layers, Check, X, UploadCloud, Paperclip, AlertTriangle, Filter, Eye, Link, Ticket, Landmark,
   Tag, Lock, Unlock, ChevronDown, ChevronRight, Users, Receipt, SlidersHorizontal, TrendingUp, TrendingDown,
-  History, Sparkles, ShieldAlert, Banknote, Clock, Calendar, Globe
+  History, Sparkles, ShieldAlert, Banknote, Clock, Calendar, Globe, AlertCircle, CheckCircle2
 } from 'lucide-react';
 import { formatCurrency, formatDate } from '../../../../lib/formatters';
 import DateInput from '@/components/ui/DateInput';
@@ -39,6 +39,7 @@ import {
 import AutoConciliacionModal from './AutoConciliacionModal';
 import HistorialConciliacionModal from './HistorialConciliacionModal';
 import DetalleTicketsModal from './DetalleTicketsModal';
+import ComprobanteModal from './ComprobanteModal';
 import { ArqueoEfectivoTab } from './ArqueoEfectivoTab';
 import AccountSelectorDropdown from './AccountSelectorDropdown';
 
@@ -1309,6 +1310,40 @@ export default function BancoTab({
   const [parrotGroups, setParrotGroups] = React.useState<any[]>([]);
   const [isParrotUploading, setIsParrotUploading] = React.useState(false);
   const parrotFileInputRef = React.useRef<HTMLInputElement>(null);
+  const [isCompModalOpen, setIsCompModalOpen] = React.useState(false);
+
+  const handleCloseCompModal = React.useCallback(() => {
+    setIsCompModalOpen(false);
+    setEditingCompId(null);
+    setNewCompForm({
+      tipo: 'deposito_ventanilla',
+      fecha: getDefaultDateForSelectedMonth(),
+      monto: '',
+      descripcion: '',
+      archivoUrl: '',
+      storageProvider: 'Supabase',
+      cuentaBancariaId: '',
+      loading: false,
+      error: '',
+      montoDebito: '',
+      montoCredito: '',
+      propinaDebito: '',
+      propinaCredito: '',
+      montoAmex: '',
+      propinaAmex: '',
+      montoEfectivo: '',
+      propinaEfectivo: '',
+      montoParrotpay: '',
+      propinaParrotpay: '',
+      comisionTransacciones: '',
+      ivaTransacciones: '',
+      otrosCargos: '',
+      desgloseTickets: [],
+      esVentaMesAnterior: false,
+      mesVenta: ''
+    });
+  }, [getDefaultDateForSelectedMonth]);
+
   const [newCompForm, setNewCompForm] = React.useState<{
     tipo: 'deposito_ventanilla' | 'corte_tarjeta' | 'corte_pos' | 'corte_bbva' | 'corte_parrot' | string;
     fecha: string;
@@ -3752,46 +3787,84 @@ export default function BancoTab({
                                       </div>
                                     )}
 
-                                    {/* Encabezado con el ACUMULADO DEL GASTO (Suma de Facturas) */}
-                                    <div className="flex items-center justify-between bg-emerald-100/80 dark:bg-emerald-950/40 p-2 rounded-xl border border-emerald-200 dark:border-emerald-800 text-[11px]">
-                                      <div className="flex items-center gap-2 flex-wrap">
-                                        <span className="font-extrabold text-emerald-900 dark:text-emerald-300">
-                                          📊 Acumulado Gasto: <span className="font-mono text-xs">{formatCurrency(totalPagadoAcumulado)}</span>
-                                        </span>
-                                        <span className="text-[10px] text-emerald-700 dark:text-emerald-400 font-semibold">
-                                          ({concList.length} factura{concList.length > 1 ? 's' : ''})
-                                        </span>
-                                      </div>
-                                      <div className="flex items-center gap-1.5 flex-wrap">
-                                        {!esCoincidente ? (
-                                          <span className="text-[9px] font-black bg-amber-200 dark:bg-amber-900/60 text-amber-800 dark:text-amber-300 px-2 py-0.5 rounded-full">
-                                            ⚠️ Dif: {formatCurrency(Math.abs(difMonto))}
-                                          </span>
-                                        ) : (
-                                          <span className="text-[9px] font-black bg-emerald-200 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-300 px-2 py-0.5 rounded-full">
-                                            ✓ Cubierto 100%
-                                          </span>
-                                        )}
-                                        {handleOpenReconcileModal && !(m as any)._isCajaGasto && (
-                                          <button
-                                            type="button"
-                                            onClick={() => handleOpenReconcileModal(m)}
-                                            className="px-2 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-bold transition-all shadow-sm flex items-center gap-1 shrink-0"
-                                            title="Asignar más facturas a este movimiento"
-                                          >
-                                            <Plus size={12} /> Asignar más Facturas
-                                          </button>
-                                        )}
-                                      </div>
-                                    </div>
+                                    {/* Encabezado con el ACUMULADO DEL GASTO (Suma de Facturas / Comprobantes) */}
+                                    {(() => {
+                                      const countFacturas = concList.filter((l: any) => l.gasto ? (!!l.gasto.uuid_fiscal || !!l.gasto.xml_url) : (!!l.pedido?.folio_factura || !!l.pedido?.uuid_fiscal)).length;
+                                      const countTickets = concList.filter((l: any) => l.gasto ? (!l.gasto.uuid_fiscal && !l.gasto.xml_url && (!!l.gasto.ticket_url || !!l.gasto.pdf_url)) : false).length;
+                                      const countSinComprobante = concList.length - countFacturas - countTickets;
 
-                                    {/* Lista de facturas vinculadas */}
+                                      let resumenTipo = `(${concList.length} registro${concList.length > 1 ? 's' : ''})`;
+                                      if (countFacturas > 0 && countTickets === 0 && countSinComprobante === 0) {
+                                        resumenTipo = `(${concList.length} factura${concList.length > 1 ? 's' : ''})`;
+                                      } else if (countFacturas === 0 && countTickets > 0 && countSinComprobante === 0) {
+                                        resumenTipo = `(${concList.length} ticket${concList.length > 1 ? 's' : ''})`;
+                                      } else if (countFacturas === 0 && countTickets === 0 && countSinComprobante > 0) {
+                                        resumenTipo = `(${concList.length} egreso${concList.length > 1 ? 's' : ''} sin factura)`;
+                                      }
+
+                                      return (
+                                        <div className="flex items-center justify-between bg-emerald-100/80 dark:bg-emerald-950/40 p-2 rounded-xl border border-emerald-200 dark:border-emerald-800 text-[11px]">
+                                          <div className="flex items-center gap-2 flex-wrap">
+                                            <span className="font-extrabold text-emerald-900 dark:text-emerald-300">
+                                              📊 Acumulado Gasto: <span className="font-mono text-xs">{formatCurrency(totalPagadoAcumulado)}</span>
+                                            </span>
+                                            <span className="text-[10px] text-emerald-700 dark:text-emerald-400 font-semibold">
+                                              {resumenTipo}
+                                            </span>
+                                          </div>
+                                          <div className="flex items-center gap-1.5 flex-wrap">
+                                            {!esCoincidente ? (
+                                              <span className="text-[9px] font-black bg-amber-200 dark:bg-amber-900/60 text-amber-800 dark:text-amber-300 px-2 py-0.5 rounded-full">
+                                                ⚠️ Dif: {formatCurrency(Math.abs(difMonto))}
+                                              </span>
+                                            ) : (
+                                              <span className="text-[9px] font-black bg-emerald-200 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-300 px-2 py-0.5 rounded-full">
+                                                ✓ Cubierto 100%
+                                              </span>
+                                            )}
+                                            {handleOpenReconcileModal && !(m as any)._isCajaGasto && (
+                                              <button
+                                                type="button"
+                                                onClick={() => handleOpenReconcileModal(m)}
+                                                className="px-2 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-bold transition-all shadow-sm flex items-center gap-1 shrink-0 cursor-pointer"
+                                                title="Asignar más facturas o egresos a este movimiento"
+                                              >
+                                                <Plus size={12} /> Asignar Factura / Gasto
+                                              </button>
+                                            )}
+                                          </div>
+                                        </div>
+                                      );
+                                    })()}
+
+                                    {/* Lista de facturas y egresos vinculados */}
                                     {concList.map((link: any, idx: number) => {
                                       const isGasto = !!link.gasto;
                                       const item = isGasto ? link.gasto : link.pedido;
                                       if (!item) return null;
                                       
                                       const dateDocStr = formatDate(item.fecha_gasto || item.fecha_pedido);
+                                      const hasFacturaXml = isGasto ? (!!item.uuid_fiscal || !!item.xml_url) : (!!item.folio_factura || !!item.uuid_fiscal);
+                                      const hasTicket = isGasto ? (!hasFacturaXml && (!!item.ticket_url || !!item.pdf_url)) : false;
+
+                                      let itemTipoTitulo = '';
+                                      let dateLabel = 'Fecha';
+
+                                      if (isGasto) {
+                                        if (hasFacturaXml) {
+                                          itemTipoTitulo = 'Factura CFDI (Gasto)';
+                                          dateLabel = 'Fecha Factura (XML)';
+                                        } else if (hasTicket) {
+                                          itemTipoTitulo = 'Ticket / Recibo (Gasto)';
+                                          dateLabel = 'Fecha Ticket';
+                                        } else {
+                                          itemTipoTitulo = 'Egreso Operativo';
+                                          dateLabel = 'Fecha Egreso';
+                                        }
+                                      } else {
+                                        itemTipoTitulo = 'Venta (Pedido)';
+                                        dateLabel = 'Fecha Venta';
+                                      }
                                         
                                       const rfc = isGasto 
                                         ? item.proveedores?.rfc 
@@ -3808,7 +3881,24 @@ export default function BancoTab({
                                       return (
                                         <div key={idx} className="p-2.5 rounded-xl bg-emerald-50/60 dark:bg-emerald-950/20 border border-emerald-100 dark:border-emerald-900/40 text-[10px] text-gray-600 dark:text-gray-300 font-sans space-y-1 shadow-sm">
                                           <div className="flex justify-between items-center font-semibold text-emerald-800 dark:text-emerald-400 gap-2 flex-wrap">
-                                            <span>🔗 {isGasto ? 'Egreso (Gasto)' : 'Venta (Pedido)'}: {isGasto ? item.concepto : `Pedido #${item.numero_pedido}`}</span>
+                                            <span className="flex items-center gap-1.5 flex-wrap">
+                                              <span>🔗 <strong>{itemTipoTitulo}:</strong> {isGasto ? item.concepto : `Pedido #${item.numero_pedido}`}</span>
+                                              {isGasto && !hasFacturaXml && !hasTicket && (
+                                                <span className="px-1.5 py-0.5 rounded text-[8px] font-black bg-amber-100 dark:bg-amber-950/70 text-amber-700 dark:text-amber-300 border border-amber-300 dark:border-amber-800">
+                                                  ⚠️ Sin Factura / Sin Ticket
+                                                </span>
+                                              )}
+                                              {isGasto && hasFacturaXml && (
+                                                <span className="px-1.5 py-0.5 rounded text-[8px] font-black bg-emerald-100 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800">
+                                                  ✓ Factura XML
+                                                </span>
+                                              )}
+                                              {isGasto && hasTicket && (
+                                                <span className="px-1.5 py-0.5 rounded text-[8px] font-black bg-blue-100 dark:bg-blue-950/70 text-blue-700 dark:text-blue-300 border border-blue-300 dark:border-blue-800">
+                                                  📄 Ticket
+                                                </span>
+                                              )}
+                                            </span>
                                             <div className="flex items-center gap-2">
                                               <span className="font-mono bg-emerald-100/60 dark:bg-emerald-900/50 px-1.5 py-0.5 rounded text-[9px] font-bold">
                                                 Asoc: {formatCurrency(link.monto_asociado)}
@@ -3817,7 +3907,7 @@ export default function BancoTab({
                                                 <button
                                                   type="button"
                                                   onClick={() => handleUnlinkReconciliation(m.id)}
-                                                  className="text-red-550 hover:text-white hover:bg-red-500 dark:hover:bg-red-650 px-1.5 py-0.5 rounded text-[9px] font-bold border border-red-200 dark:border-red-900/50 transition-all flex items-center gap-0.5"
+                                                  className="text-red-550 hover:text-white hover:bg-red-500 dark:hover:bg-red-650 px-1.5 py-0.5 rounded text-[9px] font-bold border border-red-200 dark:border-red-900/50 transition-all flex items-center gap-0.5 cursor-pointer"
                                                   title="Desvincular o quitar conciliación"
                                                 >
                                                   <X size={10} /> Desvincular
@@ -3826,7 +3916,7 @@ export default function BancoTab({
                                             </div>
                                           </div>
                                           <div className="flex flex-wrap gap-x-2 gap-y-0.5 text-gray-550 dark:text-gray-400 text-[9px] font-medium">
-                                            {dateDocStr && <span><strong>Fecha XML:</strong> {dateDocStr}</span>}
+                                            {dateDocStr && <span><strong>{dateLabel}:</strong> {dateDocStr}</span>}
                                             {nombre && (
                                               <>
                                                 <span>•</span>
@@ -4478,15 +4568,75 @@ export default function BancoTab({
                     </button>
                   </div>
 
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     {compSubFiltro !== 'arqueo' && (
-                      <button
-                        type="button"
-                        onClick={() => setConciliacionMasivaModal(p => ({ ...p, open: true }))}
-                        className="px-3 py-1.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white rounded-xl text-xs font-black shadow-sm flex items-center gap-1.5 transition-all cursor-pointer shrink-0"
-                      >
-                        <Scale size={14} /> Conciliación Masiva
-                      </button>
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingCompId(null);
+                            setNewCompForm({
+                              tipo: 'deposito_ventanilla',
+                              fecha: getDefaultDateForSelectedMonth(),
+                              monto: '',
+                              descripcion: '',
+                              archivoUrl: '',
+                              storageProvider: 'Supabase',
+                              cuentaBancariaId: selectedCuentaId || '',
+                              loading: false,
+                              error: '',
+                              montoDebito: '',
+                              montoCredito: '',
+                              propinaDebito: '',
+                              propinaCredito: '',
+                              montoAmex: '',
+                              propinaAmex: '',
+                              montoEfectivo: '',
+                              propinaEfectivo: '',
+                              montoParrotpay: '',
+                              propinaParrotpay: '',
+                              comisionTransacciones: '',
+                              ivaTransacciones: '',
+                              otrosCargos: '',
+                              desgloseTickets: [],
+                              esVentaMesAnterior: false,
+                              mesVenta: ''
+                            });
+                            setIsCompModalOpen(true);
+                          }}
+                          className="px-3.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-black shadow-sm flex items-center gap-1.5 transition-all cursor-pointer shrink-0"
+                          title="Dar de alta comprobante o corte independiente"
+                        >
+                          <Plus size={14} /> Registrar Comprobante Independiente
+                        </button>
+
+                        <label
+                          htmlFor="parrotFileInputToolbar"
+                          className="px-3 py-1.5 text-xs font-bold bg-amber-600 hover:bg-amber-700 dark:bg-amber-600 dark:hover:bg-amber-500 text-white rounded-xl shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer select-none shrink-0"
+                          title="Importar Excel/CSV de Parrot POS"
+                        >
+                          <FileSpreadsheet size={13} /> {isParrotUploading ? 'Cargando Parrot...' : 'Importar Parrot'}
+                        </label>
+                        <input
+                          id="parrotFileInputToolbar"
+                          type="file"
+                          ref={parrotFileInputRef}
+                          accept=".csv,.xlsx,.xls"
+                          className="hidden"
+                          onChange={handleParrotUpload}
+                          onClick={(e) => {
+                            (e.target as HTMLInputElement).value = '';
+                          }}
+                        />
+
+                        <button
+                          type="button"
+                          onClick={() => setConciliacionMasivaModal(p => ({ ...p, open: true }))}
+                          className="px-3 py-1.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white rounded-xl text-xs font-black shadow-sm flex items-center gap-1.5 transition-all cursor-pointer shrink-0"
+                        >
+                          <Scale size={14} /> Conciliación Masiva
+                        </button>
+                      </>
                     )}
                     <AccountSelectorDropdown
                       selectedCuentaId={selectedCuentaId}
@@ -4513,126 +4663,74 @@ export default function BancoTab({
                     />
                   </div>
                 ) : (
-                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 flex-1 min-h-0 overflow-hidden">
-                  
-                  {/* Formulario de creación */}
-                  <div className="flex flex-col min-h-0 bg-white dark:bg-gray-955 border border-gray-200 dark:border-gray-800 rounded-xl p-4 overflow-auto shadow-sm font-sans">
-                    <div className="flex items-center justify-between gap-2 mb-4 border-b border-gray-150 dark:border-gray-900 pb-2 flex-wrap">
-                      <h4 className="text-xs font-extrabold uppercase text-amber-500 flex items-center gap-1.5">
-                        <Plus size={14} /> Registrar Comprobante Independiente
-                      </h4>
-                      <div className="flex gap-2 items-center">
-                        <label
-                          htmlFor="parrotFileInput"
-                          className="px-2.5 py-1 text-[10px] font-bold bg-amber-500 hover:bg-amber-600 dark:bg-amber-600 dark:hover:bg-amber-500 text-white rounded shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer select-none"
-                          title="Importar Excel/CSV de Parrot POS"
-                        >
-                          <FileSpreadsheet size={13} /> {isParrotUploading ? 'Cargando Parrot...' : 'Importar Parrot'}
-                        </label>
-                        <input
-                          id="parrotFileInput"
-                          type="file"
-                          ref={parrotFileInputRef}
-                          accept=".csv,.xlsx,.xls"
-                          className="hidden"
-                          onChange={handleParrotUpload}
-                          onClick={(e) => {
-                            (e.target as HTMLInputElement).value = '';
-                          }}
-                        />
-                      </div>
-                    </div>
+                  <div className="flex flex-col flex-1 min-h-0 overflow-hidden gap-4">
 
+                    {/* Banner si se importaron ventas Parrot masivas */}
                     {parrotGroups.length > 0 && (
-                      <div className="mb-4 bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-900/50 rounded-lg p-2.5">
-                        <div className="flex items-center justify-between mb-2">
-                          <h5 className="text-[10px] font-bold text-emerald-700 dark:text-emerald-400 uppercase tracking-wider">
-                            Ventas Parrot Cargadas ({parrotGroups.length} días)
-                          </h5>
+                      <div className="bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-300 dark:border-emerald-800 rounded-2xl p-4 shadow-sm shrink-0">
+                        <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                          <div className="flex items-center gap-2.5">
+                            <span className="text-2xl">🦜</span>
+                            <div>
+                              <h5 className="text-sm font-extrabold text-emerald-800 dark:text-emerald-300">
+                                Ventas Parrot Cargadas ({parrotGroups.length} días detectados en el archivo)
+                              </h5>
+                              <p className="text-xs text-emerald-600 dark:text-emerald-400">
+                                Puedes guardar todos los cortes analizados automáticamente con un solo clic.
+                              </p>
+                            </div>
+                          </div>
                           <div className="flex gap-2 items-center">
                             <button
                               type="button"
                               onClick={handleBulkInsertParrot}
                               disabled={isParrotUploading}
-                              className="text-[10px] bg-emerald-600 hover:bg-emerald-700 text-white px-2 py-1 rounded font-bold transition-colors disabled:opacity-50"
+                              className="text-xs bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl font-black shadow-sm transition-all disabled:opacity-50 cursor-pointer flex items-center gap-1.5"
                             >
-                              {isParrotUploading ? 'Guardando...' : 'Registrar Todos'}
+                              {isParrotUploading ? <RefreshCw size={13} className="animate-spin" /> : <Check size={13} />}
+                              {isParrotUploading ? 'Guardando...' : `Registrar Todos (${parrotGroups.length} días)`}
                             </button>
                             <button
                               type="button"
                               onClick={() => setParrotGroups([])}
-                              className="text-gray-400 hover:text-red-500 transition-colors"
+                              className="p-1.5 text-gray-400 hover:text-red-500 rounded-xl hover:bg-red-50 dark:hover:bg-red-950/40 transition-colors cursor-pointer"
+                              title="Descartar importación"
                             >
-                              <X size={12} />
+                              <X size={16} />
                             </button>
                           </div>
                         </div>
-                        <div className="max-h-32 overflow-y-auto space-y-1 pr-1 custom-scrollbar">
+                        <div className="max-h-40 overflow-y-auto grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 pr-1 custom-scrollbar">
                           {parrotGroups.map((g, i) => (
                             <div
                               key={i}
-                              role="button"
-                              tabIndex={0}
-                              onClick={() => {
-                                setNewCompForm(p => ({
-                                  ...p,
-                                  tipo: 'corte_parrot',
-                                  fecha: g.fecha,
-                                  montoCredito: String(g.montoCredito),
-                                  propinaCredito: String(g.propinaCredito),
-                                  montoDebito: String(g.montoDebito),
-                                  propinaDebito: String(g.propinaDebito),
-                                  montoEfectivo: String(g.montoEfectivo),
-                                  propinaEfectivo: String(g.propinaEfectivo),
-                                  montoParrotpay: String(g.montoParrotpay),
-                                  propinaParrotpay: String(g.propinaParrotpay),
-                                  desgloseTickets: g.tickets || []
-                                }));
-                              }}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter' || e.key === ' ') {
-                                  e.preventDefault();
-                                  setNewCompForm(p => ({
-                                    ...p,
-                                    tipo: 'corte_parrot',
-                                    fecha: g.fecha,
-                                    montoCredito: String(g.montoCredito),
-                                    propinaCredito: String(g.propinaCredito),
-                                    montoDebito: String(g.montoDebito),
-                                    propinaDebito: String(g.propinaDebito),
-                                    montoEfectivo: String(g.montoEfectivo),
-                                    propinaEfectivo: String(g.propinaEfectivo),
-                                    montoParrotpay: String(g.montoParrotpay),
-                                    propinaParrotpay: String(g.propinaParrotpay),
-                                    desgloseTickets: g.tickets || []
-                                  }));
-                                }
-                              }}
-                              className="w-full text-left px-2 py-1.5 bg-white dark:bg-gray-900 hover:bg-emerald-100 dark:hover:bg-emerald-900/40 border border-emerald-100 dark:border-emerald-800/30 rounded text-[10px] text-gray-700 dark:text-gray-300 transition-colors flex justify-between items-center cursor-pointer"
+                              className="p-2.5 bg-white dark:bg-gray-900 border border-emerald-200 dark:border-emerald-800/50 rounded-xl text-xs flex justify-between items-center"
                             >
-                              <span className="font-bold flex items-center gap-1.5">
-                                {formatDate(g.fecha)}
-                                <span className="text-[9px] font-normal text-emerald-600 dark:text-emerald-400 font-mono">
-                                  ({g.tickets?.length || 0} tickets)
-                                </span>
-                              </span>
-                              <div className="flex items-center gap-2">
-                                <span className="font-mono">{formatCurrency(g.totalAgrupado)}</span>
+                              <div>
+                                <div className="font-extrabold text-gray-900 dark:text-white flex items-center gap-1">
+                                  <span>📅</span> {formatDate(g.fecha)}
+                                </div>
+                                <div className="text-[11px] text-emerald-600 dark:text-emerald-400 font-mono">
+                                  {g.tickets?.length || 0} tickets
+                                </div>
+                              </div>
+                              <div className="text-right">
+                                <div className="font-mono font-black text-gray-900 dark:text-white">
+                                  {formatCurrency(g.totalAgrupado)}
+                                </div>
                                 <button
                                   type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
+                                  onClick={() => {
                                     setViewingTicketsComp({
                                       fecha: g.fecha,
                                       tipo: 'corte_parrot',
                                       monto: g.totalAgrupado,
-                                      desglose_tickets: g.tickets
+                                      desglose_tickets: g.tickets,
                                     });
                                   }}
-                                  className="p-1 text-gray-400 hover:text-amber-500 transition-colors"
-                                  title="Ver tickets de este día"
+                                  className="mt-1 text-[10px] text-amber-600 hover:text-amber-700 dark:text-amber-400 font-bold underline cursor-pointer inline-flex items-center gap-0.5"
                                 >
-                                  <Receipt size={12} />
+                                  <Receipt size={10} /> Ver tickets
                                 </button>
                               </div>
                             </div>
@@ -4640,696 +4738,63 @@ export default function BancoTab({
                         </div>
                       </div>
                     )}
-                    <div className="space-y-4">
-                      <div>
-                        <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block mb-1">Tipo de Comprobante</label>
-                        <select
-                          value={newCompForm.tipo ?? 'deposito_ventanilla'}
-                          onChange={(e) => setNewCompForm(p => ({ ...p, tipo: e.target.value as any }))}
-                          className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs text-gray-900 dark:text-white focus:ring-1 focus:ring-amber-500 outline-none"
-                        >
-                          <option value="deposito_ventanilla">Depósito en Ventanilla</option>
-                          <option value="corte_tarjeta">Corte POS / Punto de Venta</option>
-                          <option value="corte_bbva">Corte BBVA</option>
-                          <option value="corte_parrot">Corte Parrot</option>
-                        </select>
-                      </div>
 
-                      <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block mb-1">Fecha</label>
-                          <DateInput
-                            value={newCompForm.fecha ?? ''}
-                            onChange={(e) => setNewCompForm(p => ({ ...p, fecha: e.target.value }))}
-                            className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs text-gray-900 dark:text-white focus:ring-1 focus:ring-amber-500 outline-none"
-                          />
-                        </div>
-                        {newCompForm.tipo === 'deposito_ventanilla' ? (
-                          <div>
-                            <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block mb-1">Monto (MXN)</label>
-                            <input
-                              type="number"
-                              placeholder="0.00"
-                              step="0.01"
-                              value={newCompForm.monto ?? ''}
-                              onChange={(e) => setNewCompForm(p => ({ ...p, monto: e.target.value }))}
-                              className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs text-gray-900 dark:text-white focus:ring-1 focus:ring-amber-500 outline-none font-mono"
-                            />
-                          </div>
-                        ) : (
-                          <div>
-                            <label className="text-[10px] font-bold text-amber-500 uppercase tracking-wider block mb-1">Monto Calculado</label>
-                            <div className="w-full bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-750 p-2 rounded-lg text-xs font-mono font-bold text-gray-900 dark:text-white">
-                              {(() => {
-                                const tot = parseInputNumber(newCompForm.montoDebito || 0) +
-                                            parseInputNumber(newCompForm.propinaDebito || 0) +
-                                            parseInputNumber(newCompForm.montoCredito || 0) +
-                                            parseInputNumber(newCompForm.propinaCredito || 0) +
-                                            parseInputNumber(newCompForm.montoAmex || 0) +
-                                            parseInputNumber(newCompForm.propinaAmex || 0) +
-                                            parseInputNumber(newCompForm.montoEfectivo || 0) +
-                                            parseInputNumber(newCompForm.propinaEfectivo || 0) +
-                                            parseInputNumber(newCompForm.montoParrotpay || 0) +
-                                            parseInputNumber(newCompForm.propinaParrotpay || 0);
-                                return formatCurrency(tot);
-                              })()}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-
-                      {newCompForm.tipo !== 'deposito_ventanilla' && (
-                        <div className="p-3 bg-amber-50/50 dark:bg-amber-955/20 border border-amber-200 dark:border-amber-900/40 rounded-xl space-y-3 font-sans">
-                          <span className="text-[10px] font-bold text-amber-600 dark:text-amber-400 uppercase tracking-wider block">Desglose POS / Parrot (Ventas y Tarjetas)</span>
-                          
-                          <div className="space-y-2.5 text-xs font-mono">
-                            {/* Efectivo */}
-                            <div className="grid grid-cols-2 gap-2">
-                              <div>
-                                <label className="text-[9px] text-emerald-600 dark:text-emerald-400 font-bold font-sans block mb-0.5">💵 Venta Efectivo</label>
-                                <input
-                                  type="number"
-                                  step="0.01"
-                                  placeholder="0.00"
-                                  value={newCompForm.montoEfectivo ?? ''}
-                                  onChange={(e) => setNewCompForm(p => ({ ...p, montoEfectivo: e.target.value }))}
-                                  className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-1.5 rounded text-xs text-gray-900 dark:text-white"
-                                />
-                              </div>
-                              <div>
-                                <label className="text-[9px] text-emerald-600 dark:text-emerald-400 font-bold font-sans block mb-0.5">Prop. Efectivo</label>
-                                <input
-                                  type="number"
-                                  step="0.01"
-                                  placeholder="0.00"
-                                  value={newCompForm.propinaEfectivo ?? ''}
-                                  onChange={(e) => setNewCompForm(p => ({ ...p, propinaEfectivo: e.target.value }))}
-                                  className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-1.5 rounded text-xs text-gray-900 dark:text-white"
-                                />
-                              </div>
-                            </div>
-
-                            {/* ParrotPay */}
-                            <div className="grid grid-cols-2 gap-2">
-                              <div>
-                                <label className="text-[9px] text-purple-600 dark:text-purple-400 font-bold font-sans block mb-0.5">🦜 ParrotPay</label>
-                                <input
-                                  type="number"
-                                  step="0.01"
-                                  placeholder="0.00"
-                                  value={newCompForm.montoParrotpay ?? ''}
-                                  onChange={(e) => setNewCompForm(p => ({ ...p, montoParrotpay: e.target.value }))}
-                                  className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-1.5 rounded text-xs text-gray-900 dark:text-white"
-                                />
-                              </div>
-                              <div>
-                                <label className="text-[9px] text-purple-600 dark:text-purple-400 font-bold font-sans block mb-0.5">Prop. ParrotPay</label>
-                                <input
-                                  type="number"
-                                  step="0.01"
-                                  placeholder="0.00"
-                                  value={newCompForm.propinaParrotpay ?? ''}
-                                  onChange={(e) => setNewCompForm(p => ({ ...p, propinaParrotpay: e.target.value }))}
-                                  className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-1.5 rounded text-xs text-gray-900 dark:text-white"
-                                />
-                              </div>
-                            </div>
-
-                            {/* Débito */}
-                            <div className="grid grid-cols-2 gap-2">
-                              <div>
-                                <label className="text-[9px] text-gray-500 font-sans block mb-0.5">Imp. Débito (TDD)</label>
-                                <input
-                                  type="number"
-                                  step="0.01"
-                                  placeholder="0.00"
-                                  value={newCompForm.montoDebito ?? ''}
-                                  onChange={(e) => setNewCompForm(p => ({ ...p, montoDebito: e.target.value }))}
-                                  className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-1.5 rounded text-xs text-gray-900 dark:text-white"
-                                />
-                              </div>
-                              <div>
-                                <label className="text-[9px] text-gray-500 font-sans block mb-0.5">Prop. Débito</label>
-                                <input
-                                  type="number"
-                                  step="0.01"
-                                  placeholder="0.00"
-                                  value={newCompForm.propinaDebito ?? ''}
-                                  onChange={(e) => setNewCompForm(p => ({ ...p, propinaDebito: e.target.value }))}
-                                  className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-1.5 rounded text-xs text-gray-900 dark:text-white"
-                                />
-                              </div>
-                            </div>
-
-                            {/* Crédito */}
-                            <div className="grid grid-cols-2 gap-2">
-                              <div>
-                                <label className="text-[9px] text-gray-500 font-sans block mb-0.5">Imp. Crédito (TDC)</label>
-                                <input
-                                  type="number"
-                                  step="0.01"
-                                  placeholder="0.00"
-                                  value={newCompForm.montoCredito ?? ''}
-                                  onChange={(e) => setNewCompForm(p => ({ ...p, montoCredito: e.target.value }))}
-                                  className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-1.5 rounded text-xs text-gray-900 dark:text-white"
-                                />
-                              </div>
-                              <div>
-                                <label className="text-[9px] text-gray-500 font-sans block mb-0.5">Prop. Crédito</label>
-                                <input
-                                  type="number"
-                                  step="0.01"
-                                  placeholder="0.00"
-                                  value={newCompForm.propinaCredito ?? ''}
-                                  onChange={(e) => setNewCompForm(p => ({ ...p, propinaCredito: e.target.value }))}
-                                  className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-1.5 rounded text-xs text-gray-900 dark:text-white"
-                                />
-                              </div>
-                            </div>
-
-                            {/* AMEX */}
-                            <div className="grid grid-cols-2 gap-2">
-                              <div>
-                                <label className="text-[9px] text-gray-500 font-sans block mb-0.5">Imp. AMEX</label>
-                                <input
-                                  type="number"
-                                  step="0.01"
-                                  placeholder="0.00"
-                                  value={newCompForm.montoAmex ?? ''}
-                                  onChange={(e) => setNewCompForm(p => ({ ...p, montoAmex: e.target.value }))}
-                                  className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-1.5 rounded text-xs text-gray-900 dark:text-white"
-                                />
-                              </div>
-                              <div>
-                                <label className="text-[9px] text-gray-500 font-sans block mb-0.5">Prop. AMEX</label>
-                                <input
-                                  type="number"
-                                  step="0.01"
-                                  placeholder="0.00"
-                                  value={newCompForm.propinaAmex ?? ''}
-                                  onChange={(e) => setNewCompForm(p => ({ ...p, propinaAmex: e.target.value }))}
-                                  className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-1.5 rounded text-xs text-gray-900 dark:text-white"
-                                />
-                              </div>
-                            </div>
-
-                            {/* Comisiones por Transacción (Parrot/POS) */}
-                            <div className="pt-2 border-t border-amber-200 dark:border-amber-900/40 space-y-2 font-sans">
-                              <span className="text-[9px] font-bold text-rose-600 dark:text-rose-400 block uppercase">
-                                📉 Comisiones por Transacción (Bolsa Facturación)
-                              </span>
-                              <div className="grid grid-cols-3 gap-2">
-                                <div>
-                                  <label className="text-[8px] text-gray-500 block mb-0.5">Comisión ($)</label>
-                                  <input
-                                    type="number"
-                                    step="0.01"
-                                    placeholder="0.00"
-                                    value={newCompForm.comisionTransacciones ?? ''}
-                                    onChange={(e) => {
-                                      const val = e.target.value;
-                                      const num = parseInputNumber(val);
-                                      const autoIva = num > 0 ? (num * 0.16).toFixed(2) : '';
-                                      setNewCompForm(p => ({ ...p, comisionTransacciones: val, ivaTransacciones: autoIva }));
-                                    }}
-                                    className="w-full bg-white dark:bg-gray-900 border border-rose-300 dark:border-rose-900 p-1 rounded text-xs text-rose-600 dark:text-rose-400 font-mono font-bold"
-                                  />
-                                </div>
-                                <div>
-                                  <label className="text-[8px] text-gray-500 block mb-0.5">IVA (16%)</label>
-                                  <input
-                                    type="number"
-                                    step="0.01"
-                                    placeholder="0.00"
-                                    value={newCompForm.ivaTransacciones ?? ''}
-                                    onChange={(e) => setNewCompForm(p => ({ ...p, ivaTransacciones: e.target.value }))}
-                                    className="w-full bg-white dark:bg-gray-900 border border-rose-300 dark:border-rose-900 p-1 rounded text-xs text-rose-600 dark:text-rose-400 font-mono font-bold"
-                                  />
-                                </div>
-                                <div>
-                                  <label className="text-[8px] text-gray-500 block mb-0.5">Otros Cargos</label>
-                                  <input
-                                    type="number"
-                                    step="0.01"
-                                    placeholder="0.00"
-                                    value={newCompForm.otrosCargos ?? ''}
-                                    onChange={(e) => setNewCompForm(p => ({ ...p, otrosCargos: e.target.value }))}
-                                    className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-1 rounded text-xs text-gray-900 dark:text-white font-mono"
-                                  />
-                                </div>
-                              </div>
-                              {(() => {
-                                const com = parseInputNumber(newCompForm.comisionTransacciones || 0);
-                                const iva = parseInputNumber(newCompForm.ivaTransacciones || 0);
-                                const otros = parseInputNumber(newCompForm.otrosCargos || 0);
-                                const totalCom = com + iva + otros;
-                                return totalCom > 0 ? (
-                                  <div className="p-1.5 rounded bg-rose-50 dark:bg-rose-955/30 border border-rose-200 dark:border-rose-900/40 text-[9px]">
-                                    <div className="flex justify-between font-bold text-rose-600 dark:text-rose-400">
-                                      <span>Total a Bolsa:</span>
-                                      <span className="font-mono">{formatCurrency(totalCom)}</span>
-                                    </div>
-                                  </div>
-                                ) : null;
-                              })()}
-                            </div>
-                          </div>
-                        </div>
-                      )}
-
-                      <div>
-                        <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block mb-1">Cuenta de Destino Relacionada</label>
-                        <select
-                          value={newCompForm.cuentaBancariaId ?? ''}
-                          onChange={(e) => setNewCompForm(p => ({ ...p, cuentaBancariaId: e.target.value }))}
-                          className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs text-gray-900 dark:text-white focus:ring-1 focus:ring-amber-500 outline-none"
-                        >
-                          <option value="">- Ninguna / Seleccionar Banco -</option>
-                          {(cuentasBancarias || []).map(cb => (
-                            <option key={cb.id} value={cb.id}>{cb.nombre} - {cb.banco}</option>
-                          ))}
-                        </select>
-                      </div>
-
-                      <div>
-                        <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block mb-1">Descripción / Notas</label>
-                        <textarea
-                          rows={2}
-                          placeholder="Ej: Depósito efectivo ventas fin de semana..."
-                          value={newCompForm.descripcion ?? ''}
-                          onChange={(e) => setNewCompForm(p => ({ ...p, descripcion: e.target.value }))}
-                          className="w-full bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs text-gray-900 dark:text-white focus:ring-1 focus:ring-amber-500 outline-none resize-none"
-                        />
-                      </div>
-
-                      {/* Venta Mes Anterior / Diferida (Exclusión Factura Global) */}
-                      <div className={`p-3 rounded-xl border transition-all ${
-                        newCompForm.esVentaMesAnterior
-                          ? 'bg-amber-50/80 dark:bg-amber-955/30 border-amber-300 dark:border-amber-700/60 shadow-xs'
-                          : 'bg-gray-50/50 dark:bg-gray-900/30 border-gray-200 dark:border-gray-800'
-                      }`}>
-                        <label className="flex items-start gap-2.5 cursor-pointer select-none">
-                          <input
-                            type="checkbox"
-                            checked={newCompForm.esVentaMesAnterior}
-                            onChange={(e) => {
-                              const checked = e.target.checked;
-                              let defMes = '';
-                              if (checked && newCompForm.fecha) {
-                                const d = new Date(newCompForm.fecha + 'T12:00:00Z');
-                                d.setUTCMonth(d.getUTCMonth() - 1);
-                                defMes = d.toISOString().substring(0, 7);
-                              }
-                              setNewCompForm(p => ({
-                                ...p,
-                                esVentaMesAnterior: checked,
-                                mesVenta: checked ? (p.mesVenta || defMes) : ''
-                              }));
-                            }}
-                            className="mt-0.5 w-4 h-4 text-amber-500 rounded accent-amber-500 cursor-pointer"
-                          />
-                          <div className="flex-1">
-                            <span className="text-xs font-black text-amber-700 dark:text-amber-300 flex items-center gap-1.5">
-                              <Clock size={13} className="text-amber-500 shrink-0" /> 🕒 Venta de Mes Anterior (Diferida)
+                    {/* Tabla de comprobantes a ancho completo */}
+                    <div className="flex-1 flex flex-col min-h-0 bg-white dark:bg-gray-955 border border-gray-200 dark:border-gray-800 rounded-2xl overflow-hidden shadow-sm font-sans">
+                      <div className="p-3.5 md:p-4 bg-gray-50/70 dark:bg-gray-900/60 border-b border-gray-200 dark:border-gray-800 shrink-0 flex justify-between items-center flex-wrap gap-3">
+                        <div className="flex items-center gap-3 flex-wrap">
+                          <h4 className="text-sm font-extrabold text-gray-900 dark:text-white flex items-center gap-2">
+                            <span className="p-1.5 rounded-xl bg-amber-100 dark:bg-amber-950 text-amber-600 dark:text-amber-400">
+                              <List size={16} />
                             </span>
-                            <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5 leading-snug">
-                              Marcar si este ingreso (ticket, corte o depósito) entró al banco este mes pero corresponde a ventas del mes anterior. Se identificará visualmente y <strong>NO se tomará en cuenta para la Factura Global</strong>.
-                            </p>
-                          </div>
-                        </label>
-
-                        {newCompForm.esVentaMesAnterior && (
-                          <div className="mt-2.5 pt-2 border-t border-amber-200 dark:border-amber-900/40 flex items-center justify-between gap-2 flex-wrap">
-                            <span className="text-[10px] font-bold text-amber-800 dark:text-amber-200 flex items-center gap-1">
-                              Mes al que corresponde la venta:
-                            </span>
-                            <input
-                              type="month"
-                              value={newCompForm.mesVenta || ''}
-                              onChange={(e) => setNewCompForm(p => ({ ...p, mesVenta: e.target.value }))}
-                              className="bg-white dark:bg-gray-900 border border-amber-300 dark:border-amber-700 px-2 py-1 rounded-md text-xs font-mono font-bold text-gray-900 dark:text-white outline-none focus:ring-1 focus:ring-amber-500"
-                            />
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Adjunto Ticket y Almacenamiento */}
-                      <div>
-                        <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block mb-1">Proveedor de Almacenamiento</label>
-                        <div className="flex gap-4 mt-1 text-xs">
-                          <label className="flex items-center gap-1.5 cursor-pointer">
-                            <input
-                              type="radio"
-                              name="comp_storage"
-                              checked={newCompForm.storageProvider === 'Supabase'}
-                              onChange={() => setNewCompForm(p => ({ ...p, storageProvider: 'Supabase', archivoUrl: '' }))}
-                            />
-                            <span>Supabase Storage</span>
-                          </label>
-                          <label className="flex items-center gap-1.5 cursor-pointer">
-                            <input
-                              type="radio"
-                              name="comp_storage"
-                              checked={newCompForm.storageProvider === 'GoogleDrive'}
-                              onChange={() => setNewCompForm(p => ({ ...p, storageProvider: 'GoogleDrive', archivoUrl: '' }))}
-                            />
-                            <span>Google Drive Link</span>
-                          </label>
-                        </div>
-                      </div>
-
-                      {newCompForm.storageProvider === 'Supabase' ? (
-                        <div>
-                          <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block mb-1">Ticket de Depósito (Imagen / PDF)</label>
-                          <div className="relative overflow-hidden w-full">
-                            <input
-                              type="file"
-                              accept="image/*,.pdf"
-                              onChange={handleUploadCompFile}
-                              disabled={compUploadLoading}
-                              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
-                            />
+                            Comprobantes y Cortes Registrados
+                          </h4>
+                          <span className="px-3 py-1 rounded-full text-xs font-black bg-gray-200/80 dark:bg-gray-800 text-gray-700 dark:text-gray-300">
+                            {filteredComprobantes.length} de {comprobantes.length}
+                          </span>
+                          {parrotDuplicatesCount > 0 && (
                             <button
                               type="button"
-                              disabled={compUploadLoading}
-                              className="w-full py-2 bg-gray-100 hover:bg-gray-200 dark:bg-gray-900 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-700 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5"
+                              onClick={handleCleanParrotDuplicates}
+                              disabled={isCleaningDuplicates}
+                              className="px-3 py-1 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white rounded-xl text-xs font-black flex items-center gap-1.5 shadow-xs transition-all cursor-pointer animate-pulse"
+                              title="Eliminar cortes Parrot duplicados para las mismas fechas que no tengan ticket cargado"
                             >
-                              {compUploadLoading ? <RefreshCw size={14} className="animate-spin" /> : <UploadCloud size={14} />}
-                              {newCompForm.archivoUrl ? 'Archivo cargado con éxito ✓' : 'Seleccionar Archivo...'}
+                              {isCleaningDuplicates ? <RefreshCw size={12} className="animate-spin" /> : <Trash2 size={12} />}
+                              Eliminar {parrotDuplicatesCount} Duplicado{parrotDuplicatesCount > 1 ? 's' : ''} Sin Ticket
                             </button>
-                          </div>
-                          {newCompForm.archivoUrl && (
-                            <p className="text-[9px] text-gray-400 font-mono mt-1 truncate">{newCompForm.archivoUrl.split('/').pop()}</p>
                           )}
                         </div>
-                      ) : (
-                        <div>
-                          <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block mb-1">Enlace de Google Drive</label>
-                          <input
-                            type="url"
-                            placeholder="https://drive.google.com/..."
-                            value={newCompForm.archivoUrl}
-                            onChange={(e) => setNewCompForm(p => ({ ...p, archivoUrl: e.target.value }))}
-                            className="w-full bg-white dark:bg-gray-955 border border-gray-300 dark:border-gray-700 p-2 rounded-lg text-xs text-gray-900 dark:text-white focus:ring-1 focus:ring-amber-500 outline-none font-mono"
-                          />
-                        </div>
-                      )}
 
-                      {newCompForm.error && (
-                        <div className="text-[11px] text-red-500 bg-red-50 dark:bg-red-955/20 border border-red-200 dark:border-red-900/50 p-2.5 rounded-lg">{newCompForm.error}</div>
-                      )}
-
-                      {editingCompId && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setEditingCompId(null);
-                            setNewCompForm({
-                              tipo: 'deposito_ventanilla',
-                              fecha: new Date().toISOString().substring(0, 10),
-                              monto: '',
-                              descripcion: '',
-                              archivoUrl: '',
-                              storageProvider: 'Supabase',
-                              cuentaBancariaId: '',
-                              loading: false,
-                              error: '',
-                              montoDebito: '',
-                              montoCredito: '',
-                              propinaDebito: '',
-                              propinaCredito: '',
-                              montoAmex: '',
-                              propinaAmex: '',
-                              montoEfectivo: '',
-                              propinaEfectivo: '',
-                              montoParrotpay: '',
-                              propinaParrotpay: '',
-                              comisionTransacciones: '',
-                              ivaTransacciones: '',
-                              otrosCargos: '',
-                              esVentaMesAnterior: false,
-                              mesVenta: ''
-                            });
-                          }}
-                          className="w-full mb-2 py-2 border border-gray-300 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300 rounded-lg text-xs font-bold transition-all shadow-sm"
-                        >
-                          Cancelar Edición
-                        </button>
-                      )}
-
-                      <button
-                        type="button"
-                        onClick={async () => {
-                          const tot = newCompForm.tipo === 'deposito_ventanilla'
-                            ? parseInputNumber(newCompForm.monto)
-                            : parseInputNumber(newCompForm.montoDebito || 0) +
-                              parseInputNumber(newCompForm.montoCredito || 0) +
-                              parseInputNumber(newCompForm.propinaDebito || 0) +
-                              parseInputNumber(newCompForm.propinaCredito || 0) +
-                              parseInputNumber(newCompForm.montoAmex || 0) +
-                              parseInputNumber(newCompForm.propinaAmex || 0) +
-                              parseInputNumber(newCompForm.montoEfectivo || 0) +
-                              parseInputNumber(newCompForm.propinaEfectivo || 0) +
-                              parseInputNumber(newCompForm.montoParrotpay || 0) +
-                              parseInputNumber(newCompForm.propinaParrotpay || 0);
-
-                          if (!tot || tot <= 0) {
-                            setNewCompForm(p => ({ ...p, error: 'Por favor ingresa un monto válido mayor a 0.' }));
-                            return;
-                          }
-                          if (!newCompForm.fecha) {
-                            setNewCompForm(p => ({ ...p, error: 'Por favor selecciona la fecha del ticket.' }));
-                            return;
-                          }
-
-                          // Validación de coherencia de mes entre descripción y fecha
-                          const descLower = (newCompForm.descripcion || '').toLowerCase();
-                          const mesesNombres = [
-                            { name: 'enero', num: '01' },
-                            { name: 'febrero', num: '02' },
-                            { name: 'marzo', num: '03' },
-                            { name: 'abril', num: '04' },
-                            { name: 'mayo', num: '05' },
-                            { name: 'junio', num: '06' },
-                            { name: 'julio', num: '07' },
-                            { name: 'agosto', num: '08' },
-                            { name: 'septiembre', num: '09' },
-                            { name: 'octubre', num: '10' },
-                            { name: 'noviembre', num: '11' },
-                            { name: 'diciembre', num: '12' }
-                          ];
-                          const fechaMes = newCompForm.fecha.substring(5, 7);
-                          const mesDetectado = mesesNombres.find(m => m.num !== fechaMes && descLower.includes(m.name));
-                          if (mesDetectado) {
-                            if (!confirm(`⚠️ Advertencia de Desfase de Mes:\n\nLa descripción menciona "${mesDetectado.name.toUpperCase()}", pero la fecha seleccionada es "${newCompForm.fecha}" (mes ${fechaMes}).\n\nSi este corte corresponde a las ventas de ${mesDetectado.name.toUpperCase()}, se recomienda ponerle la fecha de ese mes para evitar duplicarlo en los reportes del mes actual.\n\n¿Deseas guardar con fecha ${newCompForm.fecha} de todos modos?`)) {
-                              return;
-                            }
-                          }
-
-                          if (editingCompId) {
-                            const currentComp = comprobantes.find(c => c.id === editingCompId);
-                            if (currentComp) {
-                              const linkedSum = (currentComp.comprobantes_deposito_movimientos || []).reduce((acc, rel) => acc + Number(rel.monto_asociado), 0);
-                              if (linkedSum > 0 && Math.abs(tot - linkedSum) >= 0.05) {
-                                if (!confirm(`Advertencia: El nuevo monto del comprobante (${formatCurrency(tot)}) no coincide con la suma de los movimientos vinculados (${formatCurrency(linkedSum)}). ¿Deseas continuar?`)) {
-                                  return;
-                                }
-                              }
-                            }
-                          }
-
-                          setNewCompForm(p => ({ ...p, loading: true, error: '' }));
-                          try {
-                            const payload = {
-                              tipo: newCompForm.tipo,
-                              fecha: newCompForm.fecha,
-                              monto: tot,
-                              descripcion: newCompForm.descripcion,
-                              archivo_url: newCompForm.archivoUrl,
-                              storage_provider: newCompForm.storageProvider,
-                              cuenta_bancaria_id: newCompForm.cuentaBancariaId || null,
-                              monto_debito: parseInputNumber(newCompForm.montoDebito || 0),
-                              monto_credito: parseInputNumber(newCompForm.montoCredito || 0),
-                              propina_debito: parseInputNumber(newCompForm.propinaDebito || 0),
-                              propina_credito: parseInputNumber(newCompForm.propinaCredito || 0),
-                              monto_amex: parseInputNumber(newCompForm.montoAmex || 0),
-                              propina_amex: parseInputNumber(newCompForm.propinaAmex || 0),
-                              monto_efectivo: parseInputNumber(newCompForm.montoEfectivo || 0),
-                              propina_efectivo: parseInputNumber(newCompForm.propinaEfectivo || 0),
-                              monto_parrotpay: parseInputNumber(newCompForm.montoParrotpay || 0),
-                              propina_parrotpay: parseInputNumber(newCompForm.propinaParrotpay || 0),
-                              comision_transacciones: parseInputNumber(newCompForm.comisionTransacciones || 0),
-                              iva_transacciones: parseInputNumber(newCompForm.ivaTransacciones || 0),
-                              otros_cargos: parseInputNumber(newCompForm.otrosCargos || 0),
-                              desglose_tickets: newCompForm.desgloseTickets || [],
-                              es_venta_mes_anterior: newCompForm.esVentaMesAnterior,
-                              mes_venta: newCompForm.mesVenta || null
-                            };
-
-                            let res;
-                            if (editingCompId) {
-                              if (!onActualizarComprobante) {
-                                throw new Error('No se ha configurado la acción para actualizar comprobantes en esta sección.');
-                              }
-                              res = await onActualizarComprobante(editingCompId, payload);
-                            } else {
-                              if (!onCrearComprobante) {
-                                throw new Error('No se ha configurado la acción para crear comprobantes en esta sección.');
-                              }
-                              // Prevenir duplicados de corte Parrot si ya existe para esa fecha
-                              const existingParrot = payload.tipo === 'corte_parrot'
-                                ? (comprobantes || []).find(c => c.fecha === payload.fecha && (c.tipo === 'corte_parrot' || (c.descripcion || '').toLowerCase().includes('corte parrot')))
-                                : null;
-                              if (existingParrot && onActualizarComprobante) {
-                                res = await onActualizarComprobante(existingParrot.id, {
-                                  ...payload,
-                                  archivo_url: payload.archivo_url || existingParrot.archivo_url || null,
-                                  storage_provider: payload.storage_provider || existingParrot.storage_provider || 'Supabase',
-                                  cuenta_bancaria_id: payload.cuenta_bancaria_id || existingParrot.cuenta_bancaria_id || null
-                                });
-                              } else {
-                                res = await onCrearComprobante(payload);
-                              }
-                            }
-
-                            if (res && !res.success) {
-                              throw new Error(res.error);
-                            }
-
-                            // Si se registraron comisiones de transacción en el ticket, registrar en la Bolsa
-                            const comVal = parseInputNumber(newCompForm.comisionTransacciones || 0);
-                            const ivaVal = parseInputNumber(newCompForm.ivaTransacciones || 0);
-                            const otrosVal = parseInputNumber(newCompForm.otrosCargos || 0);
-                            const totalComBolsa = comVal + ivaVal + otrosVal;
-
-                            if (totalComBolsa > 0 && !editingCompId && onCrearComprobante) {
-                              await onCrearComprobante({
-                                tipo: 'deposito_ventanilla',
-                                fecha: newCompForm.fecha,
-                                monto: totalComBolsa,
-                                descripcion: `Comisión Transacciones POS/Parrot (Comisión: ${formatCurrency(comVal)}, IVA: ${formatCurrency(ivaVal)}${otrosVal ? `, Otros: ${formatCurrency(otrosVal)}` : ''}) - Ticket ${newCompForm.descripcion || ''}`,
-                                cuentaBancariaId: newCompForm.cuentaBancariaId || null
-                              });
-                            }
-
-                            if (selectedMonth && payload.fecha.substring(0, 7) !== selectedMonth) {
-                              alert(`Atención: El comprobante se guardó con fecha ${payload.fecha}, la cual pertenece al período (${payload.fecha.substring(0, 7)}). Para visualizarlo en la lista de conciliación, selecciona ese período en la parte superior.`);
-                            }
-
-                            setEditingCompId(null);
-                            setNewCompForm({
-                              tipo: 'deposito_ventanilla',
-                              fecha: getDefaultDateForSelectedMonth(),
-                              monto: '',
-                              descripcion: '',
-                              archivoUrl: '',
-                              storageProvider: 'Supabase',
-                              cuentaBancariaId: '',
-                              loading: false,
-                              error: '',
-                              montoDebito: '',
-                              montoCredito: '',
-                              propinaDebito: '',
-                              propinaCredito: '',
-                              montoAmex: '',
-                              propinaAmex: '',
-                              montoEfectivo: '',
-                              propinaEfectivo: '',
-                              montoParrotpay: '',
-                              propinaParrotpay: '',
-                              comisionTransacciones: '',
-                              ivaTransacciones: '',
-                              otrosCargos: '',
-                              esVentaMesAnterior: false,
-                              mesVenta: ''
-                            });
-                          } catch (err: any) {
-                            setNewCompForm(p => ({ ...p, error: err.message || 'Error al guardar.' }));
-                          } finally {
-                            setNewCompForm(p => ({ ...p, loading: false }));
-                          }
-                        }}
-                        disabled={newCompForm.loading || compUploadLoading}
-                        className="w-full py-2.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white rounded-lg text-xs font-extrabold shadow-md flex items-center justify-center gap-1.5 transition-all mt-2"
-                      >
-                        {newCompForm.loading ? <RefreshCw size={14} className="animate-spin" /> : (editingCompId ? <Check size={14} /> : <Plus size={14} />)}
-                        {editingCompId ? 'Actualizar Comprobante' : 'Guardar Comprobante'}
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Tabla de comprobantes */}
-                  <div className="lg:col-span-2 flex flex-col min-h-0 bg-white dark:bg-gray-955 border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden shadow-sm font-sans">
-                    <div className="p-3 bg-gray-50/50 dark:bg-gray-900/40 border-b border-gray-200 dark:border-gray-800 shrink-0 flex justify-between items-center flex-wrap gap-2">
-                      <div className="flex items-center gap-3 flex-wrap">
-                        <h4 className="text-xs font-extrabold uppercase text-amber-500 flex items-center gap-1.5">
-                          <List size={14} /> Comprobantes Registrados
-                        </h4>
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-gray-200/70 dark:bg-gray-800 text-gray-600 dark:text-gray-300">
-                          {filteredComprobantes.length} de {comprobantes.length}
-                        </span>
-                        {parrotDuplicatesCount > 0 && (
-                          <button
-                            type="button"
-                            onClick={handleCleanParrotDuplicates}
-                            disabled={isCleaningDuplicates}
-                            className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white rounded-lg text-[10px] font-black flex items-center gap-1.5 shadow-xs transition-all cursor-pointer animate-pulse"
-                            title="Eliminar cortes Parrot duplicados para las mismas fechas que no tengan ticket cargado"
-                          >
-                            {isCleaningDuplicates ? <RefreshCw size={11} className="animate-spin" /> : <Trash2 size={11} />}
-                            Eliminar {parrotDuplicatesCount} Duplicado{parrotDuplicatesCount > 1 ? 's' : ''} Sin Ticket
-                          </button>
-                        )}
-                      </div>
-
-                      <div className="flex items-center gap-2">
-                        <span className="text-[11px] font-medium text-gray-500">
-                          Filtro: <strong className="text-gray-700 dark:text-gray-300">
-                            {compSubFiltro === 'tickets' ? 'Solo Tickets/Cortes' :
-                             compSubFiltro === 'depositos' ? 'Solo Depósitos Ventanilla' :
-                             compSubFiltro === 'ventas_mes_anterior' ? 'Solo Ventas de Mes Anterior' :
-                             compSubFiltro === 'ventas_mes_actual' ? 'Solo Ventas de Este Mes' :
-                             'Todos'}
-                          </strong>
-                        </span>
-                      </div>
-                    </div>
-
-                    {parrotDuplicatesCount > 0 && (
-                      <div className="m-3 p-3 bg-rose-50 dark:bg-rose-955/40 border border-rose-200 dark:border-rose-900/50 rounded-lg flex items-center justify-between gap-3 text-xs">
-                        <div className="flex items-center gap-2 text-rose-800 dark:text-rose-200">
-                          <AlertTriangle size={16} className="shrink-0 text-rose-600 dark:text-rose-400" />
-                          <span>
-                            <strong>Se detectaron {parrotDuplicatesCount} registros duplicados de Corte Parrot</strong> en las mismas fechas. Conservaremos los comprobantes con ticket cargado y eliminaremos los registros sobrantes &ldquo;Sin Ticket&rdquo;.
+                        <div className="flex items-center gap-3 flex-wrap">
+                          <span className="text-xs font-medium text-gray-500">
+                            Filtro: <strong className="text-gray-800 dark:text-gray-200">
+                              {compSubFiltro === 'tickets' ? 'Solo Tickets/Cortes' :
+                               compSubFiltro === 'depositos' ? 'Solo Depósitos Ventanilla' :
+                               compSubFiltro === 'ventas_mes_anterior' ? 'Solo Ventas Mes Anterior' :
+                               compSubFiltro === 'ventas_mes_actual' ? 'Solo Ventas Este Mes' :
+                               'Todos'}
+                            </strong>
                           </span>
                         </div>
-                        <button
-                          type="button"
-                          onClick={handleCleanParrotDuplicates}
-                          disabled={isCleaningDuplicates}
-                          className="shrink-0 px-3 py-1.5 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white rounded-md text-[11px] font-bold flex items-center gap-1.5 shadow-sm transition-all cursor-pointer"
-                        >
-                          {isCleaningDuplicates ? <RefreshCw size={12} className="animate-spin" /> : <Trash2 size={12} />}
-                          Limpiar Duplicados
-                        </button>
                       </div>
-                    )}
 
-                    <div className="flex-1 overflow-auto">
-                      <table className="w-full text-left border-collapse text-xs">
-                        <thead>
-                          <tr className="bg-gray-50 dark:bg-gray-900/50 border-b border-gray-200 dark:border-gray-800 text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
-                            <th className="p-3">Fecha</th>
-                            <th className="p-3">Tipo / Desglose</th>
-                            <th className="p-3">Banco Destino</th>
-                            <th className="p-3">Descripción</th>
-                            <th className="p-3 text-right">Monto</th>
-                            <th className="p-3 text-center">Ticket</th>
-                            <th className="p-3 text-right">Acciones</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-100 dark:divide-gray-800/60">
-                          {filteredComprobantes.map(c => {
+                      <div className="flex-1 overflow-auto">
+                        <table className="w-full text-left border-collapse text-xs md:text-sm">
+                          <thead>
+                            <tr className="bg-gray-50/80 dark:bg-gray-900/60 border-b border-gray-200 dark:border-gray-800 text-[11px] font-extrabold text-gray-500 dark:text-gray-400 uppercase tracking-wider sticky top-0 backdrop-blur-xs z-10">
+                              <th className="p-3.5">Fecha</th>
+                              <th className="p-3.5">Tipo & Estatus</th>
+                              <th className="p-3.5">Desglose de Ventas y Propinas</th>
+                              <th className="p-3.5">Depósitos Bancarios Vinculados</th>
+                              <th className="p-3.5">Descripción</th>
+                              <th className="p-3.5 text-right font-mono">Total Cobrado</th>
+                              <th className="p-3.5 text-center">Ticket</th>
+                              <th className="p-3.5 text-right">Acciones</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-100 dark:divide-gray-800/60">
+                            {filteredComprobantes.map(c => {
                               const isVentanilla = c.tipo === 'deposito_ventanilla';
                               const tarjetaTotalBBVA = Number(c.monto_debito || 0) + Number(c.propina_debito || 0) + Number(c.monto_credito || 0) + Number(c.propina_credito || 0) + Number(c.monto_amex || 0) + Number(c.propina_amex || 0);
                               const isVentaMesAnt = isComprobanteVentaMesAnterior(c, selectedMonth);
@@ -5339,7 +4804,8 @@ export default function BancoTab({
                               const isCajaFilter = selCuenta?.nombre?.toUpperCase().includes('CAJA CHICA') || selCuenta?.nombre?.toUpperCase().includes('EFECTIVO');
                               const isParrotFilter = selCuenta?.nombre?.toUpperCase().includes('PARROT');
 
-                              const sumAsoc = (c.comprobantes_deposito_movimientos || []).reduce((s: number, r: any) => s + Number(r.monto_asociado || 0), 0);
+                              const rels = c.comprobantes_deposito_movimientos || [];
+                              const sumAsoc = rels.reduce((s: number, r: any) => s + Number(r.monto_asociado || 0), 0);
                               const effectiveMonto = isCajaFilter && (Number(c.monto_efectivo || 0) > 0 || Number(c.propina_efectivo || 0) > 0)
                                 ? (Number(c.monto_efectivo || 0) + Number(c.propina_efectivo || 0))
                                 : isParrotFilter && (Number(c.monto_parrotpay || 0) > 0 || Number(c.propina_parrotpay || 0) > 0)
@@ -5349,211 +4815,248 @@ export default function BancoTab({
                                 : Number(c.monto || 0);
                               const isFullyAssoc = effectiveMonto > 0 && Math.abs(effectiveMonto - sumAsoc) < 0.05;
 
+                              // Propinas totales
+                              const totProp = Number(c.propina_efectivo || 0) + Number(c.propina_parrotpay || 0) +
+                                              Number(c.propina_debito || 0) + Number(c.propina_credito || 0) + Number(c.propina_amex || 0);
+                              const propinaTarjetas = Number(c.propina_debito || 0) + Number(c.propina_credito || 0) + Number(c.propina_amex || 0);
+                              const baseVenta = Math.max(0, effectiveMonto - totProp);
+
                               return (
-                                <tr key={c.id} className={`hover:bg-gray-50/40 dark:hover:bg-gray-900/20 transition-all ${
-                                  isVentaMesAnt ? 'border-l-4 border-l-amber-500 bg-amber-50/20 dark:bg-amber-955/10' : ''
+                                <tr key={c.id} className={`hover:bg-amber-50/20 dark:hover:bg-amber-955/10 transition-all ${
+                                  isVentaMesAnt ? 'border-l-4 border-l-amber-500 bg-amber-50/30 dark:bg-amber-955/20' : ''
                                 }`}>
-                                  <td className="p-3 font-mono text-gray-500">{formatDate(c.fecha)}</td>
-                                  <td className="p-3">
-                                    <div className="flex items-center gap-1.5 flex-wrap">
-                                      <span className={`text-[9px] font-black px-2 py-0.5 rounded uppercase ${
-                                        c.tipo === 'deposito_ventanilla' ? 'bg-blue-100 dark:bg-blue-955/30 text-blue-600 dark:text-blue-400' :
-                                        c.tipo === 'corte_bbva' ? 'bg-sky-100 dark:bg-sky-955/30 text-sky-600 dark:text-sky-400' :
-                                        c.tipo === 'corte_parrot' ? 'bg-emerald-100 dark:bg-emerald-955/30 text-emerald-600 dark:text-emerald-400' :
-                                        'bg-purple-100 dark:bg-purple-955/30 text-purple-600 dark:text-purple-400'
+                                  {/* Fecha */}
+                                  <td className="p-3.5 font-mono text-gray-900 dark:text-white font-bold whitespace-nowrap">
+                                    <div>{formatDate(c.fecha)}</div>
+                                    <span className="text-[10px] text-gray-400 font-mono block font-normal">
+                                      {c.fecha ? String(c.fecha).substring(0, 10) : ''}
+                                    </span>
+                                  </td>
+
+                                  {/* Tipo & Estatus */}
+                                  <td className="p-3.5">
+                                    <div className="flex flex-col gap-1.5 items-start">
+                                      <span className={`text-[10px] font-black px-2.5 py-1 rounded-lg uppercase tracking-wide inline-flex items-center gap-1 ${
+                                        c.tipo === 'deposito_ventanilla' ? 'bg-blue-100 dark:bg-blue-955/40 text-blue-700 dark:text-blue-300 border border-blue-300 dark:border-blue-800' :
+                                        c.tipo === 'corte_bbva' ? 'bg-sky-100 dark:bg-sky-955/40 text-sky-700 dark:text-sky-300 border border-sky-300 dark:border-sky-800' :
+                                        c.tipo === 'corte_parrot' ? 'bg-emerald-100 dark:bg-emerald-955/40 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800' :
+                                        'bg-purple-100 dark:bg-purple-955/40 text-purple-700 dark:text-purple-300 border border-purple-300 dark:border-purple-800'
                                       }`}>
-                                        {c.tipo === 'deposito_ventanilla' ? 'Depósito Ventanilla' :
-                                         c.tipo === 'corte_bbva' ? 'Corte BBVA' :
-                                         c.tipo === 'corte_parrot' ? 'Corte Parrot' :
-                                         'Corte POS'}
+                                        {c.tipo === 'deposito_ventanilla' ? '🏦 Depósito Ventanilla' :
+                                         c.tipo === 'corte_bbva' ? '💳 Corte BBVA POS' :
+                                         c.tipo === 'corte_parrot' ? '🦜 Corte Parrot POS' :
+                                         '🎟️ Corte de Terminal'}
                                       </span>
+
                                       {isVentaMesAnt && (
                                         <span 
-                                          className="inline-flex items-center gap-1 bg-amber-100 dark:bg-amber-955/60 text-amber-800 dark:text-amber-300 text-[8.5px] font-black px-1.5 py-0.5 rounded uppercase border border-amber-300 dark:border-amber-700 shadow-2xs"
-                                          title="Ingresó este período pero corresponde a ventas de un mes previo. Excluido del cálculo de Factura Global."
+                                          className="inline-flex items-center gap-1 bg-amber-100 dark:bg-amber-955/60 text-amber-800 dark:text-amber-300 text-[9px] font-black px-2 py-0.5 rounded-md uppercase border border-amber-300 dark:border-amber-700 shadow-2xs"
+                                          title="Ingresó este período pero corresponde a ventas de un mes previo. Excluido de Factura Global."
                                         >
-                                          <Clock size={10} className="text-amber-600 dark:text-amber-400 shrink-0" />
+                                          <Clock size={11} className="text-amber-600 dark:text-amber-400 shrink-0" />
                                           <span>Venta Mes Anterior</span>
                                         </span>
                                       )}
-                                      {(() => {
-                                        const compMonth = c.fecha ? String(c.fecha).substring(0, 7) : '';
-                                        const hasNextMonthDeposit = c.comprobantes_deposito_movimientos?.some((rel: any) => {
-                                          const mov = rel.movimientos_bancarios;
-                                          if (!mov?.fecha) return false;
-                                          return String(mov.fecha).substring(0, 7) > compMonth;
-                                        });
-                                        if (hasNextMonthDeposit) {
-                                          return (
-                                            <span
-                                              className="inline-flex items-center gap-1 bg-purple-100 dark:bg-purple-955/60 text-purple-800 dark:text-purple-300 text-[8.5px] font-black px-1.5 py-0.5 rounded uppercase border border-purple-300 dark:border-purple-700 shadow-2xs"
-                                              title="Ventas de este ticket respaldadas con depósitos bancarios que ingresaron en el mes siguiente"
-                                            >
-                                              <span>Pago en Mes Entrante ⇄</span>
-                                            </span>
-                                          );
-                                        }
-                                        return null;
-                                      })()}
+
                                       {isFullyAssoc ? (
-                                        <span className="bg-emerald-100 text-emerald-700 dark:bg-emerald-955/30 dark:text-emerald-400 text-[8px] font-black px-1.5 py-0.5 rounded uppercase">Conciliado</span>
+                                        <span className="inline-flex items-center gap-1 bg-emerald-100 text-emerald-800 dark:bg-emerald-955/50 dark:text-emerald-300 text-[9px] font-black px-2 py-0.5 rounded-md uppercase border border-emerald-300 dark:border-emerald-800">
+                                          <CheckCircle2 size={11} /> 100% Conciliado
+                                        </span>
+                                      ) : sumAsoc > 0 ? (
+                                        <span className="inline-flex items-center gap-1 bg-amber-100 text-amber-800 dark:bg-amber-955/50 dark:text-amber-300 text-[9px] font-black px-2 py-0.5 rounded-md uppercase border border-amber-300 dark:border-amber-800">
+                                          <Clock size={11} /> Parcial ({formatCurrency(sumAsoc)})
+                                        </span>
                                       ) : (
-                                        <span className="bg-amber-100 text-amber-700 dark:bg-amber-955/30 dark:text-amber-400 text-[8px] font-black px-1.5 py-0.5 rounded uppercase">Pendiente</span>
+                                        <span className="inline-flex items-center gap-1 bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300 text-[9px] font-bold px-2 py-0.5 rounded-md uppercase border border-gray-200 dark:border-gray-700">
+                                          Sin Depósito
+                                        </span>
                                       )}
                                     </div>
-                                    {!isVentanilla && (
-                                      <div className="mt-1 text-[9px] font-mono space-y-0.5">
-                                        {(Number(c.monto_efectivo || 0) > 0 || Number(c.propina_efectivo || 0) > 0) && (
-                                          <div className="text-emerald-600 dark:text-emerald-400 font-bold">💵 Efec: {formatCurrency(c.monto_efectivo || 0)}{Number(c.propina_efectivo || 0) > 0 ? ` (+Prop: ${formatCurrency(c.propina_efectivo!)})` : ''}</div>
-                                        )}
-                                        {(Number(c.monto_parrotpay || 0) > 0 || Number(c.propina_parrotpay || 0) > 0) && (
-                                          <div className="text-purple-600 dark:text-purple-400 font-bold">🦜 ParrotPay: {formatCurrency(c.monto_parrotpay || 0)}{Number(c.propina_parrotpay || 0) > 0 ? ` (+Prop: ${formatCurrency(c.propina_parrotpay!)})` : ''}</div>
-                                        )}
-                                        {(Number(c.monto_debito || 0) > 0 || Number(c.propina_debito || 0) > 0) && (
-                                          <div className={isBBVAFilter ? "text-sky-600 dark:text-sky-400 font-bold" : "text-gray-500"}>💳 Débito: {formatCurrency(c.monto_debito || 0)}{Number(c.propina_debito || 0) > 0 ? ` (+Prop: ${formatCurrency(c.propina_debito!)})` : ''}</div>
-                                        )}
-                                        {(Number(c.monto_credito || 0) > 0 || Number(c.propina_credito || 0) > 0) && (
-                                          <div className={isBBVAFilter ? "text-sky-600 dark:text-sky-400 font-bold" : "text-gray-500"}>💳 Crédito: {formatCurrency(c.monto_credito || 0)}{Number(c.propina_credito || 0) > 0 ? ` (+Prop: ${formatCurrency(c.propina_credito!)})` : ''}</div>
-                                        )}
-                                        {(Number(c.monto_amex || 0) > 0 || Number(c.propina_amex || 0) > 0) && (
-                                          <div className={isBBVAFilter ? "text-sky-600 dark:text-sky-400 font-bold" : "text-gray-500"}>💳 Amex: {formatCurrency(c.monto_amex || 0)}{Number(c.propina_amex || 0) > 0 ? ` (+Prop: ${formatCurrency(c.propina_amex!)})` : ''}</div>
-                                        )}
+                                  </td>
+
+                                  {/* Desglose de Ventas y Propinas (MÁS GRANDE Y CLARO) */}
+                                  <td className="p-3.5">
+                                    <div className="space-y-1.5 font-sans">
+                                      {/* Total Propinas Destacado */}
+                                      {totProp > 0 ? (
+                                        <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-100/90 dark:bg-amber-955/50 text-amber-900 dark:text-amber-200 text-xs font-black border border-amber-300 dark:border-amber-700">
+                                          <span>💰 Propinas: +{formatCurrency(totProp)}</span>
+                                          <span className="text-[10px] font-normal text-amber-700 dark:text-amber-400 font-mono">
+                                            ({Number(c.propina_efectivo || 0) > 0 ? `Efec: ${formatCurrency(c.propina_efectivo!)}` : ''}{Number(c.propina_efectivo || 0) > 0 && propinaTarjetas > 0 ? ' | ' : ''}{propinaTarjetas > 0 ? `Tarj: ${formatCurrency(propinaTarjetas)}` : ''})
+                                          </span>
+                                        </div>
+                                      ) : (
+                                        <span className="text-[11px] text-gray-400 italic">Sin propinas</span>
+                                      )}
+
+                                      {/* Métodos de Cobro */}
+                                      {!isVentanilla && (
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-1 text-[11px] font-mono mt-1">
+                                          {(Number(c.monto_efectivo || 0) > 0 || Number(c.propina_efectivo || 0) > 0) && (
+                                            <div className="p-1 rounded bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 font-semibold flex items-center justify-between gap-1">
+                                              <span>💵 Efec:</span>
+                                              <span>{formatCurrency(c.monto_efectivo || 0)}{Number(c.propina_efectivo || 0) > 0 ? ` (+${formatCurrency(c.propina_efectivo!)})` : ''}</span>
+                                            </div>
+                                          )}
+                                          {(Number(c.monto_debito || 0) > 0 || Number(c.monto_credito || 0) > 0 || Number(c.monto_amex || 0) > 0 || propinaTarjetas > 0) && (
+                                            <div className="p-1 rounded bg-sky-50 dark:bg-sky-955/30 text-sky-700 dark:text-sky-300 font-semibold flex items-center justify-between gap-1">
+                                              <span>💳 Tarj/POS:</span>
+                                              <span>{formatCurrency(tarjetaTotalBBVA)}</span>
+                                            </div>
+                                          )}
+                                          {(Number(c.monto_parrotpay || 0) > 0 || Number(c.propina_parrotpay || 0) > 0) && (
+                                            <div className="p-1 rounded bg-purple-50 dark:bg-purple-955/30 text-purple-700 dark:text-purple-300 font-semibold flex items-center justify-between gap-1">
+                                              <span>🦜 Parrot:</span>
+                                              <span>{formatCurrency(Number(c.monto_parrotpay || 0) + Number(c.propina_parrotpay || 0))}</span>
+                                            </div>
+                                          )}
+                                        </div>
+                                      )}
+
+                                      {/* Botón Ver Tickets del Día */}
+                                      {Array.isArray(c.desglose_tickets) && c.desglose_tickets.length > 0 && (
+                                        <button
+                                          type="button"
+                                          onClick={() => setViewingTicketsComp(c)}
+                                          className="mt-1.5 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white text-xs font-black transition-all shadow-xs cursor-pointer"
+                                          title="Ver desglose detallado de tickets individuales y propinas"
+                                        >
+                                          <Receipt size={14} />
+                                          <span>Ver {c.desglose_tickets.length} Tickets / Ventas</span>
+                                        </button>
+                                      )}
+                                    </div>
+                                  </td>
+
+                                  {/* Depósitos Bancarios Vinculados (NUEVO BLOQUE CLARO) */}
+                                  <td className="p-3.5">
+                                    <div className="space-y-1.5">
+                                      {rels.length > 0 ? (
+                                        <div className="space-y-1">
+                                          {rels.map((rel: any, idx: number) => {
+                                            const mov = rel.movimientos_bancarios;
+                                            const cuenta = cuentasBancarias?.find(cb => cb.id === mov?.cuenta_bancaria_id);
+                                            return (
+                                              <div
+                                                key={idx}
+                                                className="p-1.5 rounded-lg bg-emerald-50/70 dark:bg-emerald-955/30 border border-emerald-200 dark:border-emerald-800/40 text-[11px]"
+                                              >
+                                                <div className="flex items-center justify-between gap-2 font-bold text-emerald-800 dark:text-emerald-300">
+                                                  <span className="flex items-center gap-1">
+                                                    <Landmark size={12} className="text-emerald-600" />
+                                                    {cuenta?.nombre || cuenta?.banco || 'Banco'}
+                                                  </span>
+                                                  <span className="font-mono">{formatCurrency(rel.monto_asociado)}</span>
+                                                </div>
+                                                {mov?.fecha && (
+                                                  <div className="text-[10px] text-gray-500 font-mono mt-0.5">
+                                                    Depósito: {formatDate(mov.fecha)}
+                                                  </div>
+                                                )}
+                                                {rel.comentario_diferencia && (
+                                                  <div className="text-[10px] text-gray-400 italic mt-0.5">
+                                                    &quot;{rel.comentario_diferencia}&quot;
+                                                  </div>
+                                                )}
+                                              </div>
+                                            );
+                                          })}
+                                          {effectiveMonto > sumAsoc && (
+                                            <div className="text-[10px] text-amber-600 dark:text-amber-400 font-bold font-mono">
+                                              Falta en banco: {formatCurrency(effectiveMonto - sumAsoc)}
+                                            </div>
+                                          )}
+                                        </div>
+                                      ) : (
+                                        <div className="space-y-1">
+                                          <span className="text-[11px] text-gray-400 italic block">
+                                            Sin depósito vinculado
+                                          </span>
+                                          <button
+                                            type="button"
+                                            onClick={() => setActiveCompToLink(c)}
+                                            className="text-[11px] text-emerald-600 hover:text-emerald-700 dark:text-emerald-400 font-bold inline-flex items-center gap-1 underline cursor-pointer"
+                                          >
+                                            <Link size={12} /> Vincular depósito
+                                          </button>
+                                        </div>
+                                      )}
+                                      <div className="text-[10px] text-gray-400">
+                                        Destino sugerido: <strong className="text-gray-600 dark:text-gray-300">{cuentasBancarias?.find(cb => cb.id === c.cuenta_bancaria_id)?.nombre || '-'}</strong>
                                       </div>
-                                    )}
-                                    {Array.isArray(c.desglose_tickets) && c.desglose_tickets.length > 0 && (
-                                      <button
-                                        type="button"
-                                        onClick={() => setViewingTicketsComp(c)}
-                                        className="mt-1.5 inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-50 hover:bg-amber-100 dark:bg-amber-955/40 dark:hover:bg-amber-900/50 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 text-[10px] font-extrabold transition-all shadow-2xs cursor-pointer"
-                                        title="Ver lista de ventas y tickets de este día"
-                                      >
-                                        <Receipt size={11} className="text-amber-500" />
-                                        <span>Ver {c.desglose_tickets.length} ventas / tickets</span>
-                                      </button>
-                                    )}
+                                    </div>
                                   </td>
-                                  <td className="p-3 font-medium text-gray-700 dark:text-gray-300">
-                                    {cuentasBancarias?.find(cb => cb.id === c.cuenta_bancaria_id)?.nombre || '-'}
-                                  </td>
-                                  <td className="p-3 text-gray-600 dark:text-gray-400 font-mono text-[11px] max-w-[200px]" title={c.descripcion || ''}>
-                                    <div className="truncate">{c.descripcion || '-'}</div>
+
+                                  {/* Descripción */}
+                                  <td className="p-3.5 text-gray-700 dark:text-gray-300 font-mono text-xs max-w-[200px]" title={c.descripcion || ''}>
+                                    <div className="truncate font-semibold">{c.descripcion || '-'}</div>
                                     {isVentaMesAnt && (
                                       <div className="mt-1 flex items-center gap-1 flex-wrap">
-                                        <span className="inline-flex items-center gap-0.5 text-[8.5px] font-bold text-amber-700 dark:text-amber-400 bg-amber-100/70 dark:bg-amber-900/40 px-1.5 py-0.5 rounded border border-amber-200 dark:border-amber-800">
+                                        <span className="text-[9px] font-bold text-amber-700 dark:text-amber-400 bg-amber-100 dark:bg-amber-900/40 px-1.5 py-0.5 rounded border border-amber-200 dark:border-amber-800">
                                           🚫 Excluido Factura Global
                                         </span>
                                         {c.mes_venta && (
-                                          <span className="text-[8.5px] font-mono text-gray-500 dark:text-gray-400">
+                                          <span className="text-[9px] font-mono text-gray-500">
                                             ({c.mes_venta})
                                           </span>
                                         )}
                                       </div>
                                     )}
                                   </td>
-                                  <td className="p-3 text-right font-mono font-bold text-gray-900 dark:text-white">
-                                    {isCajaFilter && (Number(c.monto_efectivo || 0) > 0 || Number(c.propina_efectivo || 0) > 0) ? (
-                                      <div>
-                                        <span className="text-emerald-600 dark:text-emerald-400 block">{formatCurrency(Number(c.monto_efectivo || 0) + Number(c.propina_efectivo || 0))}</span>
-                                        <span className="text-[9px] text-gray-400 font-mono block font-normal">({formatCurrency(c.monto_efectivo || 0)} Efec / {formatCurrency(c.monto)} Corte)</span>
-                                      </div>
-                                    ) : isParrotFilter && (Number(c.monto_parrotpay || 0) > 0 || Number(c.propina_parrotpay || 0) > 0) ? (
-                                      <div>
-                                        <span className="text-purple-600 dark:text-purple-400 block">{formatCurrency(Number(c.monto_parrotpay || 0) + Number(c.propina_parrotpay || 0))}</span>
-                                        <span className="text-[9px] text-gray-400 font-mono block font-normal">({formatCurrency(c.monto_parrotpay || 0)} Parrot / {formatCurrency(c.monto)} Corte)</span>
-                                      </div>
-                                    ) : isBBVAFilter && c.tipo !== 'corte_parrot' && tarjetaTotalBBVA > 0 ? (
-                                      <div>
-                                        <span className="text-sky-600 dark:text-sky-400 block">{formatCurrency(tarjetaTotalBBVA)}</span>
-                                        <span className="text-[9px] text-gray-400 font-mono block font-normal">({formatCurrency(tarjetaTotalBBVA)} Tarjetas BBVA / {formatCurrency(c.monto)} Corte)</span>
-                                      </div>
-                                    ) : (
-                                      <div>
-                                        <span className="block">{formatCurrency(c.monto)}</span>
-                                        {(() => {
-                                          const totProp = Number(c.propina_efectivo || 0) + Number(c.propina_parrotpay || 0) +
-                                                          Number(c.propina_debito || 0) + Number(c.propina_credito || 0) + Number(c.propina_amex || 0);
-                                          if (totProp > 0) {
-                                            const baseVenta = Math.max(0, Number(c.monto || 0) - totProp);
-                                            return (
-                                              <span className="text-[9px] text-gray-400 font-mono block font-normal" title={`Venta Neta: ${formatCurrency(baseVenta)} | Propinas: ${formatCurrency(totProp)}`}>
-                                                Venta: {formatCurrency(baseVenta)} (+Prop: {formatCurrency(totProp)})
-                                              </span>
-                                            );
-                                          }
-                                          return null;
-                                        })()}
+
+                                  {/* Monto Total Cobrado */}
+                                  <td className="p-3.5 text-right font-mono">
+                                    <div className="text-sm md:text-base font-black text-gray-900 dark:text-white">
+                                      {formatCurrency(effectiveMonto)}
+                                    </div>
+                                    {totProp > 0 && (
+                                      <div className="text-[10px] text-gray-500 dark:text-gray-400 font-mono mt-0.5">
+                                        Venta: <span className="font-bold">{formatCurrency(baseVenta)}</span>
                                       </div>
                                     )}
                                     {sumAsoc > 0 && (
-                                      <div className="text-[9px] font-normal text-emerald-500">Asoc: {formatCurrency(sumAsoc)}</div>
+                                      <div className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 mt-0.5">
+                                        Depositado: {formatCurrency(sumAsoc)}
+                                      </div>
                                     )}
                                   </td>
-                                  <td className="p-3 text-center">
+
+                                  {/* Ticket Adjunto */}
+                                  <td className="p-3.5 text-center whitespace-nowrap">
                                     {c.archivo_url ? (
                                       <button
+                                        type="button"
                                         onClick={() => {
                                           if (onDownloadFile) onDownloadFile(c.archivo_url!);
                                           else if (handleViewCfdi) handleViewCfdi(c.archivo_url!);
                                           else window.open(c.archivo_url!, '_blank');
                                         }}
-                                        className="p-1 bg-amber-50 dark:bg-amber-955/20 text-amber-600 hover:bg-amber-100 dark:hover:bg-amber-900/30 rounded border border-amber-200 dark:border-amber-900/40 text-[9px] font-bold inline-flex items-center gap-0.5"
+                                        className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 dark:bg-amber-955/30 dark:hover:bg-amber-900/40 text-amber-700 dark:text-amber-300 rounded-lg border border-amber-200 dark:border-amber-800 text-xs font-bold inline-flex items-center gap-1 transition-all cursor-pointer shadow-2xs"
                                       >
-                                        <Eye size={10} /> Ver
+                                        <Eye size={12} /> Ver Ticket
                                       </button>
                                     ) : (
-                                      <span className="text-[9px] text-gray-400 italic">Sin Ticket</span>
+                                      <span className="text-xs text-gray-400 italic">Sin Ticket</span>
                                     )}
                                   </td>
-                                  <td className="p-3 text-right">
-                                    <div className="flex justify-end gap-1.5 flex-wrap items-center">
-                                      {/* Quick toggle botón: Venta Mes Anterior */}
-                                      <button
-                                        type="button"
-                                        onClick={async () => {
-                                          const nextVal = !isVentaMesAnt;
-                                          let nextDesc = c.descripcion || '';
-                                          if (nextVal && !nextDesc.includes('[VENTA_MES_ANTERIOR]')) {
-                                            nextDesc = `[VENTA_MES_ANTERIOR] ${nextDesc}`.trim();
-                                          } else if (!nextVal) {
-                                            nextDesc = nextDesc.replace(/\[VENTA_MES_ANTERIOR\]/g, '').replace(/\[VENTA_MES:[^\]]+\]/g, '').trim();
-                                          }
-                                          await onActualizarComprobante?.(c.id, {
-                                            ...c,
-                                            descripcion: nextDesc,
-                                            es_venta_mes_anterior: nextVal,
-                                            mes_venta: nextVal ? (c.mes_venta || null) : null
-                                          });
-                                        }}
-                                        className={`px-1.5 py-1 rounded font-bold text-[10px] flex items-center gap-1 transition-all cursor-pointer ${
-                                          isVentaMesAnt
-                                            ? 'bg-amber-100 dark:bg-amber-955/50 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-700 shadow-2xs'
-                                            : 'text-gray-400 hover:text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-955/20 border border-transparent'
-                                        }`}
-                                        title={isVentaMesAnt ? 'Marcado como Venta de Mes Anterior (Excluido de Factura Global). Clic para quitar marca.' : 'Marcar como Venta de Mes Anterior (Excluir de Factura Global)'}
-                                      >
-                                        <Clock size={11} className={isVentaMesAnt ? 'text-amber-600 dark:text-amber-400' : ''} />
-                                        <span>{isVentaMesAnt ? 'Mes Ant. ✓' : 'Marcar Mes Ant.'}</span>
-                                      </button>
 
-                                      {Array.isArray(c.desglose_tickets) && c.desglose_tickets.length > 0 && (
-                                        <button
-                                          type="button"
-                                          onClick={() => setViewingTicketsComp(c)}
-                                          className="p-1 text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-955/20 rounded font-bold text-[10px] flex items-center gap-0.5"
-                                          title="Ver lista de ventas y tickets de este día"
-                                        >
-                                          <Receipt size={11} /> Ventas ({c.desglose_tickets.length})
-                                        </button>
-                                      )}
+                                  {/* Acciones */}
+                                  <td className="p-3.5 text-right whitespace-nowrap">
+                                    <div className="flex justify-end gap-1.5 items-center flex-wrap">
+                                      {/* Vincular Movimientos */}
                                       <button
                                         type="button"
                                         onClick={() => setActiveCompToLink(c)}
-                                        className="p-1 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-955/20 rounded font-bold text-[10px] flex items-center gap-0.5"
-                                        title="Vincular con movimientos de la misma cuenta bancaria"
+                                        className="p-1.5 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 dark:hover:bg-emerald-955/30 rounded-lg font-bold text-xs flex items-center gap-1 transition-all cursor-pointer"
+                                        title="Vincular con depósito bancario"
                                       >
-                                        <Link size={11} /> Vincular Movs.
+                                        <Link size={13} />
+                                        <span className="hidden sm:inline">Vincular</span>
                                       </button>
+
+                                      {/* Editar en Modal Emergente */}
                                       <button
+                                        type="button"
                                         onClick={() => {
                                           setEditingCompId(c.id);
                                           setNewCompForm({
@@ -5583,52 +5086,87 @@ export default function BancoTab({
                                             esVentaMesAnterior: isVentaMesAnt,
                                             mesVenta: c.mes_venta || ''
                                           });
+                                          setIsCompModalOpen(true);
                                         }}
-                                        className="p-1 text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-955/20 rounded font-bold text-[10px] flex items-center gap-0.5"
+                                        className="p-1.5 text-blue-600 hover:text-blue-700 hover:bg-blue-50 dark:hover:bg-blue-955/30 rounded-lg font-bold text-xs flex items-center gap-1 transition-all cursor-pointer"
+                                        title="Editar comprobante en ventana emergente"
                                       >
-                                        <Edit3 size={11} /> Editar
+                                        <Edit3 size={13} />
+                                        <span className="hidden sm:inline">Editar</span>
                                       </button>
+
+                                      {/* Quick toggle: Venta Mes Anterior */}
                                       <button
+                                        type="button"
+                                        onClick={async () => {
+                                          const nextVal = !isVentaMesAnt;
+                                          let nextDesc = c.descripcion || '';
+                                          if (nextVal && !nextDesc.includes('[VENTA_MES_ANTERIOR]')) {
+                                            nextDesc = `[VENTA_MES_ANTERIOR] ${nextDesc}`.trim();
+                                          } else if (!nextVal) {
+                                            nextDesc = nextDesc.replace(/\[VENTA_MES_ANTERIOR\]/g, '').replace(/\[VENTA_MES:[^\]]+\]/g, '').trim();
+                                          }
+                                          await onActualizarComprobante?.(c.id, {
+                                            ...c,
+                                            descripcion: nextDesc,
+                                            es_venta_mes_anterior: nextVal,
+                                            mes_venta: nextVal ? (c.mes_venta || null) : null
+                                          });
+                                        }}
+                                        className={`p-1.5 rounded-lg font-bold text-xs flex items-center gap-1 transition-all cursor-pointer ${
+                                          isVentaMesAnt
+                                            ? 'bg-amber-100 dark:bg-amber-955/50 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-700'
+                                            : 'text-gray-400 hover:text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-955/20'
+                                        }`}
+                                        title={isVentaMesAnt ? 'Marcado como Venta Mes Anterior. Clic para desmarcar.' : 'Marcar como Venta Mes Anterior'}
+                                      >
+                                        <Clock size={13} />
+                                      </button>
+
+                                      {/* Eliminar */}
+                                      <button
+                                        type="button"
                                         onClick={() => {
                                           if (confirm('¿Estás seguro de eliminar este comprobante?')) {
                                             onEliminarComprobante?.(c.id);
                                           }
                                         }}
-                                        className="p-1 text-red-500 hover:bg-red-50 dark:hover:bg-red-955/20 rounded font-bold text-[10px]"
+                                        className="p-1.5 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-955/30 rounded-lg font-bold text-xs transition-all cursor-pointer"
+                                        title="Eliminar comprobante"
                                       >
-                                        <Trash2 size={11} />
+                                        <Trash2 size={13} />
                                       </button>
                                     </div>
                                   </td>
                                 </tr>
                               );
                             })}
-                          {filteredComprobantes.length === 0 && (
-                            <tr>
-                              <td colSpan={7} className="p-8 text-center text-gray-400 italic">
-                                {selectedCuentaId ? (
-                                  <div className="flex flex-col items-center justify-center gap-2 py-2">
-                                    <span>No hay comprobantes registrados para la cuenta bancaria seleccionada.</span>
-                                    <button
-                                      type="button"
-                                      onClick={() => setSelectedCuentaId('')}
-                                      className="px-3 py-1 bg-amber-500 text-white font-bold text-xs rounded-lg shadow-sm hover:bg-amber-600 transition-all"
-                                    >
-                                      Mostrar comprobantes de todas las cuentas
-                                    </button>
-                                  </div>
-                                ) : (
-                                  'No hay comprobantes registrados.'
-                                )}
-                              </td>
-                            </tr>
-                          )}
-                        </tbody>
-                      </table>
+                            {filteredComprobantes.length === 0 && (
+                              <tr>
+                                <td colSpan={8} className="p-12 text-center text-gray-400 italic">
+                                  {selectedCuentaId ? (
+                                    <div className="flex flex-col items-center justify-center gap-2 py-4">
+                                      <span className="text-sm">No hay comprobantes registrados para la cuenta bancaria seleccionada.</span>
+                                      <button
+                                        type="button"
+                                        onClick={() => setSelectedCuentaId('')}
+                                        className="px-4 py-2 bg-amber-500 text-white font-bold text-xs rounded-xl shadow-sm hover:bg-amber-600 transition-all cursor-pointer"
+                                      >
+                                        Mostrar comprobantes de todas las cuentas
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <span className="text-sm">No hay comprobantes o cortes registrados en este período.</span>
+                                  )}
+                                </td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
                     </div>
-                  </div>
 
-                </div>
+                  </div>
               )}
             </div>
           )}
@@ -9458,6 +8996,24 @@ export default function BancoTab({
         isOpen={!!viewingTicketsComp}
         onClose={() => setViewingTicketsComp(null)}
         comprobante={viewingTicketsComp}
+        cuentasBancarias={cuentasBancarias}
+      />
+      <ComprobanteModal
+        isOpen={isCompModalOpen}
+        onClose={() => {
+          setIsCompModalOpen(false);
+          setEditingCompId(null);
+        }}
+        editingCompId={editingCompId}
+        form={newCompForm}
+        setForm={setNewCompForm}
+        cuentasBancarias={cuentasBancarias}
+        comprobantes={comprobantes}
+        selectedMonth={selectedMonth}
+        compUploadLoading={compUploadLoading}
+        handleUploadCompFile={handleUploadCompFile}
+        onCrearComprobante={onCrearComprobante}
+        onActualizarComprobante={onActualizarComprobante}
       />
     </div>
   );

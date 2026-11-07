@@ -9,8 +9,9 @@ import {
   vincularComprobanteAMovimiento,
   desvincularComprobanteDeMovimiento
 } from '@/app/admin/gastos/reconciliationActions';
+import { obtenerSignedUrlsTickets } from '../actions';
 import { fetchCuentasBancarias } from '@/lib/cuentasBancarias';
-import { formatDate } from '@/lib/formatters';
+import { formatDate, extractReferenciaBancaria } from '@/lib/formatters';
 
 export function useFacturaPublicoGeneralData() {
   const getEmpresaId = useEmpresaId();
@@ -336,6 +337,21 @@ export function useFacturaPublicoGeneralData() {
 
   const setCashDepositPeriod = (movementId: string, period: 'anterior' | 'actual' | 'siguiente') => {
     const monthKey = selectedMonth || 'GLOBAL';
+    const currentExclList = excludedMovementIds[monthKey] !== undefined
+      ? excludedMovementIds[monthKey]
+      : depositosMes.filter(d => d._isExcluded).map(d => d.id);
+    const nextExclList = period === 'anterior'
+      ? Array.from(new Set([...currentExclList, movementId]))
+      : currentExclList.filter(id => id !== movementId);
+
+    setExcludedMovementIds(prev => {
+      const next = { ...prev, [monthKey]: nextExclList };
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('factura_pg_excluded_mb', JSON.stringify(next));
+      }
+      return next;
+    });
+
     setCashDepositPeriodsMap(prev => {
       const monthPeriods = { ...(prev[monthKey] || {}), [movementId]: period };
       const next = { ...prev, [monthKey]: monthPeriods };
@@ -344,7 +360,7 @@ export function useFacturaPublicoGeneralData() {
         localStorage.setItem('seimenjo_periodo_depositos_efectivo', JSON.stringify({ ...shared, [monthKey]: monthPeriods }));
         localStorage.setItem('factura_pg_depositos_efectivo_periodo', JSON.stringify(next));
       }
-      saveAjustesToSupabase(monthKey, { cashDepositPeriods: monthPeriods });
+      saveAjustesToSupabase(monthKey, { cashDepositPeriods: monthPeriods, excludedMb: nextExclList });
       return next;
     });
   };
@@ -365,14 +381,39 @@ export function useFacturaPublicoGeneralData() {
 
   const toggleExcludeMovement = (movId: string) => {
     if (!selectedMonth) return;
+    const baseList = excludedMovementIds[selectedMonth] !== undefined
+      ? excludedMovementIds[selectedMonth]
+      : depositosMes.filter(d => d._isExcluded).map(d => d.id);
+    const isNowExcluded = !baseList.includes(movId);
+    const updated = isNowExcluded ? [...baseList, movId] : baseList.filter(id => id !== movId);
+
+    const targetMov = depositosMes.find(d => d.id === movId) || movimientosDeposito.find(m => m.id === movId);
+    const isCashMov = !!targetMov && esMovimientoEfectivo(targetMov.concepto || '');
+    const nextMonthPeriods = isCashMov
+      ? { ...(cashDepositPeriodsMap[selectedMonth] || {}), [movId]: (isNowExcluded ? 'anterior' : 'actual') as 'anterior' | 'actual' | 'siguiente' }
+      : (cashDepositPeriodsMap[selectedMonth] || {});
+
+    if (isCashMov) {
+      setCashDepositPeriodsMap(prev => {
+        const next = { ...prev, [selectedMonth]: nextMonthPeriods };
+        if (typeof window !== 'undefined') {
+          const shared = JSON.parse(localStorage.getItem('seimenjo_periodo_depositos_efectivo') || '{}');
+          localStorage.setItem('seimenjo_periodo_depositos_efectivo', JSON.stringify({ ...shared, [selectedMonth]: nextMonthPeriods }));
+          localStorage.setItem('factura_pg_depositos_efectivo_periodo', JSON.stringify(next));
+        }
+        return next;
+      });
+    }
+
     setExcludedMovementIds(prev => {
-      const list = prev[selectedMonth] || [];
-      const updated = list.includes(movId) ? list.filter(id => id !== movId) : [...list, movId];
       const next = { ...prev, [selectedMonth]: updated };
       if (typeof window !== 'undefined') {
         localStorage.setItem('factura_pg_excluded_mb', JSON.stringify(next));
       }
-      saveAjustesToSupabase(selectedMonth, { excludedMb: updated });
+      saveAjustesToSupabase(selectedMonth, {
+        excludedMb: updated,
+        ...(isCashMov ? { cashDepositPeriods: nextMonthPeriods } : {})
+      });
       return next;
     });
   };
@@ -538,8 +579,47 @@ export function useFacturaPublicoGeneralData() {
     }).format(num);
   }, []);
 
-  const handleDownloadFile = async (filePath: string, fileName: string) => {
+  const formatTicketIdentificador = useCallback((ticket: any): string => {
+    if (!ticket) return 'Ticket';
+    const desc = ticket.descripcion ? String(ticket.descripcion).trim() : '';
+    const cleanFecha = ticket.fecha ? String(ticket.fecha).trim() : '';
+    const parts = cleanFecha.split('-');
+    const day = parts.length === 3 ? parseInt(parts[2], 10) : null;
+
+    if (desc && !desc.toLowerCase().startsWith('comprobante_efectivo_')) {
+      if (day && !desc.toLowerCase().includes(String(day)) && !desc.toLowerCase().includes('cierre') && !desc.toLowerCase().includes('corte')) {
+        return `${desc} (Cierre del día ${day})`;
+      }
+      return desc;
+    }
+    if (day) {
+      return `Cierre del día ${day}`;
+    }
+    if (cleanFecha) {
+      return `Corte ${cleanFecha}`;
+    }
+    if (ticket.id) {
+      return `Ticket #${String(ticket.id).slice(0, 8)}`;
+    }
+    return 'Ticket';
+  }, []);
+
+  const handleDownloadFile = async (filePath: string, fileName?: string) => {
     try {
+      if (!filePath) return;
+      if (filePath.startsWith('http://') || filePath.startsWith('https://')) {
+        window.open(filePath, '_blank');
+        return;
+      }
+      const token = await getSessionToken();
+      if (token) {
+        const res = await obtenerSignedUrlsTickets([filePath], token);
+        const signed = res.urlMap?.[filePath];
+        if (signed) {
+          window.open(signed, '_blank');
+          return;
+        }
+      }
       const { data, error } = await supabase.storage.from('facturas').download(filePath);
       if (error || !data) throw error;
       const url = URL.createObjectURL(data);
@@ -552,6 +632,7 @@ export function useFacturaPublicoGeneralData() {
       URL.revokeObjectURL(url);
     } catch (err: any) {
       console.error('Error al descargar archivo:', err?.message || err);
+      alert('Error al abrir archivo: ' + (err?.message || err));
     }
   };
 
@@ -802,7 +883,7 @@ export function useFacturaPublicoGeneralData() {
       // 4. Facturas Clientes Emitidas (con rango de fechas acotado)
       let fcQuery = supabase
         .from('facturas_clientes')
-        .select('*, clientes(id, nombre_local, razon_social, rfc), pedidos(id, numero_pedido, cliente_nombre, precio_total), estatus_factura(nombre)')
+        .select('*, clientes(id, nombre_local, razon_social, rfc), pedidos(id, numero_pedido, cliente_nombre, precio_total), formas_pago(id, codigo, nombre), estatus_factura(nombre)')
         .eq('empresa_id', empresaId)
         .order('fecha_emision', { ascending: false });
 
@@ -899,10 +980,24 @@ export function useFacturaPublicoGeneralData() {
             setNoEsVentaMovementsMap(prev => ({ ...prev, [monthKey]: mapped }));
           }
           if (ajData.depositos_efectivo_periodo && typeof ajData.depositos_efectivo_periodo === 'object') {
-            setCashDepositPeriodsMap(prev => ({
-              ...prev,
-              [monthKey]: { ...ajData.depositos_efectivo_periodo, ...(prev[monthKey] || {}) }
-            }));
+            const exclSet = new Set<string>(Array.isArray(ajData.movimientos_excluidos) ? ajData.movimientos_excluidos : []);
+            const syncedPeriodMap: Record<string, 'anterior' | 'actual' | 'siguiente'> = {
+              ...ajData.depositos_efectivo_periodo
+            };
+            exclSet.forEach(id => {
+              if (syncedPeriodMap[id] !== 'siguiente') {
+                syncedPeriodMap[id] = 'anterior';
+              }
+            });
+            setCashDepositPeriodsMap(prev => {
+              const merged = { ...(prev[monthKey] || {}), ...syncedPeriodMap };
+              const next = { ...prev, [monthKey]: merged };
+              if (typeof window !== 'undefined') {
+                localStorage.setItem('seimenjo_periodo_depositos_efectivo', JSON.stringify(next));
+                localStorage.setItem('factura_pg_depositos_efectivo_periodo', JSON.stringify(next));
+              }
+              return next;
+            });
           }
           if (ajData.pendiente_deposito_comprobantes && Array.isArray(ajData.pendiente_deposito_comprobantes)) {
             setPendienteDepositoMap(prev => ({ ...prev, [monthKey]: ajData.pendiente_deposito_comprobantes }));
@@ -1070,7 +1165,8 @@ export function useFacturaPublicoGeneralData() {
       vInfo.movDetails.forEach(md => {
         if (md.esEfectivo) {
           const tickets = cashTicketsByMovement.get(md.id) || [];
-          const cashAmount = Number(comp.monto_efectivo || 0) + Number(comp.propina_efectivo || 0);
+          const rawCash = Number(comp.monto_efectivo || 0) + Number(comp.propina_efectivo || 0);
+          const cashAmount = rawCash > 0 ? rawCash : Number(comp.monto || 0);
           tickets.push({ ticket: comp, montoAsociado: Math.min(cashAmount, md.montoAsociado) });
           cashTicketsByMovement.set(md.id, tickets);
           return;
@@ -1102,7 +1198,9 @@ export function useFacturaPublicoGeneralData() {
       const totalVinculado = tickets.reduce((sum, item) => sum + item.montoAsociado, 0);
       const montoDeposito = Math.abs(Number(movement.deposito || movement.monto || 0));
       const dif = montoDeposito - totalVinculado;
-      const isCuadrado100 = totalVinculado > 0 && Math.abs(dif) < 0.05;
+      const hasJustifiedDiffNote = String(movement.comentarios || '').includes('[Diferencia Efectivo') ||
+        movement.estatus_conciliacion_bancaria?.clave === 'conciliado';
+      const isCuadrado100 = totalVinculado > 0 && (Math.abs(dif) < 0.05 || hasJustifiedDiffNote);
       const isParcial = totalVinculado > 0 && !isCuadrado100;
       const advertencia = !isCuadrado100
         ? `⚠️ El depósito en efectivo por $${montoDeposito.toLocaleString('es-MX', { minimumFractionDigits: 2 })} no coincide al 100% con los importes en efectivo de ${tickets.length} corte(s) asociado(s) (suma: $${totalVinculado.toLocaleString('es-MX', { minimumFractionDigits: 2 })}). Diferencia: ${dif > 0 ? '+' : ''}$${dif.toLocaleString('es-MX', { minimumFractionDigits: 2 })}.`
@@ -1251,6 +1349,8 @@ export function useFacturaPublicoGeneralData() {
 
         return {
           ...f,
+          rfc_receptor: f.rfc_receptor || clienteRfc,
+          cliente_nombre: f.cliente_nombre || clienteNombre,
           _isPG: isPG,
           _clienteNombre: clienteNombre,
           _clienteRfc: clienteRfc,
@@ -1301,6 +1401,8 @@ export function useFacturaPublicoGeneralData() {
           pdf_url: inv?.pdf_url || p.pdf_url || p.factura_url || null,
           pedidos: p,
           clientes: p.clientes,
+          rfc_receptor: clienteRfc,
+          cliente_nombre: clienteNombre,
           _isPG: isPG,
           _clienteNombre: clienteNombre,
           _clienteRfc: clienteRfc,
@@ -1390,6 +1492,10 @@ export function useFacturaPublicoGeneralData() {
           statusName = 'Conciliado 100% con Ticket';
         } else if (hasTickets || isVinculadoIncompleto) {
           statusName = 'Vinculado Parcial (Pendiente)';
+        } else if (isNoVenta) {
+          statusName = `No es Venta (${noVentaRazon || 'Excluido'})`;
+        } else if (isOtherMonth) {
+          statusName = `Desfase (${mesDetectado || otherMonthRazon || 'Otro Mes'})`;
         }
 
         return {
@@ -1451,11 +1557,9 @@ export function useFacturaPublicoGeneralData() {
       }
       if (d._isExcluded) {
         montoExcluido += d._monto;
-      }
-      if (d._isNoVenta) {
+      } else if (d._isNoVenta) {
         montoNoVenta += d._monto;
-      }
-      if (d._vinculadoCuadrado100) {
+      } else if (d._vinculadoCuadrado100) {
         montoVinculadoCuadrado += d._monto;
       }
     });
@@ -1857,8 +1961,10 @@ export function useFacturaPublicoGeneralData() {
       sum + Number(ticket.monto_efectivo || 0) + Number(ticket.propina_efectivo || 0), 0
     );
     const periodMap = cashDepositPeriodsMap[selectedMonth || 'GLOBAL'] || {};
-    const periodForCashDeposit = (deposit: any) =>
-      periodMap[deposit.id] || (deposit._isExcluded || deposit._isOtherMonth ? 'anterior' : 'actual');
+    const periodForCashDeposit = (deposit: any) => {
+      if (deposit._isExcluded) return 'anterior';
+      return periodMap[deposit.id] || (deposit._isOtherMonth ? 'anterior' : 'actual');
+    };
 
     let montoFichasVentanilla = 0;
     const fichasVentanilla: any[] = [];
@@ -1921,7 +2027,14 @@ export function useFacturaPublicoGeneralData() {
     }, 0);
 
     const totalDepositosEfectivoRealizados = totalEfectivoConciliado;
-    const montoEfectivoSinAsignar = Math.max(0, montoEfectivoEstadoCuenta - totalEfectivoConciliado);
+    const montoEfectivoSinAsignar = depositosBancoEfectivo.reduce((sum, d) => {
+      if (d._vinculadoCuadrado100) return sum;
+      const asignado = (d._cdms || []).reduce((s: number, rel: any) => {
+        const amt = rel.monto_asociado ?? rel.comprobantes_deposito?.monto ?? 0;
+        return s + Number(amt || 0);
+      }, 0);
+      return sum + Math.max(0, d._monto - asignado);
+    }, 0);
     const diferenciaEfectivo = ventasEfectivoParrot - totalEfectivoConciliado;
     const faltaPorDepositar = Math.max(0, diferenciaEfectivo);
     const sobranteEfectivo = diferenciaEfectivo < 0 ? Math.abs(diferenciaEfectivo) : 0;
@@ -2062,11 +2175,152 @@ export function useFacturaPublicoGeneralData() {
     });
   }, [todasLasFacturasMes, filtroFacturasTipo, searchFacturasQuery]);
 
-  // EXPORTACIÓN EXCEL COMPLETA (7 HOJAS)
+  // EXPORTACIÓN EXCEL COMPLETA (8 HOJAS)
   const exportFacturaPublicoExcel = async () => {
     try {
       const XLSX = await import('xlsx');
       const wb = XLSX.utils.book_new();
+      const token = await getSessionToken();
+
+      // Mapa maestro de comprobantes/tickets para resolución completa por ID
+      const comprobantesMap = new Map<string, any>();
+      comprobantes.forEach(c => {
+        if (c?.id) comprobantesMap.set(c.id, c);
+      });
+      allTicketsMes.forEach(c => {
+        if (c?.id && !comprobantesMap.has(c.id)) comprobantesMap.set(c.id, c);
+      });
+
+      // Recolectar rutas de archivo de todos los tickets involucrados en el período
+      const filePathsSet = new Set<string>();
+
+      // Tickets del mes y todos los tickets
+      ticketsMes.forEach(c => {
+        if (c.archivo_url) filePathsSet.add(c.archivo_url);
+      });
+      allTicketsMes.forEach(c => {
+        if (c.archivo_url) filePathsSet.add(c.archivo_url);
+      });
+
+      // Tickets de depósitos del mes
+      depositosMes.forEach(d => {
+        (d._ticketsAsociados || []).forEach((item: any) => {
+          if (item?.ticket?.archivo_url) filePathsSet.add(item.ticket.archivo_url);
+        });
+        (d._cdms || []).forEach((c: any) => {
+          const comp = c?.comprobantes_deposito || comprobantesMap.get(c?.comprobante_id);
+          if (comp?.archivo_url) filePathsSet.add(comp.archivo_url);
+        });
+        if (d.pdf_ticket_url) filePathsSet.add(d.pdf_ticket_url);
+        if (d.pdf_factura_url) filePathsSet.add(d.pdf_factura_url);
+      });
+
+      // Tickets de movimientos de otro mes
+      movimientosOtroMes.forEach(d => {
+        (d._ticketsAsociados || []).forEach((item: any) => {
+          if (item?.ticket?.archivo_url) filePathsSet.add(item.ticket.archivo_url);
+        });
+        (d._cdms || []).forEach((c: any) => {
+          const comp = c?.comprobantes_deposito || comprobantesMap.get(c?.comprobante_id);
+          if (comp?.archivo_url) filePathsSet.add(comp.archivo_url);
+        });
+        if (d.pdf_ticket_url) filePathsSet.add(d.pdf_ticket_url);
+      });
+
+      let signedUrlMap: Record<string, string> = {};
+      if (filePathsSet.size > 0 && token) {
+        try {
+          const res = await obtenerSignedUrlsTickets(Array.from(filePathsSet), token);
+          if (res.success && res.urlMap) {
+            signedUrlMap = res.urlMap;
+          }
+        } catch (e) {
+          console.warn('No se pudieron generar todas las URLs firmadas para Excel:', e);
+        }
+      }
+
+      // Helper para obtener URL válida completa del ticket
+      const getTicketUrl = (rawUrl?: string | null): string => {
+        if (!rawUrl || typeof rawUrl !== 'string') return '-';
+        const trimmed = rawUrl.trim();
+        if (!trimmed) return '-';
+        if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) return trimmed;
+        if (signedUrlMap[trimmed]) return signedUrlMap[trimmed];
+        const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://ioxfhgmeapwyfrgvtyjd.supabase.co';
+        return `${supabaseUrl}/storage/v1/object/public/facturas/${trimmed}`;
+      };
+
+      // Helper para post-procesar hojas y convertir celdas con URL en enlaces interactivos de Excel
+      const addHyperlinksToSheet = (ws: any) => {
+        if (!ws || !ws['!ref']) return;
+        const range = XLSX.utils.decode_range(ws['!ref']);
+        for (let R = range.s.r; R <= range.e.r; ++R) {
+          for (let C = range.s.c; C <= range.e.c; ++C) {
+            const cellAddress = XLSX.utils.encode_cell({ r: R, c: C });
+            const cell = ws[cellAddress];
+            if (cell && typeof cell.v === 'string') {
+              const val = cell.v.trim();
+              if (val.startsWith('http://') || val.startsWith('https://')) {
+                const firstUrl = val.split(/[\s\n]+/)[0];
+                cell.l = { Target: firstUrl, Tooltip: 'Abrir ticket' };
+              }
+            }
+          }
+        }
+      };
+
+      // Helper para formatear columnas de importes como moneda ($#,##0.00) en Excel
+      const applyCurrencyFormattingToSheet = (ws: any) => {
+        if (!ws || !ws['!ref']) return;
+        const range = XLSX.utils.decode_range(ws['!ref']);
+        const currencyKeywords = [
+          'monto', 'importe', 'total', 'venta', 'tarjetas', 'débito', 'debito',
+          'crédito', 'credito', 'amex', 'diferencia', 'faltante', 'acreditado',
+          'propina', 'iva', 'subtotal', 'depositado', 'cubierto', 'base'
+        ];
+        const currencyCols = new Set<number>();
+
+        for (let C = range.s.c; C <= range.e.c; ++C) {
+          const headerCell = ws[XLSX.utils.encode_cell({ r: range.s.r, c: C })];
+          if (headerCell && typeof headerCell.v === 'string') {
+            const headerLower = headerCell.v.toLowerCase();
+            if (currencyKeywords.some(kw => headerLower.includes(kw))) {
+              currencyCols.add(C);
+            }
+          }
+        }
+
+        for (let R = range.s.r + 1; R <= range.e.r; ++R) {
+          for (const C of currencyCols) {
+            const cellAddress = XLSX.utils.encode_cell({ r: R, c: C });
+            const cell = ws[cellAddress];
+            if (cell && typeof cell.v === 'number') {
+              cell.z = '"$"#,##0.00';
+            }
+          }
+        }
+      };
+
+      // Helper para auto-ajustar anchos de columnas
+      const autoFitColumns = (ws: any) => {
+        if (!ws || !ws['!ref']) return;
+        const range = XLSX.utils.decode_range(ws['!ref']);
+        const colWidths: any[] = [];
+        for (let C = range.s.c; C <= range.e.c; ++C) {
+          let maxLen = 10;
+          for (let R = range.s.r; R <= range.e.r; ++R) {
+            const cell = ws[XLSX.utils.encode_cell({ r: R, c: C })];
+            if (cell && cell.v !== undefined && cell.v !== null) {
+              const strVal = String(cell.w || cell.v);
+              if (strVal.length > maxLen) {
+                maxLen = Math.min(strVal.length, 60);
+              }
+            }
+          }
+          colWidths.push({ wch: maxLen + 3 });
+        }
+        ws['!cols'] = colWidths;
+      };
 
       const summaryRows: any[] = [
         { 'Concepto': '--- FACTURA PÚBLICO EN GENERAL ---', 'Importe': '', 'Notas': '' },
@@ -2112,16 +2366,147 @@ export function useFacturaPublicoGeneralData() {
         { 'Concepto': 'PROPINAS TOTALES EXCLUIDAS (0% SAT)', 'Importe': totalPropinasExcluidas, 'Notas': 'No sujetas a IVA/ISR' },
       ];
 
-      const cashRows = controlEfectivo.dailyCashRows.map(r => ({
-        'Fecha': r.fecha,
-        'Ventas Efectivo Parrot': r.ventasEfectivoParrot,
-        'Depósitos Ventanilla / Practicaja': r.depositosVentanilla,
-        'Depósitos Estado de Cuenta': r.depositosBanco,
-        'Total Depositado': r.totalDepositado,
-        'Diferencia del Día': r.diferenciaDia,
-        'Faltante Acumulado ($)': r.saldoPendienteAcumulado,
-        'Estatus': (r.saldoPendienteAcumulado || 0) > 0 ? 'Falta Depositar' : 'Al Día'
-      }));
+      // Mapear qué depósitos cubren a cada ticket con fecha, referencia y concepto
+      const ticketToDepositsMap = new Map<string, Array<{ fecha: string; referencia: string; concepto: string; montoAsociado: number }>>();
+      comprobantes.forEach((comp: any) => {
+        const vInfo = ticketVinculacionMap.get(comp.id);
+        if (vInfo && vInfo.movDetails.length > 0) {
+          ticketToDepositsMap.set(comp.id, vInfo.movDetails.map(m => {
+            const movObj = movimientosDeposito.find(mb => mb.id === m.id);
+            return {
+              fecha: m.fecha ? formatDate(m.fecha) : '',
+              referencia: extractReferenciaBancaria(movObj?.referencia, m.concepto),
+              concepto: m.concepto || '',
+              montoAsociado: m.montoAsociado
+            };
+          }));
+        }
+      });
+
+      // HOJA 2: Arqueo Diario de Efectivo con cuadre real y detección de días cubiertos en abonos agrupados
+      const cashRows = controlEfectivo.dailyCashRows.map(r => {
+        const dayTickets = ticketsMes.filter(c => extractDateOnly(c.fecha) === r.fecha);
+        const dayCashTotal = dayTickets.reduce((sum, c) => sum + Number(c.monto_efectivo || 0) + Number(c.propina_efectivo || 0), 0);
+        const dayLinkedTotal = dayTickets.reduce((sum, c) => {
+          const vInfo = ticketVinculacionMap.get(c.id);
+          return sum + (vInfo?.totalVinculado || 0);
+        }, 0);
+
+        const coveringDepositsSet = new Set<string>();
+        dayTickets.forEach(c => {
+          const deps = ticketToDepositsMap.get(c.id) || [];
+          deps.forEach(dep => {
+            const refPart = dep.referencia ? ` [Ref: ${dep.referencia}]` : '';
+            coveringDepositsSet.add(`${dep.fecha}${refPart} (${dep.concepto}): $${dep.montoAsociado.toLocaleString('es-MX', { minimumFractionDigits: 2 })}`);
+          });
+        });
+        const coveringDepositsText = Array.from(coveringDepositsSet).join('; ');
+
+        const efectivoCubierto = Math.max(r.totalDepositado, dayLinkedTotal);
+        const faltanteReal = Math.max(0, dayCashTotal - efectivoCubierto);
+
+        let estatusReal = 'Al Día';
+        if (dayCashTotal > 0) {
+          if (faltanteReal < 0.05) {
+            estatusReal = 'Cubierto 100% en Depósito(s)';
+          } else if (dayLinkedTotal > 0) {
+            estatusReal = `Parcialmente Cubierto ($${dayLinkedTotal.toLocaleString('es-MX', { minimumFractionDigits: 2 })} de $${dayCashTotal.toLocaleString('es-MX', { minimumFractionDigits: 2 })})`;
+          } else {
+            estatusReal = 'Pendiente por Depositar';
+          }
+        } else if (r.totalDepositado > 0) {
+          estatusReal = 'Depósito realizado (Abono acumulado de varios días)';
+        }
+
+        const ticketLinks = dayTickets.map(t => getTicketUrl(t.archivo_url)).filter(url => url && url !== '-').join('\n');
+
+        return {
+          'Fecha': r.fecha,
+          'Ventas Efectivo Parrot': dayCashTotal > 0 ? dayCashTotal : r.ventasEfectivoParrot,
+          'Depósitos Mismo Día (Banco/Ventanilla)': r.totalDepositado,
+          'Efectivo Cubierto por Depósitos (Vinculado)': dayLinkedTotal,
+          'Faltante Real por Depositar': faltanteReal,
+          'Estatus': estatusReal,
+          'Depósitos que Cubren este Día': coveringDepositsText || (r.totalDepositado > 0 ? 'Depositado el mismo día' : (dayCashTotal > 0 ? 'Sin depósito asignado' : 'Sin ventas')),
+          'Tickets del Día': dayTickets.map(t => formatTicketIdentificador(t)).join(', ') || '-',
+          'Enlaces Tickets': ticketLinks || '-'
+        };
+      });
+
+      // HOJA 3: Desglose detallado de depósitos de efectivo y todos los tickets pertenecientes a cada uno
+      const cashDepositosTicketsRows: any[] = [];
+      const cashDepositsList = depositosMes.filter(d => esMovimientoEfectivo(d.concepto || '') || d._esDepositoEfectivo);
+
+      cashDepositsList.forEach(d => {
+        const cdms = d._cdms || [];
+        const ticketsAsoc = d._ticketsAsociados || [];
+
+        const ticketMap = new Map<string, { ticket: any; montoAsociado: number }>();
+        ticketsAsoc.forEach((ta: any) => {
+          if (ta?.ticket?.id) {
+            ticketMap.set(ta.ticket.id, { ticket: ta.ticket, montoAsociado: ta.montoAsociado || 0 });
+          }
+        });
+        cdms.forEach((c: any) => {
+          const comp = c?.comprobantes_deposito || comprobantesMap.get(c?.comprobante_id);
+          if (comp?.id && !ticketMap.has(comp.id)) {
+            ticketMap.set(comp.id, {
+              ticket: comp,
+              montoAsociado: Number(c.monto_asociado || comp.monto_efectivo || comp.monto || 0)
+            });
+          }
+        });
+        const items = Array.from(ticketMap.values());
+
+        const montoDepositado = d._monto;
+        const sumaAsociada = items.reduce((sum, it) => sum + it.montoAsociado, 0);
+        const saldoLibre = Math.max(0, montoDepositado - sumaAsociada);
+        const estatusCuadre = Math.abs(montoDepositado - sumaAsociada) < 0.05
+          ? `Cuadrado 100% (${items.length} ticket${items.length === 1 ? '' : 's'})`
+          : items.length > 0
+          ? `Parcial (${items.length} tickets, Dif: $${(montoDepositado - sumaAsociada).toLocaleString('es-MX', { minimumFractionDigits: 2 })})`
+          : 'Sin tickets asignados';
+
+        const refBanco = extractReferenciaBancaria(d.referencia, d.concepto) || '-';
+
+        if (items.length > 0) {
+          items.forEach(it => {
+            const t = it.ticket;
+            const tTotalEfec = Number(t.monto_efectivo || 0) + Number(t.propina_efectivo || 0) || Number(t.monto || 0);
+            const link = getTicketUrl(t.archivo_url);
+
+            cashDepositosTicketsRows.push({
+              'Fecha Depósito Banco': d.fecha ? formatDate(d.fecha) : '',
+              'Referencia Banco': refBanco,
+              'Concepto Depósito Banco': d.concepto || '',
+              'Monto Depósito Banco': montoDepositado,
+              'Estatus Depósito': estatusCuadre,
+              'Total Asignado a Tickets': sumaAsociada,
+              'Saldo sin Asignar Depósito': saldoLibre,
+              'Fecha Ticket': t.fecha ? formatDate(t.fecha) : '',
+              'Ticket / Corte Vinculado': formatTicketIdentificador(t),
+              'Total Efectivo Ticket': tTotalEfec,
+              'Monto Asociado a este Depósito': it.montoAsociado,
+              'Enlace del Ticket': link
+            });
+          });
+        } else {
+          cashDepositosTicketsRows.push({
+            'Fecha Depósito Banco': d.fecha ? formatDate(d.fecha) : '',
+            'Referencia Banco': refBanco,
+            'Concepto Depósito Banco': d.concepto || '',
+            'Monto Depósito Banco': montoDepositado,
+            'Estatus Depósito': estatusCuadre,
+            'Total Asignado a Tickets': 0,
+            'Saldo sin Asignar Depósito': saldoLibre,
+            'Fecha Ticket': '-',
+            'Ticket / Corte Vinculado': 'Sin tickets asignados',
+            'Total Efectivo Ticket': 0,
+            'Monto Asociado a este Depósito': 0,
+            'Enlace del Ticket': '-'
+          });
+        }
+      });
 
       const tarjetasRows = comparativoTarjetas.dailyRows.map(r => ({
         'Fecha': r.fecha,
@@ -2149,17 +2534,19 @@ export function useFacturaPublicoGeneralData() {
         'UUID': f.uuid_fiscal || ''
       }));
 
+      // HOJA 6: Tickets y Cortes POS con descripción clara y enlace directo
       const detailRows = ticketsMes.map(c => {
         const efec = Number(c.monto_efectivo || 0);
         const parrot = hasParrot ? Number(c.monto_parrotpay || 0) : 0;
         const bbva = (Number(c.monto_debito || 0) + Number(c.monto_credito || 0) + Number(c.monto_amex || 0));
         const propinaTotal = Number(c.propina_efectivo || 0) + Number(c.propina_parrotpay || 0) + Number(c.propina_debito || 0) + Number(c.propina_credito || 0) + Number(c.propina_amex || 0);
         const isTercero = !!facturadosTerceros[c.id];
+        const ticketLink = getTicketUrl(c.archivo_url);
 
         return {
           'Fecha': c.fecha ? formatDate(c.fecha) : '',
           'Tipo Comprobante': c.tipo || 'Corte POS',
-          'Descripción / Folio': c.descripcion || `Corte POS ${c.fecha}`,
+          'Descripción / Folio': formatTicketIdentificador(c),
           'Venta Efectivo (Base)': efec,
           'Venta ParrotPay (Base)': parrot,
           'Tarjetas Débito (Sin Propina)': Number(c.monto_debito || 0),
@@ -2167,35 +2554,115 @@ export function useFacturaPublicoGeneralData() {
           'Tarjetas AMEX (Sin Propina)': Number(c.monto_amex || 0),
           'Total Tarjetas': bbva,
           'Propinas Excluidas': propinaTotal,
-          'Facturado a Tercero': isTercero ? 'SÍ' : 'NO'
+          'Facturado a Tercero': isTercero ? 'SÍ' : 'NO',
+          'Enlace del Ticket': ticketLink
         };
       });
 
-      const depositosRows = depositosMes.map(d => ({
-        'Fecha': d.fecha ? formatDate(d.fecha) : '',
-        'Concepto': d.concepto || '',
-        'Cuenta Bancaria': d.cuentas_bancarias?.nombre || '',
-        'Tipo': esMovimientoEfectivo(d.concepto) ? 'Efectivo / Practicaja' : 'Tarjetas / TPV / Otros',
-        'Monto Depósito': d._monto,
-        'Estatus Conciliación': d._statusName,
-        'Excluido Factura Global': d._isExcluded ? 'SÍ' : 'NO'
-      }));
+      // HOJA 7: Depósitos Bancarios con Referencia, Conciliado con Ticket y Enlace del Ticket
+      const depositosRows = depositosMes.map(d => {
+        const associatedTicketsMap = new Map<string, any>();
+        (d._ticketsAsociados || []).forEach((item: any) => {
+          if (item?.ticket?.id) associatedTicketsMap.set(item.ticket.id, item.ticket);
+        });
+        (d._cdms || []).forEach((c: any) => {
+          const comp = c?.comprobantes_deposito || comprobantesMap.get(c?.comprobante_id);
+          if (comp?.id) associatedTicketsMap.set(comp.id, comp);
+        });
+        if (associatedTicketsMap.size === 0 && d.pdf_ticket_url) {
+          associatedTicketsMap.set(`mov_ticket_${d.id}`, {
+            id: `mov_ticket_${d.id}`,
+            fecha: d.fecha,
+            descripcion: d.fecha ? `Cierre del día ${parseInt(d.fecha.split('-')[2], 10)}` : 'Ticket bancario adjunto',
+            archivo_url: d.pdf_ticket_url
+          });
+        }
+        const associatedTickets = Array.from(associatedTicketsMap.values());
 
+        const ticketDesc = associatedTickets.map(t => formatTicketIdentificador(t)).join(', ');
+        const ticketFecha = associatedTickets.map(t => t.fecha ? formatDate(t.fecha) : '').filter(Boolean).join(', ');
+        const ticketLinks = associatedTickets.map(t => getTicketUrl(t.archivo_url)).filter(u => u && u !== '-').join('\n');
+
+        // Determinar estatus claro de conciliación
+        let estatusConciliacion = d._statusName;
+        if (d._isNoVenta) {
+          estatusConciliacion = `No es Venta (${d._noVentaRazon || 'Excluido'})`;
+        } else if (d._isOtherMonth) {
+          estatusConciliacion = `Desfase (${d._otherMonthRazon || d._mesDetectado || 'Otro Mes'})`;
+        } else if (d._statusName === 'Sin Conciliar' || (!ticketDesc && !d._hasInvoice)) {
+          estatusConciliacion = d.comentarios 
+            ? `Sin Conciliar (${d.comentarios})` 
+            : (d.concepto ? `Sin Conciliar - ${d.concepto}` : 'Sin Conciliar');
+        }
+
+        // Determinar descripción / vinculación
+        let detalleConciliado = ticketDesc;
+        if (!detalleConciliado) {
+          if (d._hasInvoice) {
+            detalleConciliado = 'Facturado';
+          } else if (d._isNoVenta) {
+            detalleConciliado = `No es Venta: ${d._noVentaRazon || 'No deducible'}${d.concepto ? ` [${d.concepto}]` : ''}`;
+          } else if (d._isOtherMonth) {
+            detalleConciliado = `Desfase: ${d._otherMonthRazon || 'Movimiento de otro mes'}${d.concepto ? ` [${d.concepto}]` : ''}`;
+          } else {
+            detalleConciliado = `Sin conciliar - ${d.concepto || 'Sin ticket vinculado'}${d.comentarios ? ` (Nota: ${d.comentarios})` : ''}`;
+          }
+        }
+
+        return {
+          'Fecha': d.fecha ? formatDate(d.fecha) : '',
+          'Referencia': extractReferenciaBancaria(d.referencia, d.concepto) || '-',
+          'Concepto': d.concepto || '',
+          'Cuenta Bancaria': d.cuentas_bancarias?.nombre || '',
+          'Tipo': esMovimientoEfectivo(d.concepto) ? 'Efectivo / Practicaja' : 'Tarjetas / TPV / Otros',
+          'Monto Depósito': d._monto,
+          'Estatus Conciliación': estatusConciliacion,
+          'Conciliado con Ticket': detalleConciliado,
+          'Fecha Ticket': ticketFecha || '-',
+          'Enlace del Ticket': ticketLinks || '-',
+          'Excluido Factura Global': d._isExcluded ? 'SÍ' : 'NO'
+        };
+      });
+
+      // HOJA 8: Movimientos de Otro Mes (Desfase) con Referencia, Motivo Desfase y Liga del Ticket
       const desfaseRows = movimientosOtroMes.map(d => {
-        const cdms = d._cdms || [];
-        const ticketDesc = cdms.map((c: any) => c.comprobantes_deposito?.descripcion || `Ticket ${c.comprobante_id}`).join(', ');
-        const ticketFecha = cdms.map((c: any) => c.comprobantes_deposito?.fecha || '').join(', ');
+        const associatedTicketsMap = new Map<string, any>();
+        (d._ticketsAsociados || []).forEach((item: any) => {
+          if (item?.ticket?.id) associatedTicketsMap.set(item.ticket.id, item.ticket);
+        });
+        (d._cdms || []).forEach((c: any) => {
+          const comp = c?.comprobantes_deposito || comprobantesMap.get(c?.comprobante_id);
+          if (comp?.id) associatedTicketsMap.set(comp.id, comp);
+        });
+        if (associatedTicketsMap.size === 0 && d.pdf_ticket_url) {
+          associatedTicketsMap.set(`mov_ticket_${d.id}`, {
+            id: `mov_ticket_${d.id}`,
+            fecha: d.fecha,
+            descripcion: d.fecha ? `Cierre del día ${parseInt(d.fecha.split('-')[2], 10)}` : 'Ticket bancario adjunto',
+            archivo_url: d.pdf_ticket_url
+          });
+        }
+        const associatedTickets = Array.from(associatedTicketsMap.values());
+
+        const ticketDesc = associatedTickets.map(t => formatTicketIdentificador(t)).join(', ');
+        const ticketFecha = associatedTickets.map(t => t.fecha ? formatDate(t.fecha) : '').filter(Boolean).join(', ');
+        const ticketLinks = associatedTickets.map(t => getTicketUrl(t.archivo_url)).filter(u => u && u !== '-').join('\n');
+
+        const detalleVinculado = ticketDesc || (d._isNoVenta ? `No es Venta: ${d._noVentaRazon || 'Excluido'}${d.concepto ? ` [${d.concepto}]` : ''}` : (d.concepto ? `Sin ticket - ${d.concepto}` : 'Sin ticket asignado'));
+        const motivoDesfase = d._isNoVenta ? `No es Venta: ${d._noVentaRazon || 'Movimiento no deducible'}` : (d._otherMonthRazon || 'Desfase de período');
 
         return {
           'Fecha Banco': d.fecha ? formatDate(d.fecha) : '',
+          'Referencia Banco': extractReferenciaBancaria(d.referencia, d.concepto) || '-',
           'Concepto Banco': d.concepto || '',
           'Cuenta Bancaria': d.cuentas_bancarias?.nombre || 'BBVA',
           'Tipo': esMovimientoEfectivo(d.concepto) ? 'Efectivo / Practicaja' : 'Tarjetas / TPV',
           'Monto Depósito': d._monto,
-          'Ticket / Corte Vinculado': ticketDesc || 'Sin ticket asignado',
+          'Ticket / Corte Vinculado': detalleVinculado,
           'Fecha Ticket': ticketFecha || '-',
           'Mes Real Detectado': d._mesDetectado || 'Otro Mes',
-          'Motivo Desfase': d._otherMonthRazon || 'Desfase de período',
+          'Motivo Desfase': motivoDesfase,
+          'Liga del Ticket': ticketLinks || '-',
           'Excluido de Factura Global': d._isExcluded ? 'SÍ (Excluido)' : 'NO (Incluido)'
         };
       });
@@ -2205,6 +2672,9 @@ export function useFacturaPublicoGeneralData() {
 
       const wsCash = XLSX.utils.json_to_sheet(cashRows);
       XLSX.utils.book_append_sheet(wb, wsCash, 'Arqueo Efectivo y Depósitos');
+
+      const wsCashDetail = XLSX.utils.json_to_sheet(cashDepositosTicketsRows);
+      XLSX.utils.book_append_sheet(wb, wsCashDetail, 'Depósitos Efectivo y Tickets');
 
       const wsTarjetas = XLSX.utils.json_to_sheet(tarjetasRows);
       XLSX.utils.book_append_sheet(wb, wsTarjetas, 'Tarjetas Parrot vs BBVA');
@@ -2220,6 +2690,13 @@ export function useFacturaPublicoGeneralData() {
 
       const wsDesfase = XLSX.utils.json_to_sheet(desfaseRows);
       XLSX.utils.book_append_sheet(wb, wsDesfase, 'Movimientos de Otro Mes');
+
+      // Aplicar formato de moneda, hipervínculos interactivos y auto-ajuste de columnas
+      [wsSummary, wsCash, wsCashDetail, wsTarjetas, wsFacturas, wsDetail, wsDepositos, wsDesfase].forEach(sheet => {
+        applyCurrencyFormattingToSheet(sheet);
+        addHyperlinksToSheet(sheet);
+        autoFitColumns(sheet);
+      });
 
       XLSX.writeFile(wb, `Factura_Publico_General_${selectedMonth || 'Todos'}.xlsx`);
     } catch (err: any) {
@@ -2386,7 +2863,27 @@ export function useFacturaPublicoGeneralData() {
   const depositosNetosMes = Math.max(0, totalMontoDepositosMes - depositosMesPasadoExcluidos - depositosNoEsVentaExcluidos);
   const depositosPendientesDeVincular = totalMontoDepositosPendientesAsociar;
   const depositosVinculadosCuadrados = totalMontoDepositosVinculadosCuadrados;
-  const diferenciaBolsaCierre = bolsaTotalVentasMes - depositosNetosMes - ventasDiaSiguienteMes - montoTicketsPendientesDeposito;
+
+  // Puentes de conciliación entre Bolsa Total Ventas (sin propinas de tarjeta, con todo el efectivo POS)
+  // y los Depósitos Bancarios (que sí incluyen propinas de tarjeta BBVA y solo el efectivo ya depositado)
+  const ajusteRedondeoEfectivo = Math.max(
+    0,
+    Number((controlEfectivo.totalEfectivoConciliado - controlEfectivo.montoEfectivoEstadoCuenta).toFixed(2))
+  );
+  const efectivoPendienteReconocido = Number(
+    (controlEfectivo.efectivoPendienteTicketsMes + ajusteRedondeoEfectivo).toFixed(2)
+  );
+  const propinasTarjetasEnBanco = Number((comparativoTarjetas?.bbvaPropinasTarj || 0).toFixed(2));
+  const ingresosReconocidosMes = Number(
+    (
+      depositosNetosMes +
+      ventasDiaSiguienteMes +
+      montoTicketsPendientesDeposito +
+      efectivoPendienteReconocido -
+      propinasTarjetasEnBanco
+    ).toFixed(2)
+  );
+  const diferenciaBolsaCierre = Number((bolsaTotalVentasMes - ingresosReconocidosMes).toFixed(2));
 
   return {
     loading,
@@ -2427,6 +2924,7 @@ export function useFacturaPublicoGeneralData() {
     toggleFacturadoTercero,
     setMontoManualTercero,
     handleDownloadFile,
+    formatTicketIdentificador,
     exportFacturaPublicoExcel,
     formatCurrency,
     formatPeriodoCarga,
@@ -2480,6 +2978,7 @@ export function useFacturaPublicoGeneralData() {
     totalDepositosFacturadosMes,
     montoDepositosFacturadosMes,
     totalMontoExcluidoOtroMes,
+    totalMontoDepositosNoEsVenta,
     // Bolsa de Ventas y Conciliación de Desfase
     bolsaTotalVentasMes,
     depositosMesPasadoExcluidos,
@@ -2489,6 +2988,9 @@ export function useFacturaPublicoGeneralData() {
     depositosVinculadosCuadrados,
     ventasDiaSiguienteMes,
     setVentasDiaSiguienteMonto,
+    efectivoPendienteReconocido,
+    propinasTarjetasEnBanco,
+    ingresosReconocidosMes,
     diferenciaBolsaCierre,
     sugerenciaVentasFinDeMes,
     ticketsFinDeMesPendientes,

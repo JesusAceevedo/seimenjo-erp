@@ -21,9 +21,15 @@ interface FacturaTerceroResumen {
   serie_folio?: string | null;
   rfc_receptor?: string | null;
   rfc?: string | null;
+  _clienteRfc?: string | null;
   _clienteNombre?: string | null;
   cliente_nombre?: string | null;
   nombre_receptor?: string | null;
+  clientes?: {
+    rfc?: string | null;
+    nombre_local?: string | null;
+    razon_social?: string | null;
+  } | null;
   _subtotal?: number | string | null;
   subtotal?: number | string | null;
   _iva?: number | string | null;
@@ -230,7 +236,7 @@ export const ResumenContableTab: React.FC<ResumenContableTabProps> = ({
               {facturasTercerosMes.map(invoice => (
                 <tr key={invoice.id || invoice.uuid_fiscal}>
                   <td className="p-2.5 font-mono">{formatDate(invoice.fecha_emision || invoice.fecha)}<span className="block text-gray-400">{invoice.serie_folio || invoice.uuid_fiscal || '-'}</span></td>
-                  <td className="p-2.5">{invoice.rfc_receptor || invoice.rfc || '-'}<span className="block text-gray-400">{invoice._clienteNombre || invoice.cliente_nombre || invoice.nombre_receptor || 'Cliente'}</span></td>
+                  <td className="p-2.5">{invoice._clienteRfc || invoice.clientes?.rfc || invoice.rfc_receptor || invoice.rfc || '-'}<span className="block text-gray-400">{invoice._clienteNombre || invoice.clientes?.nombre_local || invoice.clientes?.razon_social || invoice.cliente_nombre || invoice.nombre_receptor || 'Cliente'}</span></td>
                   <td className="p-2.5 text-right font-mono">{formatCurrency(invoice._subtotal || invoice.subtotal || 0)}</td>
                   <td className="p-2.5 text-right font-mono">{formatCurrency(invoice._iva ?? invoice.iva_trasladado ?? 0)}</td>
                   <td className="p-2.5 text-right font-mono font-bold">{formatCurrency(invoice._total || invoice.total || 0)}</td>

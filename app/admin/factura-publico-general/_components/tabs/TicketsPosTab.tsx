@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { List, Search, ChevronLeft, ChevronRight } from 'lucide-react';
+import { List, Search, ChevronLeft, ChevronRight, FileText } from 'lucide-react';
 import { formatDate } from '@/lib/formatters';
 
 interface TicketsPosTabProps {
@@ -17,6 +17,7 @@ interface TicketsPosTabProps {
   facturadosTerceros: Record<string, boolean>;
   toggleFacturadoTercero: (id: string) => void;
   formatCurrency: (val: number | string | null | undefined) => string;
+  handleDownloadFile?: (filePath: string, fileName?: string) => void;
   loading: boolean;
 }
 
@@ -33,6 +34,7 @@ export const TicketsPosTab: React.FC<TicketsPosTabProps> = ({
   facturadosTerceros,
   toggleFacturadoTercero,
   formatCurrency,
+  handleDownloadFile,
   loading,
 }) => {
   // Paginación y búsqueda con debounce
@@ -144,6 +146,7 @@ export const TicketsPosTab: React.FC<TicketsPosTabProps> = ({
               <th className="p-3 text-right text-purple-600 dark:text-purple-400 font-black">🦜 ParrotPay (Facturable)</th>
               <th className="p-3 text-right text-blue-600 dark:text-blue-400 font-black">💳 Tarjetas BBVA (Facturable)</th>
               <th className="p-3 text-right text-gray-400">Propinas (Excluidas)</th>
+              <th className="p-3 text-center">Ticket / Comprobante</th>
               <th className="p-3 text-center">Factura de Terceros</th>
               <th className="p-3 text-center">Destino Factura</th>
             </tr>
@@ -185,6 +188,20 @@ export const TicketsPosTab: React.FC<TicketsPosTabProps> = ({
                     {formatCurrency(propinaTotal)}
                   </td>
                   <td className="p-3 text-center">
+                    {c.archivo_url ? (
+                      <button
+                        type="button"
+                        onClick={() => handleDownloadFile?.(c.archivo_url, `${c.descripcion || 'ticket'}.pdf`)}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-indigo-200 dark:border-indigo-800 bg-indigo-50/70 hover:bg-indigo-100 dark:bg-indigo-950/50 dark:hover:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300 text-[10px] font-bold cursor-pointer transition shadow-xs"
+                        title="Ver / Descargar archivo de ticket"
+                      >
+                        <FileText size={12} /> Ver Ticket
+                      </button>
+                    ) : (
+                      <span className="text-[10px] text-gray-400 italic">Sin ticket</span>
+                    )}
+                  </td>
+                  <td className="p-3 text-center">
                     <label className="inline-flex items-center gap-2 cursor-pointer select-none">
                       <input
                         type="checkbox"
@@ -217,7 +234,7 @@ export const TicketsPosTab: React.FC<TicketsPosTabProps> = ({
             })}
             {displayedTickets.length === 0 && (
               <tr>
-                <td colSpan={8} className="p-8 text-center text-gray-400 italic">
+                <td colSpan={9} className="p-8 text-center text-gray-400 italic">
                   {loading ? 'Cargando tickets...' : 'No se encontraron tickets para el período o filtros seleccionados.'}
                 </td>
               </tr>

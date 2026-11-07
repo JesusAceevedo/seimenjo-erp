@@ -62,6 +62,7 @@ export default function FacturaPublicoGeneralPage() {
     toggleFacturadoTercero,
     setMontoManualTercero,
     handleDownloadFile,
+    formatTicketIdentificador,
     exportFacturaPublicoExcel,
     formatCurrency,
     formatPeriodoCarga,
@@ -372,6 +373,7 @@ export default function FacturaPublicoGeneralPage() {
               facturadosTerceros={facturadosTerceros}
               toggleFacturadoTercero={toggleFacturadoTercero}
               formatCurrency={formatCurrency}
+              handleDownloadFile={handleDownloadFile}
               loading={loading}
             />
           ) : tabActiva === 'comparativos' ? (
@@ -417,6 +419,8 @@ export default function FacturaPublicoGeneralPage() {
               ticketsPendientesDeposito={ticketsPendientesDeposito}
               montoTicketsPendientesDeposito={montoTicketsPendientesDeposito}
               ticketsBbvaSinDeposito={ticketsBbvaSinDeposito}
+              handleDownloadFile={handleDownloadFile}
+              formatTicketIdentificador={formatTicketIdentificador}
             />
           ) : (
             <DepositosBancariosTab
@@ -427,8 +431,12 @@ export default function FacturaPublicoGeneralPage() {
               totalDepositosFacturadosMes={totalDepositosFacturadosMes}
               montoDepositosFacturadosMes={montoDepositosFacturadosMes}
               totalMontoExcluidoOtroMes={totalMontoExcluidoOtroMes}
+              totalMontoDepositosNoEsVenta={depositosNoEsVentaExcluidos}
               toggleExcludeMovement={toggleExcludeMovement}
+              toggleNoEsVentaMovement={toggleNoEsVentaMovement}
               formatCurrency={formatCurrency}
+              handleDownloadFile={handleDownloadFile}
+              formatTicketIdentificador={formatTicketIdentificador}
               loading={loading}
             />
           )}

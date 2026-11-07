@@ -128,49 +128,87 @@ export default function EgresosModule() {
       const empresaId = await getEmpresaId();
       if (!empresaId) return;
 
-      const { data: empData } = await supabase.from('empresas').select('rfc').eq('id', empresaId).maybeSingle();
-      if (empData?.rfc) setEmpresaRfc(empData.rfc);
+      // Carga paralela de todas las consultas esenciales mediante Promise.all
+      const [
+        empRes,
+        gFacRes,
+        cGastoRes,
+        fpRes,
+        movsRes,
+        concsRes,
+        cBanc,
+        estCatRes,
+        catMovRes,
+        compRes,
+        pPendRes
+      ] = await Promise.all([
+        supabase.from('empresas').select('rfc').eq('id', empresaId).maybeSingle(),
+        supabase
+          .from('gastos')
+          .select('*, proveedores(nombre_comercial, rfc), categorias_gasto(nombre), padre:gastos!gasto_padre_id(concepto), movimientos_bancarios(*, estatus_conciliacion_bancaria(*), cuentas_bancarias(*))')
+          .eq('empresa_id', empresaId)
+          .order('fecha_gasto', { ascending: false }),
+        supabase.from('categorias_gasto').select('*').or(`empresa_id.is.null,empresa_id.eq.${empresaId}`).order('nombre'),
+        supabase.from('formas_pago').select('*').order('codigo', { ascending: true }),
+        supabase
+          .from('movimientos_bancarios')
+          .select('*, estatus_conciliacion_bancaria(*), cuentas_bancarias(*), categorias_movimiento_bancario(*)')
+          .eq('empresa_id', empresaId)
+          .order('fecha', { ascending: false }),
+        supabase
+          .from('conciliaciones_bancarias')
+          .select(`
+            id,
+            movimiento_id,
+            gasto_id,
+            pedido_id,
+            monto_asociado,
+            gasto:gastos(id, concepto, monto, subtotal, iva_acreditable, es_deducible, uuid_fiscal, xml_url, pdf_url, ticket_url, proveedores(nombre_comercial, rfc), metodo_pago, fecha_gasto),
+            pedido:pedidos(id, numero_pedido, precio_total, clientes(nombre_local, rfc), fecha_pedido)
+          `)
+          .eq('empresa_id', empresaId),
+        fetchCuentasBancarias(empresaId),
+        supabase.from('estatus_conciliacion_bancaria').select('*'),
+        supabase.from('categorias_movimiento_bancario').select('*').order('nombre'),
+        supabase
+          .from('comprobantes_deposito')
+          .select('*, cuentas_bancarias(*), comprobantes_deposito_movimientos(*, movimientos_bancarios(*))')
+          .eq('empresa_id', empresaId)
+          .order('fecha', { ascending: false }),
+        supabase
+          .from('pedidos')
+          .select('id, numero_pedido, precio_total, creado_en, metodo_pago, clientes(nombre_local, rfc)')
+          .eq('empresa_id', empresaId)
+          .is('movimiento_bancario_id', null)
+          .order('creado_en', { ascending: false })
+      ]);
 
-      // 1. Gastos facturados y no deducibles
-      const { data: gFac } = await supabase
-        .from('gastos')
-        .select('*, proveedores(nombre_comercial, rfc), categorias_gasto(nombre), padre:gastos!gasto_padre_id(concepto), movimientos_bancarios(*, estatus_conciliacion_bancaria(*), cuentas_bancarias(*))')
-        .eq('empresa_id', empresaId)
-        .order('fecha_gasto', { ascending: false });
+      if (empRes.data?.rfc) setEmpresaRfc(empRes.data.rfc);
+      setCategoriasGasto(cGastoRes.data || []);
+      setFormasPago(fpRes.data || []);
+      setCuentasBancarias(cBanc || []);
+      setEstatusCatalog(estCatRes.data || []);
+      setCategoriasMovimiento(catMovRes.data || []);
+      setComprobantes(compRes.data || []);
+      setPedidosPendientes(pPendRes.data || []);
 
-      const { data: cGasto } = await supabase.from('categorias_gasto').select('*').or(`empresa_id.is.null,empresa_id.eq.${empresaId}`).order('nombre');
-      setCategoriasGasto(cGasto || []);
+      const gFac = gFacRes.data || [];
+      const movs = movsRes.data || [];
+      const allConcs = concsRes.data || [];
 
-      // 2. Formas de pago
-      const { data: fpData } = await supabase.from('formas_pago').select('*').order('codigo', { ascending: true });
-      setFormasPago(fpData || []);
+      // Derivar subconjuntos de gastos en memoria de forma instantánea sin re-consultar a la base de datos
+      const gReconcile = gFac.filter((g: any) => !g.movimiento_bancario_id && !g.gasto_padre_id);
+      setGastosReconciliables(gReconcile);
 
-      // 3. Movimientos Bancarios (Extractos)
-      const { data: movs } = await supabase
-        .from('movimientos_bancarios')
-        .select('*, estatus_conciliacion_bancaria(*), cuentas_bancarias(*), categorias_movimiento_bancario(*)')
-        .eq('empresa_id', empresaId)
-        .order('fecha', { ascending: false });
+      const gPend = gFac.filter((g: any) => !g.uuid_fiscal && !g.estatus_facturado && g.es_deducible && !g.gasto_padre_id);
+      setGastosPendientes(gPend);
 
-      // 3.1 Consultar relaciones de conciliaciones bancarias para vincular movimientos y gastos en memoria
-      const { data: concsData } = await supabase
-        .from('conciliaciones_bancarias')
-        .select(`
-          id,
-          movimiento_id,
-          gasto_id,
-          pedido_id,
-          monto_asociado,
-          gasto:gastos(id, concepto, monto, subtotal, iva_acreditable, es_deducible, uuid_fiscal, xml_url, pdf_url, ticket_url, proveedores(nombre_comercial, rfc), metodo_pago, fecha_gasto),
-          pedido:pedidos(id, numero_pedido, precio_total, clientes(nombre_local, rfc), fecha_pedido)
-        `)
-        .eq('empresa_id', empresaId);
-
-      const allConcs = concsData || [];
+      const fSueltas = gFac.filter((g: any) => !!g.uuid_fiscal && !g.gasto_padre_id);
+      setFacturasSueltas(fSueltas);
 
       // Enriquecer movimientos con sus conciliaciones bancarias
-      const enrichedMovs = (movs || []).map(m => {
-        const mConcs = allConcs.filter(c => c.movimiento_id === m.id);
+      const enrichedMovs = movs.map((m: any) => {
+        const mConcs = allConcs.filter((c: any) => c.movimiento_id === m.id);
         return {
           ...m,
           conciliaciones_bancarias: mConcs
@@ -179,9 +217,9 @@ export default function EgresosModule() {
       setMovimientosBancarios(enrichedMovs);
 
       // Enriquecer gastos con sus conciliaciones bancarias y movimientos asociados
-      const enrichedGastos = (gFac || []).map(g => {
-        const gConcs = allConcs.filter(c => c.gasto_id === g.id).map(c => {
-          const movItem = (movs || []).find(m => m.id === c.movimiento_id);
+      const enrichedGastos = gFac.map((g: any) => {
+        const gConcs = allConcs.filter((c: any) => c.gasto_id === g.id).map((c: any) => {
+          const movItem = movs.find((m: any) => m.id === c.movimiento_id);
           return {
             ...c,
             movimiento: movItem,
@@ -191,8 +229,8 @@ export default function EgresosModule() {
         });
 
         // Soporte para relación legacy 1:1 vía movimiento_bancario_id si no está en conciliaciones_bancarias
-        if (g.movimiento_bancario_id && !gConcs.some(c => c.movimiento_id === g.movimiento_bancario_id)) {
-          const legacyMov = (movs || []).find(m => m.id === g.movimiento_bancario_id) || g.movimientos_bancarios;
+        if (g.movimiento_bancario_id && !gConcs.some((c: any) => c.movimiento_id === g.movimiento_bancario_id)) {
+          const legacyMov = movs.find((m: any) => m.id === g.movimiento_bancario_id) || g.movimientos_bancarios;
           if (legacyMov) {
             gConcs.push({
               id: 'legacy-' + g.id,
@@ -212,66 +250,6 @@ export default function EgresosModule() {
         };
       });
       setGastosFacturados(enrichedGastos);
-
-      // 4. Cuentas Bancarias (Carga robusta con fallback global y auto-inicialización)
-      const cBanc = await fetchCuentasBancarias(empresaId);
-      setCuentasBancarias(cBanc || []);
-
-      // 5. Estatus y Categorías
-      const { data: estCat } = await supabase.from('estatus_conciliacion_bancaria').select('*');
-      setEstatusCatalog(estCat || []);
-
-      const { data: catMov } = await supabase.from('categorias_movimiento_bancario').select('*').order('nombre');
-      setCategoriasMovimiento(catMov || []);
-
-      // 6. Comprobantes
-      const { data: compData } = await supabase
-        .from('comprobantes_deposito')
-        .select('*, cuentas_bancarias(*), comprobantes_deposito_movimientos(*, movimientos_bancarios(*))')
-        .eq('empresa_id', empresaId)
-        .order('fecha', { ascending: false });
-      setComprobantes(compData || []);
-
-      // 7. Gastos reconciliables
-      const { data: gReconcile } = await supabase
-        .from('gastos')
-        .select('id, concepto, monto, fecha_gasto, xml_url, pdf_url, ticket_url, metodo_pago, uuid_fiscal, gasto_padre_id, folio_factura, subtotal, iva_acreditable, proveedores(nombre_comercial, rfc)')
-        .eq('empresa_id', empresaId)
-        .is('movimiento_bancario_id', null)
-        .is('gasto_padre_id', null)
-        .order('fecha_gasto', { ascending: false });
-      setGastosReconciliables(gReconcile || []);
-
-      // 8. Gastos pendientes de comprobar (manuales sin XML)
-      const { data: gPend } = await supabase
-        .from('gastos')
-        .select('id, concepto, monto, fecha_gasto')
-        .eq('empresa_id', empresaId)
-        .is('uuid_fiscal', null)
-        .eq('estatus_facturado', false)
-        .eq('es_deducible', true)
-        .is('gasto_padre_id', null)
-        .order('fecha_gasto', { ascending: false });
-      setGastosPendientes(gPend || []);
-
-      // 9. Facturas XML de gastos sueltas (para comprobación acumulada)
-      const { data: fSueltas } = await supabase
-        .from('gastos')
-        .select('*, proveedores(nombre_comercial, rfc)')
-        .eq('empresa_id', empresaId)
-        .not('uuid_fiscal', 'is', null)
-        .is('gasto_padre_id', null)
-        .order('fecha_gasto', { ascending: false });
-      setFacturasSueltas(fSueltas || []);
-
-      // 10. Pedidos pendientes
-      const { data: pPend } = await supabase
-        .from('pedidos')
-        .select('id, numero_pedido, precio_total, creado_en, metodo_pago, clientes(nombre_local, rfc)')
-        .eq('empresa_id', empresaId)
-        .is('movimiento_bancario_id', null)
-        .order('creado_en', { ascending: false });
-      setPedidosPendientes(pPend || []);
 
     } catch (err: any) {
       setMessage({ text: 'Error al cargar datos: ' + err.message, type: 'error' });
@@ -613,10 +591,10 @@ export default function EgresosModule() {
         <div className="mb-4 flex justify-between items-start md:items-center flex-col md:flex-row gap-4 shrink-0">
           <div>
             <h2 className="text-2xl font-extrabold flex items-center gap-3">
-              <Receipt className="text-rose-500 w-7 h-7" /> Gastos, Egresos & Facturas de Proveedores
+              <Receipt className="text-rose-500 w-7 h-7" /> Gastos, Facturas de Proveedores & Conciliación Bancaria
             </h2>
             <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 font-sans">
-              Control de facturas XML asignadas, gastos de movimiento de cuenta bancaria y compras no deducibles.
+              Control de facturas XML asignadas (CFDIs), subida de estados de cuenta y conciliación bancaria de extractos.
             </p>
           </div>
 

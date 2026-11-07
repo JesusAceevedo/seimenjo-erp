@@ -25,9 +25,11 @@ function parseDateOnly(dateStr: string | null | undefined): Date | null {
 // Helper to extract RFC from bank description (SAT CFDI RFC Regex)
 function extraerRfcDeConcepto(concepto: string): string | null {
   if (!concepto) return null;
-  const regex = /RFC:\s*([A-Z&Ñ]{3,4}\d{6}[A-Z0-9]{3})/i;
-  const match = concepto.match(regex);
-  return match ? match[1].toUpperCase() : null;
+  const explicitMatch = concepto.match(/RFC:\s*([A-Z&Ñ]{3,4}\d{6}[A-Z0-9]{3})/i);
+  if (explicitMatch) return explicitMatch[1].toUpperCase();
+
+  const generalMatch = concepto.match(/\b([A-Z&Ñ]{3,4}\d{6}[A-Z0-9]{3})\b/i);
+  return generalMatch ? generalMatch[1].toUpperCase() : null;
 }
 
 const BASIC_STATUSES = [
@@ -1167,53 +1169,8 @@ export async function toggleMovimientoVisibilidad(
     if (updateErr) throw updateErr;
     if (!movement) throw new Error('Movimiento no encontrado.');
 
-    if (modulo === 'egresos') {
-      if (visible) {
-        // Create matching Gasto if not exists
-        const { data: existingGasto } = await supabaseAdmin
-          .from('gastos')
-          .select('id')
-          .eq('movimiento_bancario_id', movimientoId)
-          .eq('empresa_id', empresaId)
-          .maybeSingle();
-
-        if (!existingGasto) {
-          let metodoPago = 'Transferencia';
-          if (esMovimientoEfectivo(movement.concepto)) {
-            metodoPago = 'Efectivo';
-          }
-
-          const { error: insertGastoErr } = await supabaseAdmin.from('gastos').insert({
-            fecha_gasto: movement.fecha,
-            concepto: movement.concepto,
-            monto: Math.abs(movement.monto),
-            metodo_pago: metodoPago,
-            movimiento_bancario_id: movimientoId,
-            estatus_facturado: false,
-            empresa_id: empresaId
-          });
-
-          if (insertGastoErr) throw insertGastoErr;
-        }
-      } else {
-        // Hide/Delete associated Gasto
-        const { error: deleteGastoErr } = await supabaseAdmin
-          .from('gastos')
-          .delete()
-          .eq('movimiento_bancario_id', movimientoId)
-          .eq('empresa_id', empresaId);
-
-        if (deleteGastoErr) throw deleteGastoErr;
-
-        // Delete any junction relationships
-        await supabaseAdmin
-          .from('conciliaciones_bancarias')
-          .delete()
-          .eq('movimiento_id', movimientoId)
-          .eq('empresa_id', empresaId);
-      }
-    }
-
+    // Solo actualizamos la visibilidad en movimientos_bancarios sin insertar ni borrar automáticamente en 'gastos'
+    // para evitar duplicar registros con los egresos que el usuario captura o sube manualmente.
     return { success: true };
   } catch (err: any) {
     console.error('Error toggling movement visibility:', err);
@@ -1310,25 +1267,7 @@ export async function autoConciliarMovimientos(token: string): Promise<{ success
             .eq('id', mov.id)
             .eq('empresa_id', empresaId);
 
-          const { data: existingGasto } = await supabaseAdmin
-            .from('gastos')
-            .select('id')
-            .eq('movimiento_bancario_id', mov.id)
-            .eq('empresa_id', empresaId)
-            .maybeSingle();
-
-          if (!existingGasto) {
-            await supabaseAdmin.from('gastos').insert({
-              fecha_gasto: mov.fecha,
-              concepto: mov.concepto,
-              monto: absMonto,
-              metodo_pago: 'Efectivo',
-              movimiento_bancario_id: mov.id,
-              estatus_facturado: hasTicket,
-              empresa_id: empresaId
-            });
-          }
-
+          // No insertamos automáticamente en la tabla 'gastos' para no duplicar los egresos operativos.
           matchedCount++;
           continue;
         }
@@ -1348,13 +1287,17 @@ export async function autoConciliarMovimientos(token: string): Promise<{ success
 
             // La fecha de la factura (gDate) es anterior o igual al pago (mDate)
             const validDate = gDate.getTime() <= mDate.getTime();
+            if (!validDate) return false;
 
-            if (mov.rfc_proveedor && g.proveedores?.rfc) {
-              const rfcMatch = mov.rfc_proveedor.toUpperCase() === g.proveedores.rfc.toUpperCase();
-              return validDate && rfcMatch;
-            }
+            // Validación estricta por RFC: exigir coincidencia para auto-conciliación segura
+            const rfcEnConcepto = extraerRfcDeConcepto(mov.concepto) || (mov.rfc_proveedor ? mov.rfc_proveedor.toUpperCase() : null);
+            const provRfc = (g.proveedores?.rfc || '').toUpperCase();
+            const rfcMatch = !!(rfcEnConcepto && provRfc && rfcEnConcepto === provRfc);
 
-            return validDate;
+            const provName = (g.proveedores?.nombre_comercial || g.proveedores?.razon_social || '').toUpperCase();
+            const nameMatch = provName.length > 3 && (mov.concepto || '').toUpperCase().includes(provName.substring(0, 8));
+
+            return rfcMatch || nameMatch;
           })
           .sort((a, b) => {
             const dateA = parseDateOnly(a.fecha_gasto || a.fecha)?.getTime() || 0;
@@ -1456,8 +1399,23 @@ export async function autoConciliarMovimientos(token: string): Promise<{ success
 
             // La fecha del pedido/factura (pDate) es anterior o igual al pago (mDate)
             const validDate = pDate.getTime() <= mDate.getTime();
+            if (!validDate) return false;
 
-            return validDate;
+            // Validación estricta por RFC, número de pedido o folio para evitar asignaciones erróneas
+            const rfcEnConcepto = extraerRfcDeConcepto(mov.concepto) || (mov.rfc_proveedor ? mov.rfc_proveedor.toUpperCase() : null);
+            const clientRfc = (p.clientes?.rfc || '').toUpperCase();
+            const rfcMatch = !!(rfcEnConcepto && clientRfc && rfcEnConcepto === clientRfc);
+
+            const numPed = p.numero_pedido ? String(p.numero_pedido) : null;
+            const numPedMatch = numPed ? new RegExp('\\b' + numPed + '\\b').test(mov.concepto || '') : false;
+
+            const folioFactura = p.folio_factura ? p.folio_factura.toUpperCase().trim() : null;
+            const folioMatch = folioFactura && folioFactura.length > 2 && (mov.concepto || '').toUpperCase().includes(folioFactura);
+
+            const clientName = (p.clientes?.nombre_local || p.clientes?.razon_social || '').toUpperCase();
+            const nameMatch = clientName.length > 3 && (mov.concepto || '').toUpperCase().includes(clientName.substring(0, 8));
+
+            return rfcMatch || numPedMatch || folioMatch || nameMatch;
           })
           .sort((a, b) => {
             const dateA = parseDateOnly(a.fecha_pedido || a.creado_en)?.getTime() || 0;
@@ -2093,25 +2051,7 @@ export async function aplicarPropuestasConciliacion(
           .eq('id', movId)
           .eq('empresa_id', empresaId);
 
-        const { data: existingGasto } = await supabaseAdmin
-          .from('gastos')
-          .select('id')
-          .eq('movimiento_bancario_id', movId)
-          .eq('empresa_id', empresaId)
-          .maybeSingle();
-
-        if (!existingGasto) {
-          await supabaseAdmin.from('gastos').insert({
-            fecha_gasto: prop.movimiento.fecha,
-            concepto: prop.movimiento.concepto,
-            monto: absMonto,
-            metodo_pago: 'Efectivo',
-            movimiento_bancario_id: movId,
-            estatus_facturado: hasTicket,
-            empresa_id: empresaId
-          });
-        }
-
+        // No insertamos automáticamente en la tabla 'gastos' para evitar registros duplicados.
         appliedCount++;
         continue;
       }

@@ -123,31 +123,104 @@ export default function VentasFacturadasModule() {
       const empresaId = await getEmpresaId();
       if (!empresaId) return;
 
+      // Sincronización en segundo plano no bloqueante para evitar congelar la carga de la página
+      getSessionToken()
+        .then((token) => {
+          if (token) {
+            sincronizarFacturasEmitidasDesdeDepositos(token).catch((err) =>
+              console.warn('Sync aviso (bg):', err)
+            );
+          }
+        })
+        .catch(() => {});
+
+      // Consultas paralelas en un solo Promise.all
+      const [
+        empRes,
+        vAllRes,
+        fSueltasRes,
+        fcEmitidasRes,
+        cliRes,
+        movsRes,
+        cBancRes,
+        estCatRes,
+        catMovRes,
+        fpRes,
+        compRes,
+      ] = await Promise.all([
+        supabase
+          .from('empresas')
+          .select('rfc')
+          .eq('id', empresaId)
+          .maybeSingle(),
+        supabase
+          .from('pedidos')
+          .select('*, clientes(nombre_local, rfc, email_facturacion, facturar_publico_general, es_anonimo), facturas_clientes(*)')
+          .eq('empresa_id', empresaId)
+          .neq('estatus_pago', 'Cancelado')
+          .order('creado_en', { ascending: false }),
+        supabase
+          .from('facturas_clientes')
+          .select('*, clientes(nombre_local, rfc, email_facturacion, facturar_publico_general, es_anonimo)')
+          .eq('empresa_id', empresaId)
+          .is('pedido_id', null)
+          .order('fecha_emision', { ascending: false }),
+        supabase
+          .from('facturas_clientes')
+          .select(`
+            *,
+            clientes(id, nombre_local, razon_social, rfc, email_facturacion, telefono),
+            pedidos(id, numero_pedido, precio_total, estatus_pago, creado_en),
+            formas_pago(id, nombre, codigo),
+            estatus_factura(id, nombre)
+          `)
+          .eq('empresa_id', empresaId)
+          .order('fecha_emision', { ascending: false }),
+        supabase
+          .from('clientes')
+          .select('id, nombre_local, rfc')
+          .eq('empresa_id', empresaId)
+          .order('nombre_local', { ascending: true }),
+        supabase
+          .from('movimientos_bancarios')
+          .select('*, estatus_conciliacion_bancaria(*), cuentas_bancarias(*)')
+          .eq('empresa_id', empresaId)
+          .order('fecha', { ascending: false }),
+        fetchCuentasBancarias(empresaId).then(async (res) => {
+          if (!res || res.length === 0) {
+            return (await getCuentasBancariasAction(empresaId)) as any;
+          }
+          return res;
+        }),
+        supabase.from('estatus_conciliacion_bancaria').select('*'),
+        supabase.from('categorias_movimiento_bancario').select('*').order('nombre'),
+        supabase.from('formas_pago').select('*').order('codigo', { ascending: true }),
+        supabase
+          .from('comprobantes_deposito')
+          .select('*, cuentas_bancarias(*), comprobantes_deposito_movimientos(*, movimientos_bancarios(*))')
+          .eq('empresa_id', empresaId)
+          .order('fecha', { ascending: false }),
+      ]);
+
       // 0. Datos de la empresa activa (RFC para validaciones CFDI)
-      const { data: empData } = await supabase
-        .from('empresas')
-        .select('rfc')
-        .eq('id', empresaId)
-        .maybeSingle();
+      const empData = empRes.data;
+      const activeRfc = (empData?.rfc || '').trim().toUpperCase();
       setEmpresaRfc(empData?.rfc || null);
 
-      // 1. Todas las Ventas (Pedidos)
-      const { data: vAll } = await supabase
-        .from('pedidos')
-        .select('*, clientes(nombre_local, rfc, email_facturacion, facturar_publico_general, es_anonimo), facturas_clientes(*)')
-        .eq('empresa_id', empresaId)
-        .neq('estatus_pago', 'Cancelado')
-        .order('creado_en', { ascending: false });
+      const isSelfReceptor = (clienteObj: any) => {
+        if (!activeRfc || activeRfc === 'XAXX010101000') return false;
+        const c = Array.isArray(clienteObj) ? clienteObj[0] : clienteObj;
+        const cliRfc = (c?.rfc || '').trim().toUpperCase();
+        return Boolean(cliRfc && cliRfc === activeRfc);
+      };
 
-      // 1b. Facturas sueltas de clientes (sin pedido asignado, p. ej. Facturas Globales Público en General)
-      const { data: fSueltas } = await supabase
-        .from('facturas_clientes')
-        .select('*, clientes(nombre_local, rfc, email_facturacion, facturar_publico_general, es_anonimo)')
-        .eq('empresa_id', empresaId)
-        .is('pedido_id', null)
-        .order('fecha_emision', { ascending: false });
+      // 1. Ventas y Facturas Sueltas
+      const vAll = vAllRes.data || [];
+      const fSueltas = fSueltasRes.data || [];
+      const vAllFiltered = vAll.filter((p: any) => !isSelfReceptor(p.clientes));
+      const fSueltasFiltered = fSueltas.filter((f: any) => !isSelfReceptor(f.clientes));
 
-      const sueltasFormatted = (fSueltas || []).map((f: any) => ({
+      const sueltasFormatted = fSueltasFiltered.map((f: any) => ({
         id: `suelta_${f.id}`,
         _esFacturaSuelta: true,
         factura_id: f.id,
@@ -162,74 +235,31 @@ export default function VentasFacturadasModule() {
         clientes: f.clientes,
         facturas_clientes: [f],
         movimiento_bancario_id: f.movimiento_bancario_id,
-        empresa_id: f.empresa_id
+        empresa_id: f.empresa_id,
       }));
 
-      setVentasFacturadas([...(vAll || []), ...sueltasFormatted]);
+      setVentasFacturadas([...vAllFiltered, ...sueltasFormatted]);
 
-      // 1c. Sincronizar y obtener todas las Facturas Emitidas de la empresa
-      try {
-        const token = await getSessionToken();
-        if (token) {
-          await sincronizarFacturasEmitidasDesdeDepositos(token);
-        }
-      } catch (syncErr) {
-        console.warn('Sync aviso:', syncErr);
-      }
+      // Facturas Emitidas
+      const fcEmitidas = fcEmitidasRes.data || [];
+      setFacturasEmitidas(fcEmitidas.filter((f: any) => !isSelfReceptor(f.clientes)));
 
-      const { data: fcEmitidas } = await supabase
-        .from('facturas_clientes')
-        .select(`
-          *,
-          clientes(id, nombre_local, razon_social, rfc, email_facturacion, telefono),
-          pedidos(id, numero_pedido, precio_total, estatus_pago, creado_en),
-          formas_pago(id, nombre, codigo),
-          estatus_factura(id, nombre)
-        `)
-        .eq('empresa_id', empresaId)
-        .order('fecha_emision', { ascending: false });
-      setFacturasEmitidas(fcEmitidas || []);
+      // Clientes
+      setClientes(cliRes.data || []);
 
-      // 2. Clientes
-      const { data: cliData } = await supabase
-        .from('clientes')
-        .select('id, nombre_local, rfc')
-        .eq('empresa_id', empresaId)
-        .order('nombre_local', { ascending: true });
-      setClientes(cliData || []);
+      // Movimientos Bancarios
+      setMovimientosBancarios(movsRes.data || []);
 
-      // 3. Movimientos Bancarios (Extractos)
-      const { data: movs } = await supabase
-        .from('movimientos_bancarios')
-        .select('*, estatus_conciliacion_bancaria(*), cuentas_bancarias(*)')
-        .eq('empresa_id', empresaId)
-        .order('fecha', { ascending: false });
-      setMovimientosBancarios(movs || []);
+      // Cuentas Bancarias
+      setCuentasBancarias(cBancRes || []);
 
-      // 4. Cuentas Bancarias (Carga robusta con fallback global y auto-inicialización)
-      let cBanc = await fetchCuentasBancarias(empresaId);
-      if (!cBanc || cBanc.length === 0) {
-        cBanc = (await getCuentasBancariasAction(empresaId)) as any;
-      }
-      setCuentasBancarias(cBanc || []);
+      // Estatus y Categorías
+      setEstatusCatalog(estCatRes.data || []);
+      setCategoriasMovimiento(catMovRes.data || []);
+      setFormasPago(fpRes.data || []);
 
-      // 5. Estatus y Categorías
-      const { data: estCat } = await supabase.from('estatus_conciliacion_bancaria').select('*');
-      setEstatusCatalog(estCat || []);
-
-      const { data: catMov } = await supabase.from('categorias_movimiento_bancario').select('*').order('nombre');
-      setCategoriasMovimiento(catMov || []);
-
-      const { data: fpData } = await supabase.from('formas_pago').select('*').order('codigo', { ascending: true });
-      setFormasPago(fpData || []);
-
-      // 6. Comprobantes y Fichas de Depósito / Tickets POS / Parrot
-      const { data: compData } = await supabase
-        .from('comprobantes_deposito')
-        .select('*, cuentas_bancarias(*), comprobantes_deposito_movimientos(*, movimientos_bancarios(*))')
-        .eq('empresa_id', empresaId)
-        .order('fecha', { ascending: false });
-      setComprobantes(compData || []);
+      // Comprobantes
+      setComprobantes(compRes.data || []);
 
     } catch (err: any) {
       setMessage({ text: 'Error al cargar datos: ' + err.message, type: 'error' });

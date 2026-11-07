@@ -66,7 +66,7 @@ export default function AdminSidebar({
 
   // Módulos que integran "Operación Administrativa"
   const adminOpSubItems = [
-    { module: 'gastos', path: '/admin/gastos', label: 'Gastos y Egresos', icon: FileText },
+    { module: 'gastos', path: '/admin/gastos', label: 'Gastos y Facturas Proveedor', icon: FileText },
     { module: 'ventas', path: '/admin/ventas', label: 'Ventas e Ingresos', icon: Layers },
     { module: 'conciliacion', path: '/admin/conciliacion', label: 'Conciliación Bancaria', icon: Landmark },
     { module: 'contabilidad', path: '/admin/contabilidad', label: 'Contabilidad y Pólizas', icon: Receipt },

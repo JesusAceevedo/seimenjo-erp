@@ -54,6 +54,8 @@ interface ComparativosTabProps {
   ticketsPendientesDeposito?: any[];
   montoTicketsPendientesDeposito?: number;
   ticketsBbvaSinDeposito?: any[];
+  handleDownloadFile?: (filePath: string, fileName?: string) => void;
+  formatTicketIdentificador?: (ticket: any) => string;
 }
 
 export const ComparativosTab: React.FC<ComparativosTabProps> = ({
@@ -98,6 +100,8 @@ export const ComparativosTab: React.FC<ComparativosTabProps> = ({
   ticketsPendientesDeposito = [],
   montoTicketsPendientesDeposito = 0,
   ticketsBbvaSinDeposito = [],
+  handleDownloadFile,
+  formatTicketIdentificador,
 }) => {
   return (
     <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl overflow-hidden shadow-sm flex-1 min-h-0 flex flex-col">
@@ -184,6 +188,8 @@ export const ComparativosTab: React.FC<ComparativosTabProps> = ({
           vincularComprobante={vincularComprobante}
           desvincularComprobante={desvincularComprobante}
           formatCurrency={formatCurrency}
+          handleDownloadFile={handleDownloadFile}
+          formatTicketIdentificador={formatTicketIdentificador}
         />
       ) : subTabComparativo === 'tarjetas' ? (
         <ComparativoTarjetasSubTab
@@ -233,6 +239,8 @@ export const ComparativosTab: React.FC<ComparativosTabProps> = ({
           ticketsPendientesDeposito={ticketsPendientesDeposito}
           montoTicketsPendientesDeposito={montoTicketsPendientesDeposito}
           ticketsBbvaSinDeposito={ticketsBbvaSinDeposito}
+          handleDownloadFile={handleDownloadFile}
+          formatTicketIdentificador={formatTicketIdentificador}
         />
       )}
 

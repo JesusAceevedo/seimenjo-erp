@@ -9,9 +9,10 @@ import { useThemeMode } from '../../../lib/useThemeMode';
 import { useSessionToken } from '../../../lib/hooks/useSessionToken';
 import { 
   Plus, Users, Sun, Moon, Eye, ChevronLeft, ChevronRight, FileText, Save, X, Receipt, Search,
-  TrendingUp, TrendingDown, Scale, CreditCard, Calendar, Filter, Trash2, Pencil, Link as LinkIcon
+  TrendingUp, TrendingDown, Scale, CreditCard, Calendar, Filter, Trash2, Pencil, Link as LinkIcon,
+  Landmark, CheckCircle, AlertCircle, ShoppingBag, ArrowRightLeft, Unlink, Sparkles
 } from 'lucide-react';
-import { toggleMovimientoVisibilidad, conciliarGastoEfectivoAutomatico } from '../gastos/reconciliationActions';
+import { conciliarGastoEfectivoAutomatico } from '../gastos/reconciliationActions';
 import { SAT_FORMAS_PAGO, getMetodoPagoLabel } from '../../../lib/constants/sat';
 import { formatDate } from '../../../lib/formatters';
 import DateInput from '@/components/ui/DateInput';
@@ -46,6 +47,41 @@ interface Gasto {
   movimiento_bancario_id?: string | null;
   gasto_padre_id?: string | null;
   padre?: { concepto: string } | null;
+  movimientos_bancarios?: {
+    id: string;
+    concepto?: string | null;
+    monto?: number | null;
+    fecha?: string | null;
+    referencia?: string | null;
+  } | null;
+}
+
+export interface VentaPedido {
+  id: string;
+  numero_pedido: number | string;
+  cliente_nombre?: string | null;
+  fecha_pedido?: string | null;
+  creado_en?: string | null;
+  precio_total: number;
+  estatus_pago?: string | null;
+  metodo_pago?: string | null;
+  movimiento_bancario_id?: string | null;
+  clientes?: {
+    nombre_local?: string | null;
+    razon_social?: string | null;
+    rfc?: string | null;
+  } | null;
+  movimientos_bancarios?: {
+    id: string;
+    concepto?: string | null;
+    monto?: number | null;
+    fecha?: string | null;
+    referencia?: string | null;
+    estatus_conciliacion_bancaria?: {
+      nombre?: string;
+      clave?: string;
+    } | null;
+  } | null;
 }
 
 export default function AdminGastos() {
@@ -55,23 +91,23 @@ export default function AdminGastos() {
   const handleEliminarGastoDefinitivo = async (gasto: Gasto) => {
     if (!confirm('¿Estás seguro de que deseas eliminar este gasto permanentemente?')) return;
     
-    if (gasto.movimiento_bancario_id) {
-      const token = await getSessionToken();
-      const res = await toggleMovimientoVisibilidad(gasto.movimiento_bancario_id, 'egresos', false, token);
-      if (res.success) {
-        setGastos(prev => prev.filter(g => g.id !== gasto.id));
-        fetchPeriodData();
-      } else {
-        alert(res.error || 'Error al eliminar el gasto conciliado.');
+    try {
+      if (gasto.movimiento_bancario_id) {
+        await supabase
+          .from('conciliaciones_bancarias')
+          .delete()
+          .eq('gasto_id', gasto.id);
+        await supabase
+          .from('movimientos_bancarios')
+          .update({ visible_egresos: false })
+          .eq('id', gasto.movimiento_bancario_id);
       }
-    } else {
       const { error } = await supabase.from('gastos').delete().eq('id', gasto.id);
-      if (!error) {
-        setGastos(prev => prev.filter(g => g.id !== gasto.id));
-        fetchPeriodData();
-      } else {
-        alert('Error al eliminar: ' + error.message);
-      }
+      if (error) throw error;
+      setGastos(prev => prev.filter(g => g.id !== gasto.id));
+      fetchPeriodData();
+    } catch (err: any) {
+      alert('Error al eliminar: ' + err.message);
     }
   };
 
@@ -236,6 +272,166 @@ export default function AdminGastos() {
     }
   };
 
+  // Subtabs del módulo (Egresos Operativos vs Ventas del Período)
+  const [subTab, setSubTab] = useState<'egresos' | 'ventas'>('egresos');
+  const [ventas, setVentas] = useState<VentaPedido[]>([]);
+  const [busquedaVenta, setBusquedaVenta] = useState('');
+  const [filtroEstatusVenta, setFiltroEstatusVenta] = useState('todos');
+  const [filtroBancoVenta, setFiltroBancoVenta] = useState('todos');
+  const [pageVentas, setPageVentas] = useState(0);
+
+  // Modal para asociar a movimiento bancario (gasto o venta)
+  const [asociarBancoModal, setAsociarBancoModal] = useState<{
+    isOpen: boolean;
+    tipo: 'gasto' | 'venta';
+    item: any | null;
+    candidates: any[];
+    search: string;
+    loading: boolean;
+  }>({
+    isOpen: false,
+    tipo: 'gasto',
+    item: null,
+    candidates: [],
+    search: '',
+    loading: false
+  });
+
+  const handleOpenAsociarBanco = async (tipo: 'gasto' | 'venta', item: any) => {
+    setAsociarBancoModal({
+      isOpen: true,
+      tipo,
+      item,
+      candidates: [],
+      search: '',
+      loading: true
+    });
+
+    try {
+      const empresaId = await getEmpresaId();
+      if (!empresaId) return;
+
+      let q = supabase
+        .from('movimientos_bancarios')
+        .select(`
+          id,
+          fecha,
+          concepto,
+          monto,
+          retiro,
+          deposito,
+          tipo_movimiento,
+          referencia,
+          cuenta_bancaria_id,
+          cuentas_bancarias(nombre),
+          estatus_conciliacion_bancaria(nombre, clave)
+        `)
+        .eq('empresa_id', empresaId)
+        .order('fecha', { ascending: false })
+        .limit(100);
+
+      if (tipo === 'gasto') {
+        q = q.or('tipo_movimiento.eq.Retiro,retiro.gt.0,monto.lt.0');
+      } else {
+        q = q.or('tipo_movimiento.eq.Deposito,deposito.gt.0,monto.gt.0');
+      }
+
+      const { data, error } = await q;
+      if (error) throw error;
+      setAsociarBancoModal(prev => ({ ...prev, candidates: data || [], loading: false }));
+    } catch (err: any) {
+      alert('Error al cargar movimientos bancarios: ' + err.message);
+      setAsociarBancoModal(prev => ({ ...prev, loading: false }));
+    }
+  };
+
+  const handleVincularBanco = async (mov: any) => {
+    if (!asociarBancoModal.item) return;
+    setAsociarBancoModal(prev => ({ ...prev, loading: true }));
+    try {
+      const empresaId = await getEmpresaId();
+      const item = asociarBancoModal.item;
+      const isGasto = asociarBancoModal.tipo === 'gasto';
+
+      if (isGasto) {
+        // Actualizar gasto
+        const { error: gErr } = await supabase
+          .from('gastos')
+          .update({ movimiento_bancario_id: mov.id })
+          .eq('id', item.id);
+        if (gErr) throw gErr;
+
+        // Registrar en conciliaciones_bancarias
+        await supabase
+          .from('conciliaciones_bancarias')
+          .upsert({
+            movimiento_id: mov.id,
+            gasto_id: item.id,
+            monto_asociado: Math.abs(Number(item.monto || 0)),
+            empresa_id: empresaId
+          });
+
+        await supabase
+          .from('movimientos_bancarios')
+          .update({ visible_egresos: true })
+          .eq('id', mov.id);
+      } else {
+        // Actualizar pedido (venta)
+        const { error: pErr } = await supabase
+          .from('pedidos')
+          .update({ movimiento_bancario_id: mov.id })
+          .eq('id', item.id);
+        if (pErr) throw pErr;
+
+        // Registrar en conciliaciones_bancarias
+        await supabase
+          .from('conciliaciones_bancarias')
+          .upsert({
+            movimiento_id: mov.id,
+            pedido_id: item.id,
+            monto_asociado: Math.abs(Number(item.precio_total || 0)),
+            empresa_id: empresaId
+          });
+
+        await supabase
+          .from('movimientos_bancarios')
+          .update({ visible_ingresos: true })
+          .eq('id', mov.id);
+      }
+
+      alert('Movimiento bancario vinculado correctamente.');
+      setAsociarBancoModal({
+        isOpen: false,
+        tipo: 'gasto',
+        item: null,
+        candidates: [],
+        search: '',
+        loading: false
+      });
+      fetchPeriodData();
+    } catch (err: any) {
+      alert('Error al vincular con banco: ' + err.message);
+      setAsociarBancoModal(prev => ({ ...prev, loading: false }));
+    }
+  };
+
+  const handleDesvincularBanco = async (tipo: 'gasto' | 'venta', item: any) => {
+    if (!confirm('¿Estás seguro de desvincular este registro de su movimiento bancario?')) return;
+    try {
+      if (tipo === 'gasto') {
+        await supabase.from('gastos').update({ movimiento_bancario_id: null }).eq('id', item.id);
+        await supabase.from('conciliaciones_bancarias').delete().eq('gasto_id', item.id);
+      } else {
+        await supabase.from('pedidos').update({ movimiento_bancario_id: null }).eq('id', item.id);
+        await supabase.from('conciliaciones_bancarias').delete().eq('pedido_id', item.id);
+      }
+      alert('Desvinculación bancaria realizada con éxito.');
+      fetchPeriodData();
+    } catch (err: any) {
+      alert('Error al desvincular: ' + err.message);
+    }
+  };
+
   const parentCandidates = useMemo(() => {
     if (!associationModal.childGasto) return [];
     const child = associationModal.childGasto;
@@ -321,8 +517,21 @@ export default function AdminGastos() {
       // 1. Consultar ventas del período
       let salesQuery = supabase
         .from('pedidos')
-        .select('precio_total, fecha_pedido, creado_en, estatus_pago')
-        .eq('empresa_id', empresaId);
+        .select(`
+          id,
+          numero_pedido,
+          cliente_nombre,
+          fecha_pedido,
+          creado_en,
+          precio_total,
+          estatus_pago,
+          metodo_pago,
+          movimiento_bancario_id,
+          clientes(nombre_local, razon_social, rfc),
+          movimientos_bancarios(id, concepto, monto, fecha, referencia, estatus_conciliacion_bancaria(nombre, clave))
+        `)
+        .eq('empresa_id', empresaId)
+        .order('fecha_pedido', { ascending: false });
 
       // Si no se aplica filtro (rango todo), solo consideramos el mes en curso para los ingresos
       let salesStartDateStr = startDateStr;
@@ -340,7 +549,10 @@ export default function AdminGastos() {
       const { data: salesData, error: salesError } = await salesQuery;
       if (salesError) throw salesError;
 
-      const totalSales = (salesData || [])
+      const validSales = (salesData || []) as unknown as VentaPedido[];
+      setVentas(validSales);
+
+      const totalSales = validSales
         .filter(p => p.estatus_pago !== 'Cancelado')
         .reduce((sum, p) => sum + Number(p.precio_total || 0), 0);
       setTotalVentasPeriodo(totalSales);
@@ -348,7 +560,13 @@ export default function AdminGastos() {
       // 2. Consultar egresos del período
       let gastosQuery = supabase
         .from('gastos')
-        .select(`*, proveedores(id, nombre_comercial, rfc), categorias_gasto(id, nombre), padre:gastos!gasto_padre_id(concepto)`)
+        .select(`
+          *,
+          proveedores(id, nombre_comercial, rfc),
+          categorias_gasto(id, nombre),
+          padre:gastos!gasto_padre_id(concepto),
+          movimientos_bancarios(id, concepto, monto, fecha, referencia)
+        `)
         .eq('empresa_id', empresaId)
         .order('fecha_gasto', { ascending: false });
 
@@ -363,7 +581,8 @@ export default function AdminGastos() {
       if (gastosError) throw gastosError;
 
       setGastos((gastosData || []) as Gasto[]);
-      setPage(0); // Reiniciar a la primera página al cambiar filtros
+      setPage(0);
+      setPageVentas(0);
     } catch (err) {
       console.error("Error al cargar datos del período:", err);
     } finally {
@@ -495,6 +714,37 @@ export default function AdminGastos() {
     return gastosFiltrados.slice(from, to);
   }, [gastosFiltrados, page, pageSize]);
 
+  // Ventas filtradas
+  const ventasFiltradas = useMemo(() => {
+    let list = ventas;
+    if (filtroEstatusVenta !== 'todos') {
+      list = list.filter(v => v.estatus_pago?.toLowerCase() === filtroEstatusVenta.toLowerCase());
+    }
+    if (filtroBancoVenta === 'conciliados') {
+      list = list.filter(v => !!v.movimiento_bancario_id);
+    } else if (filtroBancoVenta === 'pendientes') {
+      list = list.filter(v => !v.movimiento_bancario_id);
+    }
+    if (busquedaVenta.trim()) {
+      const term = busquedaVenta.toLowerCase().trim();
+      list = list.filter(v => {
+        const ped = String(v.numero_pedido || '').toLowerCase();
+        const cli = (v.cliente_nombre || v.clientes?.nombre_local || v.clientes?.razon_social || '').toLowerCase();
+        const rfc = (v.clientes?.rfc || '').toLowerCase();
+        const monto = String(v.precio_total || '');
+        const metodo = (v.metodo_pago || '').toLowerCase();
+        return ped.includes(term) || cli.includes(term) || rfc.includes(term) || monto.includes(term) || metodo.includes(term);
+      });
+    }
+    return list;
+  }, [ventas, filtroEstatusVenta, filtroBancoVenta, busquedaVenta]);
+
+  const paginatedVentas = useMemo(() => {
+    const from = pageVentas * pageSize;
+    const to = from + pageSize;
+    return ventasFiltradas.slice(from, to);
+  }, [ventasFiltradas, pageVentas, pageSize]);
+
   // --- LÓGICA DE GUARDADO MANUAL ---
   const handleGuardarGasto = async () => {
     if (!nuevoGasto.concepto || !nuevoGasto.monto || !nuevoGasto.categoria_id) {
@@ -593,10 +843,15 @@ export default function AdminGastos() {
         <main className="flex-1 flex flex-col p-8 w-full min-w-0 mx-auto overflow-hidden h-full compact-container">
 
           {/* HEADER */}
-          <div className="mb-6 flex justify-between items-start md:items-center flex-col md:flex-row gap-4 compact-margin">
-            <h2 className="text-2xl font-bold flex items-center gap-2 compact-title">
-              <Receipt className="text-blue-500" /> Registro de Egresos
-            </h2>
+          <div className="mb-5 flex justify-between items-start md:items-center flex-col md:flex-row gap-4 compact-margin">
+            <div>
+              <h2 className="text-2xl font-bold flex items-center gap-2 compact-title text-gray-900 dark:text-white">
+                <Receipt className="text-blue-500" /> Módulo de Egresos Operativos
+              </h2>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 font-sans">
+                Registro y control de gastos operativos independientes, proveedores y revisión con ventas del período.
+              </p>
+            </div>
             <div className="flex items-center gap-3">
               <button onClick={toggleDarkMode} className="p-2 rounded-lg bg-gray-200 dark:bg-gray-800 text-gray-600 dark:text-blue-400 hover:bg-gray-300 dark:hover:bg-gray-700 transition-colors">
                 {isDarkMode ? <Sun size={20} /> : <Moon size={20} />}
@@ -610,7 +865,7 @@ export default function AdminGastos() {
                   });
                   setIsModalOpen(true);
                 }} 
-                className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg flex items-center gap-2 font-semibold shadow-lg transition-colors"
+                className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg flex items-center gap-2 font-semibold shadow-lg transition-colors cursor-pointer"
               >
                 <Plus size={18} /> Registrar Gasto Manual
               </button>
@@ -618,14 +873,25 @@ export default function AdminGastos() {
           </div>
 
           {/* DASHBOARD KPIS */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-6 font-sans compact-kpi-grid">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-5 font-sans compact-kpi-grid">
             {/* Ventas */}
-            <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-5 rounded-2xl shadow-lg flex items-center gap-4 hover:border-blue-500/30 transition-all compact-kpi-card">
+            <div 
+              onClick={() => setSubTab('ventas')}
+              className={`bg-white dark:bg-gray-950 border p-5 rounded-2xl shadow-lg flex items-center gap-4 transition-all compact-kpi-card cursor-pointer ${
+                subTab === 'ventas' 
+                  ? 'border-emerald-500 ring-2 ring-emerald-500/20' 
+                  : 'border-gray-200 dark:border-gray-800 hover:border-emerald-500/40'
+              }`}
+              title="Haz clic para ver las ventas y pedidos de este período"
+            >
               <div className="p-3 bg-emerald-500/10 text-emerald-500 rounded-xl animate-pulse compact-kpi-icon">
                 <TrendingUp size={24} />
               </div>
               <div className="flex-1 min-w-0">
-                <span className="text-xs text-gray-500 dark:text-gray-400 font-semibold uppercase tracking-wider block">Total Ventas (Ingresos)</span>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-gray-500 dark:text-gray-400 font-semibold uppercase tracking-wider block">Total Ventas (Ingresos)</span>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 font-bold">Ver</span>
+                </div>
                 <span className="text-2xl font-black text-gray-900 dark:text-white block truncate compact-kpi-value">
                   {isLoading ? '...' : formatCurrency(totalVentasPeriodo)}
                 </span>
@@ -633,12 +899,23 @@ export default function AdminGastos() {
             </div>
 
             {/* Gastos */}
-            <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-5 rounded-2xl shadow-lg flex items-center gap-4 hover:border-blue-500/30 transition-all compact-kpi-card">
+            <div 
+              onClick={() => setSubTab('egresos')}
+              className={`bg-white dark:bg-gray-950 border p-5 rounded-2xl shadow-lg flex items-center gap-4 transition-all compact-kpi-card cursor-pointer ${
+                subTab === 'egresos' 
+                  ? 'border-blue-500 ring-2 ring-blue-500/20' 
+                  : 'border-gray-200 dark:border-gray-800 hover:border-blue-500/40'
+              }`}
+              title="Haz clic para ver los egresos operativos"
+            >
               <div className="p-3 bg-red-500/10 text-red-500 rounded-xl compact-kpi-icon">
                 <TrendingDown size={24} />
               </div>
               <div className="flex-1 min-w-0">
-                <span className="text-xs text-gray-500 dark:text-gray-400 font-semibold uppercase tracking-wider block">Total Gastos (Egresos)</span>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-gray-500 dark:text-gray-400 font-semibold uppercase tracking-wider block">Total Gastos (Egresos)</span>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-950/40 text-blue-700 dark:text-blue-400 font-bold">Ver</span>
+                </div>
                 <span className="text-2xl font-black text-gray-900 dark:text-white block truncate compact-kpi-value">
                   {isLoading ? '...' : formatCurrency(kpiGastos.total)}
                 </span>
@@ -681,7 +958,35 @@ export default function AdminGastos() {
             </div>
           </div>
 
-          {/* BUSCADOR Y FILTROS DE EGRESOS */}
+          {/* SUBTABS PRINCIPALES: EGRESOS OPERATIVOS VS VENTAS DEL PERÍODO */}
+          <div className="flex items-center gap-2 mb-4 border-b border-gray-200 dark:border-gray-800 pb-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => setSubTab('egresos')}
+              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                subTab === 'egresos'
+                  ? 'bg-blue-600 text-white shadow-sm'
+                  : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-900'
+              }`}
+            >
+              <Receipt size={15} /> 💸 Egresos y Gastos Operativos ({gastosFiltrados.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setSubTab('ventas')}
+              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                subTab === 'ventas'
+                  ? 'bg-emerald-600 text-white shadow-sm'
+                  : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-900'
+              }`}
+            >
+              <TrendingUp size={15} /> 📈 Ventas e Ingresos del Período ({ventasFiltradas.length})
+            </button>
+          </div>
+
+          {subTab === 'egresos' ? (
+            <>
+              {/* BUSCADOR Y FILTROS DE EGRESOS */}
           <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-4 rounded-xl shadow-md mb-6 flex gap-4 items-center flex-wrap font-sans compact-filter-bar">
             {/* Filtro Rango de Fechas */}
             <div className="flex items-center gap-2">
@@ -874,6 +1179,23 @@ export default function AdminGastos() {
                           </td>
                           <td className="p-4 compact-table-th-td text-center">
                             <div className="flex justify-center items-center gap-2">
+                              {g.movimiento_bancario_id ? (
+                                <button
+                                  onClick={() => handleDesvincularBanco('gasto', g)}
+                                  title="Desvincular del movimiento bancario"
+                                  className="p-1.5 text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-500/10 rounded transition-colors"
+                                >
+                                  <Unlink size={14} />
+                                </button>
+                              ) : (
+                                <button
+                                  onClick={() => handleOpenAsociarBanco('gasto', g)}
+                                  title="Asociar a Movimiento Bancario (Retiro)"
+                                  className="p-1.5 text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-500/10 rounded transition-colors"
+                                >
+                                  <Landmark size={14} />
+                                </button>
+                              )}
                               <button
                                 onClick={() => setAssociationModal({
                                   isOpen: true,
@@ -1032,8 +1354,376 @@ export default function AdminGastos() {
               </button>
             </div>
           </div>
+          </>
+        ) : (
+          <>
+            {/* BUSCADOR Y FILTROS DE VENTAS */}
+            <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 p-4 rounded-xl shadow-md mb-6 flex gap-4 items-center flex-wrap font-sans compact-filter-bar">
+              {/* Filtro Rango de Fechas */}
+              <div className="flex items-center gap-2">
+                <Calendar size={18} className="text-gray-400" />
+                <select 
+                  value={filtroRango}
+                  onChange={(e) => setFiltroRango(e.target.value)}
+                  className="border border-gray-200 dark:border-gray-800 p-2 rounded-lg text-sm bg-gray-50 dark:bg-gray-900 outline-none text-gray-900 dark:text-white focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
+                >
+                  <option value="mes_actual">Mes actual</option>
+                  <option value="mes">Últimos 30 días</option>
+                  <option value="semana">Última semana</option>
+                  <option value="rango">Rango personalizado</option>
+                  <option value="todo">Todas las ventas</option>
+                </select>
+              </div>
+
+              {/* Inputs de Rango Personalizado */}
+              {filtroRango === 'rango' && (
+                <div className="flex gap-2 items-center animate-in fade-in duration-200">
+                  <DateInput 
+                    value={fechaInicio}
+                    onChange={e => setFechaInicio(e.target.value)}
+                    style={{ colorScheme: isDarkMode ? 'dark' : 'light' }}
+                    className="border border-gray-200 dark:border-gray-800 p-2 rounded-lg text-sm bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-white focus:border-emerald-500 outline-none" 
+                  />
+                  <span className="text-xs text-gray-400 font-bold">a</span>
+                  <DateInput 
+                    value={fechaFin}
+                    onChange={e => setFechaFin(e.target.value)}
+                    style={{ colorScheme: isDarkMode ? 'dark' : 'light' }}
+                    className="border border-gray-200 dark:border-gray-800 p-2 rounded-lg text-sm bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-white focus:border-emerald-500 outline-none" 
+                  />
+                </div>
+              )}
+
+              {/* Filtro de Estatus de Pago */}
+              <div className="flex items-center gap-2">
+                <Filter size={18} className="text-gray-400" />
+                <select 
+                  value={filtroEstatusVenta}
+                  onChange={(e) => setFiltroEstatusVenta(e.target.value)}
+                  className="border border-gray-200 dark:border-gray-800 p-2 rounded-lg text-sm bg-gray-50 dark:bg-gray-900 outline-none text-gray-900 dark:text-white focus:border-emerald-500"
+                >
+                  <option value="todos">Todos los estatus</option>
+                  <option value="pagado">Pagado / Liquidado</option>
+                  <option value="pendiente">Pendiente</option>
+                  <option value="cancelado">Cancelado</option>
+                </select>
+              </div>
+
+              {/* Filtro de Conciliación Bancaria */}
+              <div className="flex items-center gap-2">
+                <Landmark size={18} className="text-gray-400" />
+                <select 
+                  value={filtroBancoVenta}
+                  onChange={(e) => setFiltroBancoVenta(e.target.value)}
+                  className="border border-gray-200 dark:border-gray-800 p-2 rounded-lg text-sm bg-gray-50 dark:bg-gray-900 outline-none text-gray-900 dark:text-white focus:border-emerald-500"
+                >
+                  <option value="todos">Todos (Banco)</option>
+                  <option value="conciliados">Conciliados con Banco</option>
+                  <option value="pendientes">Pendientes de Conciliar</option>
+                </select>
+              </div>
+
+              {/* Buscador de Ventas */}
+              <div className="relative flex-1 min-w-[250px]">
+                <Search className="absolute left-3 top-2.5 text-gray-400" size={16} />
+                <input 
+                  type="text" 
+                  placeholder="Buscar venta por pedido #, cliente, monto..."
+                  value={busquedaVenta}
+                  onChange={(e) => setBusquedaVenta(e.target.value)}
+                  className="w-full pl-9 pr-4 py-2 border border-gray-200 dark:border-gray-800 rounded-lg text-sm bg-gray-50 dark:bg-gray-900 outline-none text-gray-900 dark:text-white focus:border-emerald-500"
+                />
+              </div>
+            </div>
+
+            {/* TABLA DE VENTAS DEL PERÍODO */}
+            <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-xl shadow-md overflow-hidden flex-1 flex flex-col min-h-0 compact-table-container">
+              <div className="overflow-x-auto flex-1 overflow-y-auto">
+                <table className="w-full text-left border-collapse">
+                  <thead className="bg-gray-50 dark:bg-gray-900/60 sticky top-0 border-b border-gray-200 dark:border-gray-800 z-10">
+                    <tr className="text-[11px] font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                      <th className="p-3.5 pl-5">Fecha</th>
+                      <th className="p-3.5">Pedido #</th>
+                      <th className="p-3.5">Cliente / Receptor</th>
+                      <th className="p-3.5">Método de Pago</th>
+                      <th className="p-3.5 text-center">Estatus</th>
+                      <th className="p-3.5 text-right">Total Venta</th>
+                      <th className="p-3.5 text-center">Conciliación Bancaria</th>
+                      <th className="p-3.5 pr-5 text-center">Acciones</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100 dark:divide-gray-800/60 text-xs">
+                    {paginatedVentas.map((v) => {
+                      const isPaid = (v.estatus_pago || '').toLowerCase() === 'pagado';
+                      const isCancel = (v.estatus_pago || '').toLowerCase() === 'cancelado';
+                      const isLinkedBanco = !!v.movimiento_bancario_id;
+
+                      return (
+                        <tr key={v.id} className="hover:bg-gray-50/80 dark:hover:bg-gray-900/30 transition-colors">
+                          <td className="p-3.5 pl-5 whitespace-nowrap font-mono text-gray-600 dark:text-gray-300">
+                            {formatDate(v.fecha_pedido || v.creado_en)}
+                          </td>
+                          <td className="p-3.5 font-bold text-emerald-600 dark:text-emerald-400">
+                            #{v.numero_pedido || v.id.substring(0, 6)}
+                          </td>
+                          <td className="p-3.5">
+                            <div className="font-semibold text-gray-900 dark:text-white">
+                              {v.cliente_nombre || v.clientes?.nombre_local || v.clientes?.razon_social || 'Público en General'}
+                            </div>
+                            {v.clientes?.rfc && (
+                              <div className="font-mono text-[10px] text-gray-400">{v.clientes.rfc}</div>
+                            )}
+                          </td>
+                          <td className="p-3.5 text-gray-600 dark:text-gray-300">
+                            {v.metodo_pago || 'No especificado'}
+                          </td>
+                          <td className="p-3.5 text-center">
+                            <span className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                              isPaid 
+                                ? 'bg-emerald-100 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800/50'
+                                : isCancel
+                                  ? 'bg-red-100 dark:bg-red-950/40 text-red-700 dark:text-red-400 border border-red-200 dark:border-red-800/50'
+                                  : 'bg-amber-100 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-800/50'
+                            }`}>
+                              {v.estatus_pago || 'Pendiente'}
+                            </span>
+                          </td>
+                          <td className="p-3.5 text-right font-black text-sm text-emerald-600 dark:text-emerald-400">
+                            +{formatCurrency(v.precio_total)}
+                          </td>
+                          <td className="p-3.5 text-center">
+                            {isLinkedBanco ? (
+                              <div className="inline-flex flex-col items-center">
+                                <span 
+                                  title={v.movimientos_bancarios ? `Depósito: ${v.movimientos_bancarios.concepto} (${formatCurrency(v.movimientos_bancarios.monto || 0)})` : 'Conciliado con depósito bancario'}
+                                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 dark:bg-emerald-900/30 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/50"
+                                >
+                                  <CheckCircle size={11} /> Conciliado Banco
+                                </span>
+                                {v.movimientos_bancarios?.fecha && (
+                                  <span className="text-[9px] text-gray-400 font-mono mt-0.5">
+                                    {formatDate(v.movimientos_bancarios.fecha)}
+                                  </span>
+                                )}
+                              </div>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 border border-gray-200 dark:border-gray-700">
+                                <AlertCircle size={10} /> Pendiente Banco
+                              </span>
+                            )}
+                          </td>
+                          <td className="p-3.5 pr-5 text-center">
+                            <div className="flex justify-center items-center gap-1.5">
+                              {isLinkedBanco ? (
+                                <button
+                                  onClick={() => handleDesvincularBanco('venta', v)}
+                                  title="Desvincular venta de su depósito bancario"
+                                  className="p-1.5 text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-500/10 rounded transition-colors cursor-pointer"
+                                >
+                                  <Unlink size={14} />
+                                </button>
+                              ) : (
+                                <button
+                                  onClick={() => handleOpenAsociarBanco('venta', v)}
+                                  className="px-2.5 py-1 text-xs font-semibold bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800 rounded-lg hover:bg-emerald-100 flex items-center gap-1 shadow-xs cursor-pointer transition-colors"
+                                  title="Asociar esta venta a un depósito del estado de cuenta"
+                                >
+                                  <Landmark size={12} /> Asociar a Banco
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {ventasFiltradas.length === 0 && (
+                      <tr>
+                        <td colSpan={8} className="p-8 text-center text-gray-500 dark:text-gray-400">
+                          {isLoading ? 'Cargando ventas...' : ventas.length === 0 ? 'No hay ventas registradas en este período.' : 'Ninguna venta coincide con los filtros aplicados.'}
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* PAGINACIÓN VENTAS */}
+              <div className="flex items-center justify-between p-4 border-t border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-950">
+                <button 
+                  disabled={pageVentas === 0} 
+                  onClick={() => setPageVentas(pageVentas - 1)} 
+                  className="flex items-center gap-2 px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-900 disabled:opacity-50 text-sm font-medium transition-colors cursor-pointer"
+                >
+                  <ChevronLeft size={16} /> Anterior
+                </button>
+                <span className="text-sm font-medium text-gray-600 dark:text-gray-400">
+                  Página {pageVentas + 1} de {Math.max(1, Math.ceil(ventasFiltradas.length / pageSize))}
+                </span>
+                <button 
+                  disabled={(pageVentas + 1) * pageSize >= ventasFiltradas.length} 
+                  onClick={() => setPageVentas(pageVentas + 1)} 
+                  className="flex items-center gap-2 px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-900 disabled:opacity-50 text-sm font-medium transition-colors cursor-pointer"
+                >
+                  Siguiente <ChevronRight size={16} />
+                </button>
+              </div>
+            </div>
+          </>
+        )}
 
         </main>
+
+        {/* MODAL DE ASOCIAR A MOVIMIENTO BANCARIO (GASTO O VENTA) */}
+        {asociarBancoModal.isOpen && asociarBancoModal.item && (
+          <div className="fixed inset-0 bg-black/60 dark:bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+            <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-2xl w-full max-w-3xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
+              {/* Header */}
+              <div className="p-5 border-b border-gray-200 dark:border-gray-800 flex justify-between items-center bg-gray-50 dark:bg-gray-900">
+                <div>
+                  <h3 className="text-base font-bold text-gray-900 dark:text-white flex items-center gap-2">
+                    <Landmark className={asociarBancoModal.tipo === 'gasto' ? 'text-amber-500' : 'text-emerald-500'} size={20} />
+                    Asociar a Movimiento Bancario ({asociarBancoModal.tipo === 'gasto' ? 'Retiro / Egreso' : 'Depósito / Ingreso'})
+                  </h3>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                    Vincula este registro con su correspondiente transacción del estado de cuenta bancario.
+                  </p>
+                </div>
+                <button 
+                  onClick={() => setAsociarBancoModal({ isOpen: false, tipo: 'gasto', item: null, candidates: [], search: '', loading: false })}
+                  className="p-1 rounded-lg text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 cursor-pointer"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              {/* Info del registro objetivo */}
+              <div className="p-4 bg-blue-50/60 dark:bg-blue-950/20 border-b border-blue-100 dark:border-blue-900/30 flex justify-between items-center flex-wrap gap-3">
+                <div>
+                  <span className="text-[10px] font-bold text-blue-600 dark:text-blue-400 uppercase tracking-wider block">
+                    {asociarBancoModal.tipo === 'gasto' ? 'Gasto Seleccionado' : 'Venta Seleccionada'}
+                  </span>
+                  <p className="text-sm font-extrabold text-gray-900 dark:text-white">
+                    {asociarBancoModal.tipo === 'gasto' 
+                      ? (asociarBancoModal.item.concepto || 'Sin descripción')
+                      : `Pedido #${asociarBancoModal.item.numero_pedido} - ${asociarBancoModal.item.cliente_nombre || asociarBancoModal.item.clientes?.nombre_local || 'General'}`
+                    }
+                  </p>
+                  <p className="text-xs text-gray-500">
+                    Fecha: {formatDate(asociarBancoModal.item.fecha_gasto || asociarBancoModal.item.fecha_pedido || asociarBancoModal.item.creado_en)}
+                  </p>
+                </div>
+                <div className="text-right">
+                  <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block">Monto a Conciliar</span>
+                  <span className={`text-xl font-black ${asociarBancoModal.tipo === 'gasto' ? 'text-red-600 dark:text-red-400' : 'text-emerald-600 dark:text-emerald-400'}`}>
+                    {formatCurrency(asociarBancoModal.tipo === 'gasto' ? asociarBancoModal.item.monto : asociarBancoModal.item.precio_total)}
+                  </span>
+                </div>
+              </div>
+
+              {/* Buscador de movimientos */}
+              <div className="p-3 border-b border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-950">
+                <div className="relative">
+                  <Search className="absolute left-3 top-2.5 text-gray-400" size={16} />
+                  <input
+                    type="text"
+                    placeholder="Filtrar por concepto bancario, referencia o monto..."
+                    value={asociarBancoModal.search}
+                    onChange={(e) => setAsociarBancoModal(prev => ({ ...prev, search: e.target.value }))}
+                    className="w-full pl-9 pr-4 py-2 border border-gray-200 dark:border-gray-800 rounded-lg text-sm bg-gray-50 dark:bg-gray-900 outline-none text-gray-900 dark:text-white focus:border-blue-500"
+                  />
+                </div>
+              </div>
+
+              {/* Lista de candidatos */}
+              <div className="flex-1 overflow-y-auto p-4 space-y-2">
+                {asociarBancoModal.loading ? (
+                  <div className="text-center py-8 text-gray-400 text-xs">Cargando movimientos bancarios disponibles...</div>
+                ) : (() => {
+                  const targetMonto = Math.abs(Number(asociarBancoModal.tipo === 'gasto' ? asociarBancoModal.item.monto : asociarBancoModal.item.precio_total));
+                  const filteredCandidates = asociarBancoModal.candidates.filter(c => {
+                    if (!asociarBancoModal.search.trim()) return true;
+                    const s = asociarBancoModal.search.toLowerCase();
+                    const con = (c.concepto || '').toLowerCase();
+                    const ref = (c.referencia || '').toLowerCase();
+                    const monto = String(c.monto || c.retiro || c.deposito || '');
+                    const bco = (c.cuentas_bancarias?.nombre || '').toLowerCase();
+                    return con.includes(s) || ref.includes(s) || monto.includes(s) || bco.includes(s);
+                  });
+
+                  if (filteredCandidates.length === 0) {
+                    return (
+                      <div className="text-center py-8 text-gray-400 text-xs">
+                        No se encontraron movimientos bancarios de tipo {asociarBancoModal.tipo === 'gasto' ? 'retiro' : 'depósito'} que coincidan con la búsqueda.
+                      </div>
+                    );
+                  }
+
+                  return filteredCandidates.map((mov) => {
+                    const movMonto = Math.abs(Number(mov.monto || mov.retiro || mov.deposito || 0));
+                    const isExactMatch = Math.abs(movMonto - targetMonto) < 0.05;
+
+                    return (
+                      <div
+                        key={mov.id}
+                        className={`p-3 rounded-xl border flex items-center justify-between gap-3 transition-colors ${
+                          isExactMatch 
+                            ? 'bg-emerald-50/40 dark:bg-emerald-950/20 border-emerald-300 dark:border-emerald-800' 
+                            : 'bg-white dark:bg-gray-900 border-gray-200 dark:border-gray-800 hover:border-gray-300'
+                        }`}
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className="font-mono text-[11px] text-gray-500 dark:text-gray-400">{formatDate(mov.fecha)}</span>
+                            {mov.cuentas_bancarias?.nombre && (
+                              <span className="text-[10px] px-1.5 py-0.2 rounded bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 font-semibold">
+                                {mov.cuentas_bancarias.nombre}
+                              </span>
+                            )}
+                            {isExactMatch && (
+                              <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-emerald-500 text-white font-bold animate-pulse">
+                                <Sparkles size={10} /> Coincidencia exacta de monto
+                              </span>
+                            )}
+                          </div>
+                          <p className="font-semibold text-xs text-gray-900 dark:text-white truncate" title={mov.concepto}>
+                            {mov.concepto || 'Sin concepto'}
+                          </p>
+                          {mov.referencia && (
+                            <p className="font-mono text-[10px] text-gray-400 truncate">Ref: {mov.referencia}</p>
+                          )}
+                        </div>
+                        <div className="text-right shrink-0">
+                          <span className={`text-sm font-extrabold block ${asociarBancoModal.tipo === 'gasto' ? 'text-red-600 dark:text-red-400' : 'text-emerald-600 dark:text-emerald-400'}`}>
+                            {formatCurrency(movMonto)}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleVincularBanco(mov)}
+                            disabled={asociarBancoModal.loading}
+                            className="mt-1 px-3 py-1 rounded-lg text-xs font-bold bg-blue-600 hover:bg-blue-500 text-white shadow-xs transition-colors cursor-pointer disabled:opacity-50"
+                          >
+                            Vincular a este movimiento
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  });
+                })()}
+              </div>
+
+              {/* Footer */}
+              <div className="p-4 border-t border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-900 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => setAsociarBancoModal({ isOpen: false, tipo: 'gasto', item: null, candidates: [], search: '', loading: false })}
+                  className="px-4 py-2 rounded-xl text-xs font-bold text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-800 transition-colors cursor-pointer"
+                >
+                  Cerrar
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* MODAL DE CAPTURA MANUAL */}
         {isModalOpen && (

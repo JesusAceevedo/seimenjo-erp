@@ -201,12 +201,13 @@ export const WizardConfiguracionGlobalModal: React.FC<WizardConfiguracionGlobalM
 
   const filteredDepositos = useMemo(() => {
     return (depositosMes || []).filter(d => {
-      const isExcl = !!d._isExcluded || !!d._isOtherMonth;
+      const isExcl = !!d._isExcluded;
+      const isCandidateOtherMonth = !!d._isExcluded || !!d._isOtherMonth;
       const isNoVenta = !!d._isNoVenta;
-      const isCuadrado = !!d._vinculadoCuadrado100;
-      const isPendiente = !isCuadrado && !isExcl && !isNoVenta;
+      const isCuadrado = !!d._vinculadoCuadrado100 && !isExcl && !isNoVenta;
+      const isPendiente = !d._vinculadoCuadrado100 && !isExcl && !isNoVenta;
 
-      if (filtroDeposito === 'mes_pasado' && !isExcl) return false;
+      if (filtroDeposito === 'mes_pasado' && !isCandidateOtherMonth) return false;
       if (filtroDeposito === 'no_es_venta' && !isNoVenta) return false;
       if (filtroDeposito === 'mes_actual' && (isExcl || isNoVenta)) return false;
       if (filtroDeposito === 'cuadrados_ticket' && !isCuadrado) return false;
@@ -365,8 +366,17 @@ export const WizardConfiguracionGlobalModal: React.FC<WizardConfiguracionGlobalM
             <div className="space-y-4 animate-in fade-in duration-150">
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 bg-amber-500/10 border border-amber-500/20 p-4 rounded-2xl">
                 <div>
-                  <h4 className="text-sm font-black text-amber-800 dark:text-amber-200 flex items-center gap-2">
-                    <Calendar size={18} className="text-amber-500" /> Paso 1: Configurar Días No Trabajados en el Mes
+                  <h4 className="text-sm font-black text-amber-800 dark:text-amber-200 flex items-center gap-2 flex-wrap">
+                    <Calendar size={18} className="text-amber-500" />
+                    <span>Paso 1: Configurar Días No Trabajados en el Mes</span>
+                    <span className="px-2.5 py-0.5 rounded-full text-xs font-black bg-amber-100 text-amber-900 dark:bg-amber-900/40 dark:text-amber-200 border border-amber-300 dark:border-amber-700 capitalize">
+                      {(() => {
+                        const [y, m] = (selectedMonth || '').split('-').map(Number);
+                        if (!y || !m) return selectedMonth;
+                        const label = new Date(y, m - 1, 1).toLocaleDateString('es-MX', { month: 'long', year: 'numeric' });
+                        return `${label} (${auditoriaDiasMes.totalDiasMes} días)`;
+                      })()}
+                    </span>
                   </h4>
                   <p className="text-xs text-gray-600 dark:text-gray-400 mt-1 max-w-2xl leading-relaxed">
                     Haz clic sobre los días en los que el establecimiento estuvo <strong>cerrado o no laboró</strong> (días de descanso, festivos, remodelación). Para estos días <strong>no se exigirán tickets</strong> en la auditoría fiscal.
@@ -691,7 +701,7 @@ export const WizardConfiguracionGlobalModal: React.FC<WizardConfiguracionGlobalM
                         ? 'text-amber-600 dark:text-amber-400'
                         : 'text-sky-600 dark:text-sky-400'
                     }`}>
-                      {formatCurrency(diferenciaBolsaCierre)}
+                      {Math.abs(diferenciaBolsaCierre) <= 1 ? '$0.00 (Cuadrado)' : formatCurrency(diferenciaBolsaCierre)}
                     </span>
                   </div>
                 </div>
@@ -718,13 +728,22 @@ export const WizardConfiguracionGlobalModal: React.FC<WizardConfiguracionGlobalM
                     </span>
                   </div>
 
-                  {/* Ventas Ingresadas al Día Siguiente */}
+                  {/* Ventas Ingresadas al Día Siguiente y Ajustes de Base */}
                   <div className="p-3 rounded-xl bg-purple-50/70 dark:bg-purple-955/20 border border-purple-200 dark:border-purple-800/50">
-                    <span className="text-[10px] font-sans font-bold text-purple-600 dark:text-purple-400 uppercase block">3. (-) Ventas Día Siguiente</span>
+                    <span className="text-[10px] font-sans font-bold text-purple-600 dark:text-purple-400 uppercase block">3. (+/-) Cortes Flotantes y Base</span>
                     <span className="text-base font-black text-purple-700 dark:text-purple-300 mt-1 block">
-                      -{formatCurrency(ventasDiaSiguienteMes)}
+                      {formatCurrency(
+                        -(
+                          ventasDiaSiguienteMes +
+                          montoTicketsPendientesDeposito +
+                          Number((controlEfectivo?.efectivoPendienteTicketsMes || 0) + Math.max(0, (controlEfectivo?.totalEfectivoConciliado || 0) - (controlEfectivo?.montoEfectivoEstadoCuenta || 0))) -
+                          Number(comparativoTarjetas?.bbvaPropinasTarj || 0)
+                        )
+                      )}
                     </span>
-                    <span className="text-[9.5px] font-sans text-gray-500 mt-0.5 block">Acreditadas post-cierre</span>
+                    <span className="text-[9.5px] font-sans text-gray-500 mt-0.5 block">
+                      Cortes pend. (-{formatCurrency(montoTicketsPendientesDeposito + ventasDiaSiguienteMes)}) | Efvo. pend. (-{formatCurrency((controlEfectivo?.efectivoPendienteTicketsMes || 0) + Math.max(0, (controlEfectivo?.totalEfectivoConciliado || 0) - (controlEfectivo?.montoEfectivoEstadoCuenta || 0)))}) | Prop. Tarj. (+{formatCurrency(comparativoTarjetas?.bbvaPropinasTarj || 0)})
+                    </span>
                   </div>
 
                   {/* Estado del Balance */}
@@ -1079,7 +1098,7 @@ export const WizardConfiguracionGlobalModal: React.FC<WizardConfiguracionGlobalM
                             filtroDeposito === 'mes_actual' ? 'bg-white dark:bg-gray-700 text-emerald-700 dark:text-emerald-300 shadow-2xs' : 'text-gray-500'
                           }`}
                         >
-                          Mes Actual ({depositosMes.filter(d => !d._isExcluded && !d._isOtherMonth && !d._isNoVenta).length})
+                          Mes Actual ({depositosMes.filter(d => !d._isExcluded && !d._isNoVenta).length})
                         </button>
                         <button
                           type="button"
@@ -1088,7 +1107,7 @@ export const WizardConfiguracionGlobalModal: React.FC<WizardConfiguracionGlobalM
                             filtroDeposito === 'mes_pasado' ? 'bg-white dark:bg-gray-700 text-amber-700 dark:text-amber-300 shadow-2xs' : 'text-gray-500'
                           }`}
                         >
-                          Mes Pasado ({depositosMes.filter(d => d._isExcluded || d._isOtherMonth).length})
+                          Mes Pasado ({depositosMes.filter(d => d._isExcluded).length}/{depositosMes.filter(d => d._isExcluded || d._isOtherMonth).length})
                         </button>
                         <button
                           type="button"
@@ -1106,7 +1125,7 @@ export const WizardConfiguracionGlobalModal: React.FC<WizardConfiguracionGlobalM
                             filtroDeposito === 'cuadrados_ticket' ? 'bg-white dark:bg-gray-700 text-sky-700 dark:text-sky-300 shadow-2xs' : 'text-gray-500'
                           }`}
                         >
-                          Cuadrados 100% ({depositosMes.filter(d => d._vinculadoCuadrado100).length})
+                          Cuadrados 100% ({depositosMes.filter(d => d._vinculadoCuadrado100 && !d._isExcluded && !d._isNoVenta).length})
                         </button>
                         <button
                           type="button"
@@ -1121,9 +1140,10 @@ export const WizardConfiguracionGlobalModal: React.FC<WizardConfiguracionGlobalM
                     </div>
 
                     {/* Lista de Depósitos */}
-                    <div className="max-h-[340px] overflow-y-auto divide-y divide-gray-100 dark:divide-gray-800/60 font-mono text-xs">
+                    <div className="max-h-[calc(100vh-360px)] min-h-[340px] overflow-y-auto divide-y divide-gray-100 dark:divide-gray-800/60 font-mono text-xs">
                       {filteredDepositos.map(d => {
-                        const isExcl = !!d._isExcluded || !!d._isOtherMonth;
+                        const isExcl = !!d._isExcluded;
+                        const isSuggestedOtherMonth = !!d._isOtherMonth && !isExcl;
                         const isNoVenta = !!d._isNoVenta;
                         const isCuadrado100 = !!d._vinculadoCuadrado100;
                         const isIncompleto = !!d._vinculadoIncompleto;
@@ -1143,6 +1163,8 @@ export const WizardConfiguracionGlobalModal: React.FC<WizardConfiguracionGlobalM
                                 ? 'bg-rose-50/60 dark:bg-rose-955/20 border-l-4 border-l-rose-500'
                                 : isExcl
                                 ? 'bg-amber-50/60 dark:bg-amber-955/20 border-l-4 border-l-amber-500'
+                                : isSuggestedOtherMonth
+                                ? 'bg-amber-50/25 dark:bg-amber-955/10 border-l-4 border-l-amber-300'
                                 : isCuadrado100
                                 ? 'bg-sky-50/40 dark:bg-sky-955/15 border-l-4 border-l-sky-500'
                                 : isIncompleto
@@ -1155,24 +1177,35 @@ export const WizardConfiguracionGlobalModal: React.FC<WizardConfiguracionGlobalM
                                 <span className="font-bold text-gray-900 dark:text-white">
                                   {d.fecha ? formatDate(d.fecha) : 'Fecha N/A'}
                                 </span>
-                                {isNoVenta && (
+                                {isNoVenta ? (
                                   <span className="px-2 py-0.5 rounded-full text-[9px] font-black uppercase bg-rose-100 text-rose-800 dark:bg-rose-955 dark:text-rose-300">
-                                    🚫 No es Venta: {d._noVentaRazon || 'Reembolso'}
+                                    🚫 Excluido (No es Venta: {d._noVentaRazon || 'Reembolso'})
                                   </span>
-                                )}
-                                {isExcl && !isNoVenta && (
+                                ) : isExcl ? (
                                   <span className="px-2 py-0.5 rounded-full text-[9px] font-black uppercase bg-amber-100 text-amber-800 dark:bg-amber-955 dark:text-amber-300">
-                                    🔁 Deducido: Mes Pasado
+                                    🔁 Deducido: Mes Pasado (Activo)
+                                  </span>
+                                ) : isSuggestedOtherMonth ? (
+                                  <span className="px-2 py-0.5 rounded-full text-[9px] font-black uppercase bg-gray-200 text-gray-700 dark:bg-gray-800 dark:text-amber-300 border border-amber-400/60">
+                                    ⚠️ Detectado Mes Pasado (Desactivado · Sin descontar)
+                                  </span>
+                                ) : isCuadrado100 ? (
+                                  <span className="px-2 py-0.5 rounded-full text-[9px] font-black uppercase bg-emerald-100 text-emerald-800 dark:bg-emerald-955 dark:text-emerald-300 flex items-center gap-1 font-sans">
+                                    <Check size={11} /> Venta Confirmada · 100% Cuadrado ({d._ticketAsociado?.descripcion || 'Ticket'})
+                                  </span>
+                                ) : (
+                                  <span className="px-2 py-0.5 rounded-full text-[9px] font-black uppercase bg-emerald-50 text-emerald-700 dark:bg-emerald-955/60 dark:text-emerald-300 font-sans">
+                                    ✓ Venta del Mes
                                   </span>
                                 )}
-                                {isCuadrado100 && (
+                                {isCuadrado100 && (isExcl || isSuggestedOtherMonth) && (
                                   <span className="px-2 py-0.5 rounded-full text-[9px] font-black uppercase bg-sky-100 text-sky-800 dark:bg-sky-955 dark:text-sky-300 flex items-center gap-1 font-sans">
                                     <Check size={11} /> 100% Cuadrado: {d._ticketAsociado?.descripcion || 'Ticket'}
                                   </span>
                                 )}
-                                {hasKeywordNotice && !isExcl && (
+                                {hasKeywordNotice && !isExcl && !isNoVenta && (
                                   <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-purple-100 text-purple-800 dark:bg-purple-955 dark:text-purple-300 font-sans">
-                                    🏷️ {d._otherMonthRazon || 'Desfase Detectado'}
+                                    🏷️ {d._otherMonthRazon || 'Posible Desfase Detectado'}
                                   </span>
                                 )}
                               </div>
@@ -1202,111 +1235,134 @@ export const WizardConfiguracionGlobalModal: React.FC<WizardConfiguracionGlobalM
                                 )}
                               </div>
 
-                              {/* BOTÓN: NO ES VENTA (REEMBOLSO / TRASPASO) */}
-                              <div className="relative">
-                                {isNoVenta ? (
+                              {/* BOTÓN DE MES PASADO (SIEMPRE VISIBLE CON ESTADO ACTIVO / DESACTIVADO CLARO) */}
+                              {!isNoVenta && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (toggleExcludeMovement) {
+                                      toggleExcludeMovement(d.id);
+                                    } else if (toggleManualOtherMonth) {
+                                      toggleManualOtherMonth(d.id);
+                                    }
+                                  }}
+                                  className={`px-2.5 py-1 rounded-xl text-[11px] font-bold transition cursor-pointer flex items-center gap-1 shadow-2xs font-sans ${
+                                    isExcl
+                                      ? 'bg-amber-500 hover:bg-amber-600 text-white'
+                                      : isSuggestedOtherMonth
+                                      ? 'bg-white dark:bg-gray-800 border-2 border-amber-400 text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-950/40'
+                                      : 'bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 hover:border-amber-500 text-gray-600 dark:text-gray-300 hover:text-amber-600'
+                                  }`}
+                                  title={
+                                    isExcl
+                                      ? 'Actualmente ACTIVO (se está descontando como Mes Pasado). Haz clic para desactivar.'
+                                      : 'Actualmente DESACTIVADO (no se descuenta como Mes Pasado). Haz clic para activar.'
+                                  }
+                                >
+                                  {isExcl ? (
+                                    <>
+                                      <Check size={11} />
+                                      <span>Mes Pasado (Activo)</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Clock size={11} />
+                                      <span>Mes Pasado (Desactivado)</span>
+                                    </>
+                                  )}
+                                </button>
+                              )}
+
+                              {/* ACCIONES DE CLASIFICACIÓN / RESTAURACIÓN */}
+                              {isNoVenta ? (
+                                <button
+                                  type="button"
+                                  onClick={() => toggleNoEsVentaMovement && toggleNoEsVentaMovement(d.id)}
+                                  className="px-2.5 py-1 rounded-xl text-[11px] font-bold bg-rose-600 hover:bg-rose-700 text-white transition cursor-pointer flex items-center gap-1 shadow-2xs font-sans"
+                                  title="Restaurar este depósito como venta activa del mes"
+                                >
+                                  <RotateCcw size={11} />
+                                  <span>No es Venta (Activo) · Desactivar</span>
+                                </button>
+                              ) : (
+                                <div className="relative font-sans">
                                   <button
                                     type="button"
-                                    onClick={() => toggleNoEsVentaMovement && toggleNoEsVentaMovement(d.id)}
-                                    className="px-2.5 py-1 rounded-xl text-[11px] font-bold bg-rose-600 hover:bg-rose-700 text-white transition cursor-pointer flex items-center gap-1 shadow-2xs"
-                                    title="Deshacer 'No es Venta' y reintegrar a ventas activas"
+                                    onClick={() => setOpenNoEsVentaId(openNoEsVentaId === d.id ? null : d.id)}
+                                    className="px-2.5 py-1 rounded-xl text-[11px] font-semibold bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 hover:border-gray-400 text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white transition cursor-pointer flex items-center gap-1"
+                                    title="Opciones para excluir este depósito si fue venta del mes pasado, reembolso o traspaso"
                                   >
-                                    <RotateCcw size={11} />
-                                    <span>Deshacer No Venta</span>
+                                    <span>Excluir / Reclasificar</span>
+                                    <ChevronDown size={11} />
                                   </button>
-                                ) : (
-                                  <div className="flex items-center">
-                                    <button
-                                      type="button"
-                                      onClick={() => setOpenNoEsVentaId(openNoEsVentaId === d.id ? null : d.id)}
-                                      className="px-2.5 py-1 rounded-xl text-[11px] font-bold bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 hover:border-rose-400 text-gray-700 dark:text-gray-300 hover:text-rose-600 transition cursor-pointer flex items-center gap-1 shadow-2xs"
-                                      title="Clasificar como reembolso, traspaso u otro no operativo para restarlo del saldo"
-                                    >
-                                      <Ban size={11} className="text-rose-500" />
-                                      <span>No es Venta</span>
-                                      <ChevronDown size={10} />
-                                    </button>
 
-                                    {openNoEsVentaId === d.id && (
-                                      <div className="absolute right-0 top-full mt-1 w-52 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl shadow-xl z-30 p-1.5 space-y-1 font-sans text-xs">
-                                        <div className="px-2 py-1 text-[10px] font-bold text-gray-400 uppercase border-b border-gray-100 dark:border-gray-700">
-                                          Seleccionar Motivo
-                                        </div>
-                                        <button
-                                          type="button"
-                                          onClick={() => {
-                                            if (toggleNoEsVentaMovement) toggleNoEsVentaMovement(d.id, 'Reembolso');
-                                            setOpenNoEsVentaId(null);
-                                          }}
-                                          className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-955/30 text-gray-700 dark:text-gray-200 font-semibold flex items-center gap-1.5"
-                                        >
-                                          <span>💸</span> Reembolso de Proveedor
-                                        </button>
-                                        <button
-                                          type="button"
-                                          onClick={() => {
-                                            if (toggleNoEsVentaMovement) toggleNoEsVentaMovement(d.id, 'Traspaso');
-                                            setOpenNoEsVentaId(null);
-                                          }}
-                                          className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-955/30 text-gray-700 dark:text-gray-200 font-semibold flex items-center gap-1.5"
-                                        >
-                                          <span>🔄</span> Traspaso entre Cuentas
-                                        </button>
-                                        <button
-                                          type="button"
-                                          onClick={() => {
-                                            if (toggleNoEsVentaMovement) toggleNoEsVentaMovement(d.id, 'Aportación');
-                                            setOpenNoEsVentaId(null);
-                                          }}
-                                          className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-955/30 text-gray-700 dark:text-gray-200 font-semibold flex items-center gap-1.5"
-                                        >
-                                          <span>🏦</span> Préstamo / Aportación
-                                        </button>
-                                        <button
-                                          type="button"
-                                          onClick={() => {
-                                            if (toggleNoEsVentaMovement) toggleNoEsVentaMovement(d.id, 'Ajuste No Operativo');
-                                            setOpenNoEsVentaId(null);
-                                          }}
-                                          className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-955/30 text-gray-700 dark:text-gray-200 font-semibold flex items-center gap-1.5"
-                                        >
-                                          <span>⚙️</span> Otro Ajuste No Operativo
-                                        </button>
+                                  {openNoEsVentaId === d.id && (
+                                    <div className="absolute right-0 top-full mt-1 w-60 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl shadow-xl z-30 p-1.5 space-y-1 text-xs">
+                                      <div className="px-2 py-1 text-[10px] font-bold text-gray-400 uppercase border-b border-gray-100 dark:border-gray-700">
+                                        Desfase de Fecha
                                       </div>
-                                    )}
-                                  </div>
-                                )}
-                              </div>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          if (toggleExcludeMovement) {
+                                            toggleExcludeMovement(d.id);
+                                          } else if (toggleManualOtherMonth) {
+                                            toggleManualOtherMonth(d.id);
+                                          }
+                                          setOpenNoEsVentaId(null);
+                                        }}
+                                        className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-amber-50 dark:hover:bg-amber-955/30 text-amber-700 dark:text-amber-300 font-semibold flex items-center gap-1.5"
+                                      >
+                                        <Clock size={12} /> {isExcl ? 'Desactivar Mes Pasado' : 'Activar como Venta del Mes Pasado'}
+                                      </button>
 
-                              {/* BOTÓN: ES DEL MES PASADO */}
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  if (toggleExcludeMovement) {
-                                    toggleExcludeMovement(d.id);
-                                  } else if (toggleManualOtherMonth) {
-                                    toggleManualOtherMonth(d.id);
-                                  }
-                                }}
-                                className={`px-2.5 py-1 rounded-xl text-[11px] font-bold transition cursor-pointer flex items-center gap-1 shadow-2xs ${
-                                  isExcl
-                                    ? 'bg-amber-500 hover:bg-amber-600 text-white'
-                                    : 'bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 hover:border-amber-500 text-gray-700 dark:text-gray-300 hover:text-amber-600'
-                                }`}
-                                title={isExcl ? 'Haz clic para restaurarlo a las ventas de este mes' : 'Marcar como venta del mes pasado para restarlo'}
-                              >
-                                {isExcl ? (
-                                  <>
-                                    <RotateCcw size={11} />
-                                    <span>Mes Pasado (Activo)</span>
-                                  </>
-                                ) : (
-                                  <>
-                                    <Clock size={11} />
-                                    <span>Es del Mes Pasado</span>
-                                  </>
-                                )}
-                              </button>
+                                      <div className="px-2 py-1 pt-1.5 text-[10px] font-bold text-gray-400 uppercase border-t border-b border-gray-100 dark:border-gray-700">
+                                        Marcar como "No es Venta"
+                                      </div>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          if (toggleNoEsVentaMovement) toggleNoEsVentaMovement(d.id, 'Reembolso');
+                                          setOpenNoEsVentaId(null);
+                                        }}
+                                        className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-955/30 text-gray-700 dark:text-gray-200 font-semibold flex items-center gap-1.5"
+                                      >
+                                        <span>💸</span> Reembolso de Proveedor
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          if (toggleNoEsVentaMovement) toggleNoEsVentaMovement(d.id, 'Traspaso');
+                                          setOpenNoEsVentaId(null);
+                                        }}
+                                        className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-955/30 text-gray-700 dark:text-gray-200 font-semibold flex items-center gap-1.5"
+                                      >
+                                        <span>🔄</span> Traspaso entre Cuentas
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          if (toggleNoEsVentaMovement) toggleNoEsVentaMovement(d.id, 'Aportación');
+                                          setOpenNoEsVentaId(null);
+                                        }}
+                                        className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-955/30 text-gray-700 dark:text-gray-200 font-semibold flex items-center gap-1.5"
+                                      >
+                                        <span>🏦</span> Préstamo / Aportación
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          if (toggleNoEsVentaMovement) toggleNoEsVentaMovement(d.id, 'Ajuste No Operativo');
+                                          setOpenNoEsVentaId(null);
+                                        }}
+                                        className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-955/30 text-gray-700 dark:text-gray-200 font-semibold flex items-center gap-1.5"
+                                      >
+                                        <span>⚙️</span> Otro Ajuste No Operativo
+                                      </button>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
                             </div>
                           </div>
                         );
@@ -1902,56 +1958,141 @@ export const WizardConfiguracionGlobalModal: React.FC<WizardConfiguracionGlobalM
               PASO 4: VENTAS FACTURADAS A TERCEROS (DEDUCCIÓN CFDI)
           ════════════════════════════════════════════════════════════════════════ */}
           {currentStep === 4 && (
-            <div className="space-y-4 animate-in fade-in duration-150">
-              <div className="bg-purple-500/10 border border-purple-500/20 p-4 rounded-2xl flex items-start gap-3">
-                <UserCheck className="text-purple-600 dark:text-purple-400 shrink-0 mt-0.5" size={20} />
-                <div>
-                  <h4 className="text-sm font-black text-purple-900 dark:text-purple-100">
-                    Paso 4: Descuento de Facturación a Terceros (Clientes con RFC)
-                  </h4>
-                  <p className="text-xs text-gray-600 dark:text-gray-400 mt-1 leading-relaxed">
-                    Las ventas generadas por el punto de venta que ya fueron facturadas individualmente a clientes con su propio RFC se <strong>restan del total</strong> para que no se dupliquen dentro de la Factura Global.
-                  </p>
+            <div className="flex flex-col gap-3 animate-in fade-in duration-150 h-full">
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 items-stretch">
+                <div className="lg:col-span-5 bg-purple-500/10 border border-purple-500/20 p-3.5 rounded-2xl flex items-start gap-3">
+                  <UserCheck className="text-purple-600 dark:text-purple-400 shrink-0 mt-0.5" size={20} />
+                  <div>
+                    <h4 className="text-sm font-black text-purple-900 dark:text-purple-100">
+                      Paso 4: Descuento de Facturación a Terceros (Clientes con RFC)
+                    </h4>
+                    <p className="text-xs text-gray-600 dark:text-gray-400 mt-1 leading-relaxed">
+                      Las ventas de mostrador ya facturadas individualmente a clientes con su propio RFC se <strong>restan del total</strong> para no duplicarse en la Factura Global.
+                    </p>
+                  </div>
                 </div>
-              </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div className="p-4 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl">
-                  <span className="text-[10px] font-bold text-gray-400 uppercase block">Facturas a Terceros Emitidas</span>
-                  <span className="text-xl font-black text-purple-600 dark:text-purple-400 font-mono mt-1 block">
-                    {facturasTercerosMes.length} facturas
+                <div className="lg:col-span-2 p-3.5 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl flex flex-col justify-center">
+                  <span className="text-[10px] font-bold text-gray-400 uppercase block">Facturas Emitidas</span>
+                  <span className="text-xl font-black text-purple-600 dark:text-purple-400 font-mono mt-0.5 block">
+                    {facturasTercerosMes.length} CFDI
                   </span>
+                  <span className="text-[10px] text-gray-400 mt-0.5 block">Clientes con RFC</span>
                 </div>
-                <div className="p-4 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl sm:col-span-2">
-                  <span className="text-[10px] font-bold text-gray-400 uppercase block">Total a Deducir de la Base Global</span>
-                  <span className="text-xl font-black text-purple-600 dark:text-purple-400 font-mono mt-1 block">
+
+                <div className="lg:col-span-2 p-3.5 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl flex flex-col justify-center">
+                  <span className="text-[10px] font-bold text-gray-400 uppercase block">IVA Trasladado Terceros</span>
+                  <span className="text-xl font-black text-emerald-600 dark:text-emerald-400 font-mono mt-0.5 block">
+                    {formatCurrency(ivaFacturasTerceros)}
+                  </span>
+                  <span className="text-[10px] text-gray-400 mt-0.5 block">IVA ya declarado en CFDI</span>
+                </div>
+
+                <div className="lg:col-span-3 p-3.5 bg-white dark:bg-gray-900 border border-purple-200 dark:border-purple-900/50 rounded-2xl flex flex-col justify-center">
+                  <span className="text-[10px] font-bold text-gray-400 uppercase block">Total a Deducir de Base Global</span>
+                  <span className="text-xl font-black text-purple-600 dark:text-purple-400 font-mono mt-0.5 block">
                     -{formatCurrency(totalTercerosDeducibles)}
                   </span>
                   <span className="text-[10px] text-gray-400 mt-0.5 block">
-                    (Resta directa a la venta de mostrador para evitar doble causación de IVA)
+                    Resta directa a la venta de mostrador
                   </span>
                 </div>
               </div>
 
-              {/* Lista de facturas a terceros */}
-              <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl overflow-hidden shadow-sm">
-                <div className="p-3 bg-gray-50/70 dark:bg-gray-950/40 border-b border-gray-200 dark:border-gray-800 flex justify-between items-center text-xs font-bold">
-                  <span>Facturas Individuales Emitidas ({facturasTercerosMes.length})</span>
-                  <span className="font-mono text-purple-600">Total: {formatCurrency(totalTercerosDeducibles)}</span>
+              {/* Tabla completa de facturas a terceros aprovechando el alto de pantalla */}
+              <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl overflow-hidden shadow-sm flex-1 flex flex-col">
+                <div className="px-4 py-2.5 bg-gray-50/80 dark:bg-gray-950/50 border-b border-gray-200 dark:border-gray-800 flex flex-wrap justify-between items-center gap-2 text-xs font-bold shrink-0">
+                  <span className="flex items-center gap-2 text-gray-800 dark:text-gray-100">
+                    <FileText size={15} className="text-purple-600 dark:text-purple-400" />
+                    Facturas Individuales Emitidas ({facturasTercerosMes.length})
+                  </span>
+                  <div className="flex items-center gap-4 font-mono text-xs">
+                    <span className="text-gray-500 dark:text-gray-400">
+                      Subtotal: <strong className="text-gray-800 dark:text-gray-200">{formatCurrency(facturasTercerosMes.reduce((acc, f) => acc + Number(f._subtotal || f.subtotal || 0), 0))}</strong>
+                    </span>
+                    <span className="text-emerald-600 dark:text-emerald-400">
+                      IVA: <strong>{formatCurrency(ivaFacturasTerceros)}</strong>
+                    </span>
+                    <span className="text-purple-600 dark:text-purple-400 font-black">
+                      Total: -{formatCurrency(totalTercerosDeducibles)}
+                    </span>
+                  </div>
                 </div>
-                <div className="max-h-[220px] overflow-y-auto divide-y divide-gray-100 dark:divide-gray-800/60 font-mono text-xs">
-                  {facturasTercerosMes.map(f => (
-                    <div key={f.id || f.uuid_fiscal} className="p-2.5 flex items-center justify-between">
-                      <div>
-                        <div className="font-bold text-gray-800 dark:text-gray-200">{formatDate(f.fecha_emision || f.fecha)} • {f.rfc_receptor || f.rfc || 'RFC'}</div>
-                        <div className="text-[10px] text-gray-400 truncate max-w-sm">{f.cliente_nombre || f.nombre_receptor || 'Cliente'}</div>
-                      </div>
-                      <span className="font-bold text-purple-600 dark:text-purple-400">-{formatCurrency(f._total || f.total || 0)}</span>
-                    </div>
-                  ))}
-                  {facturasTercerosMes.length === 0 && (
-                    <div className="p-6 text-center text-gray-400 italic">No se registraron facturas a terceros en este período.</div>
-                  )}
+
+                <div className="max-h-[calc(100vh-310px)] min-h-[380px] overflow-auto">
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead className="sticky top-0 z-10 bg-gray-100/95 dark:bg-gray-800/95 backdrop-blur-xs text-[10px] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700">
+                      <tr>
+                        <th className="py-2.5 px-3">Fecha Emisión</th>
+                        <th className="py-2.5 px-3">Folio / Serie</th>
+                        <th className="py-2.5 px-3">UUID Fiscal</th>
+                        <th className="py-2.5 px-3">RFC Receptor</th>
+                        <th className="py-2.5 px-3">Cliente / Razón Social</th>
+                        <th className="py-2.5 px-3">Forma de Pago</th>
+                        <th className="py-2.5 px-3 text-center">Uso CFDI</th>
+                        <th className="py-2.5 px-3 text-right">Subtotal</th>
+                        <th className="py-2.5 px-3 text-right">IVA</th>
+                        <th className="py-2.5 px-3 text-right">Total Deducido</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100 dark:divide-gray-800/70">
+                      {facturasTercerosMes.map(f => {
+                        const rfcReceptor = f._clienteRfc || f.clientes?.rfc || f.rfc_receptor || f.rfc || 'S/N';
+                        const nombreCliente = f._clienteNombre || f.clientes?.nombre_local || f.clientes?.razon_social || f.cliente_nombre || f.nombre_receptor || 'Cliente Tercero';
+                        const folioStr = f.serie_folio || (f.pedidos?.numero_pedido ? `PED-#${f.pedidos.numero_pedido}` : 'S/F');
+                        const formaPagoLabel = f.formas_pago
+                          ? `${f.formas_pago.codigo} - ${f.formas_pago.nombre}`
+                          : (f.metodo_pago || 'Por definir');
+                        const subtotalVal = Number(f._subtotal || f.subtotal || 0);
+                        const ivaVal = Number(f._iva ?? f.iva_trasladado ?? 0);
+                        const totalVal = Number(f._total || f.total || 0);
+
+                        return (
+                          <tr key={f.id || f.uuid_fiscal} className="hover:bg-purple-50/40 dark:hover:bg-purple-950/20 transition-colors">
+                            <td className="py-2.5 px-3 font-mono text-gray-700 dark:text-gray-300 whitespace-nowrap">
+                              {formatDate(f.fecha_emision || f.fecha)}
+                            </td>
+                            <td className="py-2.5 px-3 font-mono font-black text-gray-900 dark:text-white whitespace-nowrap">
+                              {folioStr}
+                            </td>
+                            <td className="py-2.5 px-3 font-mono text-[11px] text-gray-500 dark:text-gray-400" title={f.uuid_fiscal || ''}>
+                              {f.uuid_fiscal ? `${f.uuid_fiscal.substring(0, 8)}...${f.uuid_fiscal.slice(-4)}` : '-'}
+                            </td>
+                            <td className="py-2.5 px-3 font-mono font-bold text-purple-700 dark:text-purple-300 whitespace-nowrap">
+                              {rfcReceptor}
+                            </td>
+                            <td className="py-2.5 px-3 font-bold text-gray-800 dark:text-gray-100 max-w-[260px] truncate" title={nombreCliente}>
+                              {nombreCliente}
+                            </td>
+                            <td className="py-2.5 px-3 text-[11px] text-gray-600 dark:text-gray-300 whitespace-nowrap">
+                              {formaPagoLabel}
+                            </td>
+                            <td className="py-2.5 px-3 text-center font-mono text-[11px] text-gray-500 dark:text-gray-400">
+                              <span className="px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-800 font-bold">
+                                {f.uso_cfdi_clave || 'G03'}
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-3 text-right font-mono text-gray-600 dark:text-gray-300 whitespace-nowrap">
+                              {formatCurrency(subtotalVal)}
+                            </td>
+                            <td className="py-2.5 px-3 text-right font-mono text-emerald-600 dark:text-emerald-400 whitespace-nowrap">
+                              {formatCurrency(ivaVal)}
+                            </td>
+                            <td className="py-2.5 px-3 text-right font-mono font-black text-purple-600 dark:text-purple-400 whitespace-nowrap">
+                              -{formatCurrency(totalVal)}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      {facturasTercerosMes.length === 0 && (
+                        <tr>
+                          <td colSpan={10} className="p-8 text-center text-gray-400 italic">
+                            No se registraron facturas a terceros en este período.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
                 </div>
               </div>
             </div>
@@ -2112,6 +2253,12 @@ export const WizardConfiguracionGlobalModal: React.FC<WizardConfiguracionGlobalM
                         <span>Excluidos Mes Pasado:</span>
                         <strong className="text-amber-600">-{formatCurrency(depositosMesPasadoExcluidos)}</strong>
                       </div>
+                      {depositosNoEsVentaExcluidos > 0 && (
+                        <div className="flex justify-between">
+                          <span>Excluidos No es Venta:</span>
+                          <strong className="text-rose-600">-{formatCurrency(depositosNoEsVentaExcluidos)}</strong>
+                        </div>
+                      )}
                       <div className="flex justify-between">
                         <span>Acreditados Día Siguiente:</span>
                         <strong className="text-purple-600">+{formatCurrency(ventasDiaSiguienteMes)}</strong>
@@ -2196,10 +2343,28 @@ export const WizardConfiguracionGlobalModal: React.FC<WizardConfiguracionGlobalM
                         <span className="text-gray-500">Bolsa Total Ventas:</span>
                         <span className="font-bold font-mono">{formatCurrency(bolsaTotalVentasMes)}</span>
                       </div>
-                      <div className="flex justify-between font-sans">
-                        <span className="text-gray-500">Ingresos Reconocidos:</span>
+                      <div className="flex justify-between font-sans text-[11px] text-gray-400">
+                        <span>• Ingresos Netos Banco + Pend.:</span>
+                        <span className="font-mono">{formatCurrency(depositosNetosMes + ventasDiaSiguienteMes + montoTicketsPendientesDeposito)}</span>
+                      </div>
+                      {((controlEfectivo?.efectivoPendienteTicketsMes || 0) > 0) && (
+                        <div className="flex justify-between font-sans text-[11px] text-amber-600 dark:text-amber-400">
+                          <span>• (+) Efectivo Pend. por Depositar:</span>
+                          <span className="font-mono">
+                            +{formatCurrency((controlEfectivo?.efectivoPendienteTicketsMes || 0) + Math.max(0, (controlEfectivo?.totalEfectivoConciliado || 0) - (controlEfectivo?.montoEfectivoEstadoCuenta || 0)))}
+                          </span>
+                        </div>
+                      )}
+                      {((comparativoTarjetas?.bbvaPropinasTarj || 0) > 0) && (
+                        <div className="flex justify-between font-sans text-[11px] text-purple-600 dark:text-purple-400">
+                          <span>• (-) Propinas Tarjeta en Banco:</span>
+                          <span className="font-mono">-{formatCurrency(comparativoTarjetas?.bbvaPropinasTarj || 0)}</span>
+                        </div>
+                      )}
+                      <div className="flex justify-between font-sans pt-0.5">
+                        <span className="text-gray-500 font-semibold">Ingresos Reconocidos (Base Venta):</span>
                         <span className="font-bold font-mono text-emerald-600">
-                          {formatCurrency(depositosNetosMes + ventasDiaSiguienteMes + montoTicketsPendientesDeposito)}
+                          {formatCurrency(bolsaTotalVentasMes - diferenciaBolsaCierre)}
                         </span>
                       </div>
                       <div className="flex justify-between pt-1 border-t border-gray-100 dark:border-gray-800 font-bold">
@@ -2365,11 +2530,34 @@ export const WizardConfiguracionGlobalModal: React.FC<WizardConfiguracionGlobalM
                       <span className="font-sans text-gray-500">📉 (-) Propinas excluidas:</span>
                       <span className="font-bold text-gray-500">-{formatCurrency(totalPropinasExcluidas)}</span>
                     </div>
-                    <div className="flex justify-between pt-1">
-                      <span className="font-sans text-gray-500">🔄 (-) Ventas Mes Pasado Excluidas:</span>
-                      <span className="font-bold text-amber-600">
-                        -{formatCurrency(ticketsOtroMes.reduce((acc, t) => acc + Number(t.monto || 0), 0))}
-                      </span>
+                    <div className="flex justify-between pt-1 border-t border-gray-200 dark:border-gray-700 font-bold">
+                      <span className="font-sans text-gray-800 dark:text-gray-200">= Total cobrado para Factura Global:</span>
+                      <span className="text-emerald-600 dark:text-emerald-400">{formatCurrency(totalFacturaPublicoGeneral)}</span>
+                    </div>
+                    <div className="pt-2 space-y-1 text-[11px] bg-amber-50/50 dark:bg-amber-950/20 p-2.5 rounded-xl border border-amber-200/60 dark:border-amber-800/40">
+                      <div className="flex justify-between items-center">
+                        <span className="font-sans font-bold text-amber-800 dark:text-amber-300">
+                          🔄 Depósitos del Mes Pasado Excluidos del Banco ({movimientosOtroMes.filter((m: any) => m._isExcluded).length + ticketsOtroMes.length}):
+                        </span>
+                        <span className="font-bold text-amber-600 dark:text-amber-400">
+                          -{formatCurrency(depositosMesPasadoExcluidos + ticketsOtroMes.reduce((acc, t) => acc + Number(t.monto || 0), 0))}
+                        </span>
+                      </div>
+                      <p className="font-sans text-[10px] text-amber-700/90 dark:text-amber-300/80">
+                        ✓ Ya descontados de los depósitos bancarios y excluidos de la bolsa de este mes (no se duplican en tu Factura Global).
+                      </p>
+                      {movimientosOtroMes.filter((m: any) => m._isExcluded).map((m: any) => (
+                        <div key={m.id} className="flex justify-between pl-2 text-[10px] text-gray-500 dark:text-gray-400">
+                          <span className="truncate pr-2">• {m.fecha ? formatDate(m.fecha) : ''} — {m.concepto || 'Depósito bancario'}</span>
+                          <span className="font-mono text-amber-600 dark:text-amber-400 shrink-0">-{formatCurrency(m._monto)}</span>
+                        </div>
+                      ))}
+                      {ticketsOtroMes.map((t: any) => (
+                        <div key={t.id} className="flex justify-between pl-2 text-[10px] text-gray-500 dark:text-gray-400">
+                          <span className="truncate pr-2">• {t.fecha ? formatDate(t.fecha) : ''} — {t.descripcion || 'Ticket POS'}</span>
+                          <span className="font-mono text-amber-600 dark:text-amber-400 shrink-0">-{formatCurrency(t.monto)}</span>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 </div>
@@ -2477,7 +2665,7 @@ export const WizardConfiguracionGlobalModal: React.FC<WizardConfiguracionGlobalM
                       {facturasTercerosMes.map(invoice => (
                         <tr key={invoice.id || invoice.uuid_fiscal}>
                           <td className="p-2.5 font-mono text-gray-600 dark:text-gray-300">{formatDate(invoice.fecha_emision || invoice.fecha)}<span className="block text-gray-400">{invoice.serie_folio || invoice.uuid_fiscal || '-'}</span></td>
-                          <td className="p-2.5 text-gray-700 dark:text-gray-200">{invoice.rfc_receptor || invoice.rfc || '-'}<span className="block text-gray-400">{invoice._clienteNombre || invoice.cliente_nombre || invoice.nombre_receptor || 'Cliente'}</span></td>
+                          <td className="p-2.5 text-gray-700 dark:text-gray-200">{invoice._clienteRfc || invoice.clientes?.rfc || invoice.rfc_receptor || invoice.rfc || '-'}<span className="block text-gray-400">{invoice._clienteNombre || invoice.clientes?.nombre_local || invoice.clientes?.razon_social || invoice.cliente_nombre || invoice.nombre_receptor || 'Cliente'}</span></td>
                           <td className="p-2.5 text-right font-mono">{formatCurrency(invoice._subtotal || invoice.subtotal || 0)}</td>
                           <td className="p-2.5 text-right font-mono text-emerald-700 dark:text-emerald-300">{formatCurrency(invoice._iva ?? invoice.iva_trasladado ?? 0)}</td>
                           <td className="p-2.5 text-right font-mono font-bold">{formatCurrency(invoice._total || invoice.total || 0)}</td>

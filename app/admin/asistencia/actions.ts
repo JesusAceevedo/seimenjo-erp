@@ -536,6 +536,16 @@ export async function calcularNominaCompleta(
 ) {
   const { calcularNomina } = await import('./_lib/lft');
 
+  const TIMEZONE = process.env.NEXT_PUBLIC_TIMEZONE || 'America/Cancun';
+  const TIMEZONE_OFFSET = process.env.ZKTECO_TIMEZONE_OFFSET || '-05:00';
+
+  // Consultar rango cubriendo holgura para salidas nocturnas locales
+  const queryStart = `${fechaInicio}T00:00:00${TIMEZONE_OFFSET}`;
+  const nextDayOfFin = new Date(fechaFin + 'T12:00:00');
+  nextDayOfFin.setDate(nextDayOfFin.getDate() + 1);
+  const nextDayStr = nextDayOfFin.toISOString().split('T')[0];
+  const queryEnd = `${nextDayStr}T06:00:00${TIMEZONE_OFFSET}`;
+
   const [empleadosRes, checadasRes, incidenciasRes, horariosRes, turnosRes, descansosMensualesRes] = await Promise.all([
     getServerSupabase()
       .from('empleados_detalle')
@@ -546,8 +556,8 @@ export async function calcularNominaCompleta(
       .from('asistencia_checadas_raw')
       .select('*')
       .eq('empresa_id', empresaId)
-      .gte('timestamp', `${fechaInicio}T00:00:00Z`)
-      .lte('timestamp', `${fechaFin}T23:59:59Z`),
+      .gte('timestamp', queryStart)
+      .lte('timestamp', queryEnd),
     getServerSupabase()
       .from('incidencias_solicitudes')
       .select('*')
@@ -584,22 +594,38 @@ export async function calcularNominaCompleta(
   if (!empleados.length) return [];
 
   const dateArray: string[] = [];
-  let current = new Date(fechaInicio + 'T00:00:00');
-  const end = new Date(fechaFin + 'T23:59:59');
+  let current = new Date(fechaInicio + 'T12:00:00');
+  const end = new Date(fechaFin + 'T12:00:00');
   while (current <= end) {
     dateArray.push(current.toLocaleDateString('en-CA'));
     current.setDate(current.getDate() + 1);
   }
 
   const resultados = empleados.map((emp: any) => {
-    const todayLocalStr = new Date().toLocaleDateString('en-CA');
+    const todayLocalStr = new Date().toLocaleDateString('en-CA', { timeZone: TIMEZONE });
     const isExentoReloj = !!emp.exento_reloj_checador || !emp.zkteco_user_id || String(emp.zkteco_user_id).trim() === '' || String(emp.zkteco_user_id).trim() === '0';
 
     let totalHorasTrabajadasAcc = 0;
     let faltasNoJustificadasCount = 0;
+    let horasDobles = 0;
+    let horasTriples = 0;
+    let minutosRetardo = 0;
+    let countRetardos = 0;
+    let domingosTrabajados = 0;
+    let horasDoblesSemanaActual = 0;
+
+    const sueldoDiarioBase = emp.sueldo_diario || emp.puestos_trabajo?.salario_diario_base || 250;
+    const valorHoraSimple = sueldoDiarioBase / 8;
+
     const detallesDias = dateArray.map(d => {
       const dateObj = new Date(d + 'T12:00:00');
       const dow = dateObj.getDay();
+
+      // Art. 68 LFT: Las 9 horas extras dobles tienen tope semanal. Reinicio cada lunes (dow === 1).
+      if (dow === 1) {
+        horasDoblesSemanaActual = 0;
+      }
+
       const schedule = horariosList.find((h: any) => h.empleado_id === emp.id && h.dia_semana === dow);
       const descansoMensual = descansosMensualesList.find((dm: any) => dm.empleado_id === emp.id && dm.fecha === d);
       
@@ -614,7 +640,7 @@ export async function calcularNominaCompleta(
 
       const logsDia = logs
         .filter((l: any) => l.zkteco_user_id === emp.zkteco_user_id &&
-          new Date(l.timestamp).toLocaleDateString('en-CA') === d)
+          new Date(l.timestamp).toLocaleDateString('en-CA', { timeZone: TIMEZONE }) === d)
         .sort((a: any, b: any) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 
       const tieneChecadas = logsDia.length >= 1;
@@ -622,18 +648,32 @@ export async function calcularNominaCompleta(
 
       let horasTrabajadasDia = 0;
       let horasExtraDia = 0;
+      let horaEntradaReal = '-';
+      let horaSalidaReal = '-';
+
+      const turno = schedule?.turno_id ? turnosList.find((t: any) => t.id === schedule.turno_id) : null;
+      const horaEntradaProg = turno ? (turno.hora_entrada_1?.substring(0, 5) || '09:00') : (esDescanso ? 'Descanso' : '09:00');
+      const horaSalidaProg = turno ? (turno.hora_salida_1?.substring(0, 5) || '17:00') : (esDescanso ? 'Descanso' : '17:00');
+
       if (logsDia.length >= 2) {
         const entrada = new Date(logsDia[0].timestamp);
         const salida = new Date(logsDia[logsDia.length - 1].timestamp);
 
-        const turno = schedule?.turno_id ? turnosList.find((t: any) => t.id === schedule.turno_id) : null;
-        if (turno && turno.hora_entrada_1 && turno.hora_salida_1) {
+        horaEntradaReal = entrada.toLocaleTimeString('es-MX', { timeZone: TIMEZONE, hour: '2-digit', minute: '2-digit', hour12: false });
+        horaSalidaReal = salida.toLocaleTimeString('es-MX', { timeZone: TIMEZONE, hour: '2-digit', minute: '2-digit', hour12: false });
+
+        if (turno && turno.hora_entrada_1 && turno.hora_salida_1 && !esDescanso) {
           const [hIn, mIn] = turno.hora_entrada_1.split(':').map(Number);
           const [hOut, mOut] = turno.hora_salida_1.split(':').map(Number);
 
-          const scheduledEntrada = new Date(`${d}T${String(hIn).padStart(2, '0')}:${String(mIn).padStart(2, '0')}:00`);
-          let scheduledSalida = new Date(`${d}T${String(hOut).padStart(2, '0')}:${String(mOut).padStart(2, '0')}:00`);
-          if (scheduledSalida < scheduledEntrada) {
+          const strHIn = String(hIn).padStart(2, '0');
+          const strMIn = String(mIn).padStart(2, '0');
+          const strHOut = String(hOut).padStart(2, '0');
+          const strMOut = String(mOut).padStart(2, '0');
+
+          const scheduledEntrada = new Date(`${d}T${strHIn}:${strMIn}:00${TIMEZONE_OFFSET}`);
+          let scheduledSalida = new Date(`${d}T${strHOut}:${strMOut}:00${TIMEZONE_OFFSET}`);
+          if (scheduledSalida <= scheduledEntrada) {
             scheduledSalida.setDate(scheduledSalida.getDate() + 1);
           }
 
@@ -647,15 +687,45 @@ export async function calcularNominaCompleta(
           } else {
             horasExtraDia = 0;
           }
+
+          const entradaHora = entrada.getHours() * 60 + entrada.getMinutes();
+          const turnoHora = hIn * 60 + mIn + (turno.tolerancia_minutos || 0);
+          if (entradaHora > turnoHora) {
+            minutosRetardo += entradaHora - turnoHora;
+            countRetardos++;
+          }
         } else {
+          // Sin turno o en día de descanso laborado
           horasTrabajadasDia = (salida.getTime() - entrada.getTime()) / (1000 * 60 * 60);
-          horasExtraDia = Math.max(0, horasTrabajadasDia - 8);
+          horasExtraDia = esDescanso ? horasTrabajadasDia : Math.max(0, horasTrabajadasDia - 8);
         }
 
         totalHorasTrabajadasAcc += horasTrabajadasDia;
+      } else if (logsDia.length === 1) {
+        const entrada = new Date(logsDia[0].timestamp);
+        horaEntradaReal = entrada.toLocaleTimeString('es-MX', { timeZone: TIMEZONE, hour: '2-digit', minute: '2-digit', hour12: false });
       } else if (isExentoReloj && !esDescanso) {
         horasTrabajadasDia = 8;
         totalHorasTrabajadasAcc += 8;
+      }
+
+      // Distribución LFT Dobles / Triples del día
+      let doblesHoy = 0;
+      let triplesHoy = 0;
+
+      if (!isExentoReloj && horasExtraDia > 0) {
+        const maxDoblesDia = Math.min(horasExtraDia, 3);
+        const cupoSemanalRestante = Math.max(0, 9 - horasDoblesSemanaActual);
+        doblesHoy = Math.min(maxDoblesDia, cupoSemanalRestante);
+        triplesHoy = Math.max(0, horasExtraDia - doblesHoy);
+
+        horasDobles += doblesHoy;
+        horasTriples += triplesHoy;
+        horasDoblesSemanaActual += doblesHoy;
+      }
+
+      if (!isExentoReloj && dow === 0 && tieneChecadas) {
+        domingosTrabajados++;
       }
 
       let estado: 'asistencia' | 'descanso' | 'justificado' | 'exento' | 'falta' | 'futuro' = 'asistencia';
@@ -672,16 +742,29 @@ export async function calcularNominaCompleta(
         faltasNoJustificadasCount++;
       }
 
+      const pagoDiaSimple = horasExtraDia * valorHoraSimple;
+      const pagoDiaDobles = doblesHoy * 2 * valorHoraSimple;
+      const pagoDiaTriples = triplesHoy * 3 * valorHoraSimple;
+      const pagoDiaLFT = pagoDiaDobles + pagoDiaTriples;
+
       return {
         fecha: d,
-        diaSemana: dateObj.toLocaleDateString('es-MX', { weekday: 'short' }),
+        diaSemana: dateObj.toLocaleDateString('es-MX', { weekday: 'short', timeZone: TIMEZONE }),
         esDescanso,
         tieneIncidencia,
         incidenciaNombre: incidenciaObj ? (incidenciaObj.tipo || 'Justificación') : null,
         tieneChecadas,
-        entradas: logsDia.map((l: any) => new Date(l.timestamp).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })),
+        horaEntradaProgramada: horaEntradaProg,
+        horaSalidaProgramada: horaSalidaProg,
+        horaEntradaReal,
+        horaSalidaReal,
+        entradas: logsDia.map((l: any) => new Date(l.timestamp).toLocaleTimeString('es-MX', { timeZone: TIMEZONE, hour: '2-digit', minute: '2-digit', hour12: false })),
         horasTrabajadas: Math.round(horasTrabajadasDia * 100) / 100,
         horasExtra: Math.round(horasExtraDia * 100) / 100,
+        horasDobles: Math.round(doblesHoy * 100) / 100,
+        horasTriples: Math.round(triplesHoy * 100) / 100,
+        pagoHoraSimple: Math.round(pagoDiaSimple * 100) / 100,
+        pagoTotalLFT: Math.round(pagoDiaLFT * 100) / 100,
         estado
       };
     });
@@ -691,89 +774,7 @@ export async function calcularNominaCompleta(
     const baseDiasQuincena = esQuincena ? 15 : dateArray.length;
     const diasPagados = Math.max(0, baseDiasQuincena - faltasNoJustificadasCount);
 
-    let horasDobles = 0;
-    let horasTriples = 0;
-    let minutosRetardo = 0;
-    let countRetardos = 0;
-    let domingosTrabajados = 0;
-
-    if (!isExentoReloj) {
-      // Art. 66, 67 y 68 LFT: El tiempo extraordinario no debe exceder de 3 horas diarias ni de 9 horas en una semana.
-      // Las primeras 9 horas extraordinarias semanales (topadas a 3h por día) son DOBLES (200%).
-      // Cualquier excedente (más de 3h en un día o a partir de la 10a hora extra semanal) es TRIPLE (300%).
-      let horasDoblesSemanaActual = 0;
-
-      for (let i = 0; i < dateArray.length; i++) {
-        // Reinicio del contador semanal cada 7 días
-        if (i > 0 && i % 7 === 0) {
-          horasDoblesSemanaActual = 0;
-        }
-
-        const d = dateArray[i];
-        const dateObj = new Date(d + 'T12:00:00');
-        const dow = dateObj.getDay();
-        const schedule = horariosList.find((h: any) => h.empleado_id === emp.id && h.dia_semana === dow);
-        const descansoMensual = descansosMensualesList.find((dm: any) => dm.empleado_id === emp.id && dm.fecha === d);
-        const esDescanso = descansoMensual
-          ? !!descansoMensual.es_descanso
-          : !!(schedule && schedule.es_dia_descanso);
-
-        if (esDescanso) continue;
-
-        const logsDia = logs
-          .filter((l: any) => l.zkteco_user_id === emp.zkteco_user_id &&
-            new Date(l.timestamp).toLocaleDateString('en-CA') === d)
-          .sort((a: any, b: any) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-
-        if (logsDia.length >= 2) {
-          const entrada = new Date(logsDia[0].timestamp);
-          const salida = new Date(logsDia[logsDia.length - 1].timestamp);
-
-          const turno = schedule?.turno_id ? turnosList.find((t: any) => t.id === schedule.turno_id) : null;
-          let horasExtraDia = 0;
-
-          if (turno && turno.hora_entrada_1 && turno.hora_salida_1) {
-            const [hIn, mIn] = turno.hora_entrada_1.split(':').map(Number);
-            const [hOut, mOut] = turno.hora_salida_1.split(':').map(Number);
-
-            const scheduledEntrada = new Date(`${d}T${String(hIn).padStart(2, '0')}:${String(mIn).padStart(2, '0')}:00`);
-            let scheduledSalida = new Date(`${d}T${String(hOut).padStart(2, '0')}:${String(mOut).padStart(2, '0')}:00`);
-            if (scheduledSalida < scheduledEntrada) {
-              scheduledSalida.setDate(scheduledSalida.getDate() + 1);
-            }
-
-            if (salida > scheduledSalida) {
-              horasExtraDia = (salida.getTime() - scheduledSalida.getTime()) / (1000 * 60 * 60);
-            }
-
-            const entradaHora = entrada.getHours() * 60 + entrada.getMinutes();
-            const turnoHora = hIn * 60 + mIn + (turno.tolerancia_minutos || 0);
-            if (entradaHora > turnoHora) {
-              minutosRetardo += entradaHora - turnoHora;
-              countRetardos++;
-            }
-          } else {
-            const horasTrabajadas = (salida.getTime() - entrada.getTime()) / (1000 * 60 * 60);
-            horasExtraDia = Math.max(0, horasTrabajadas - 8);
-          }
-
-          if (horasExtraDia > 0) {
-            const maxDoblesDia = Math.min(horasExtraDia, 3);
-            const cupoSemanalRestante = Math.max(0, 9 - horasDoblesSemanaActual);
-            const doblesHoy = Math.min(maxDoblesDia, cupoSemanalRestante);
-            const triplesHoy = Math.max(0, horasExtraDia - doblesHoy);
-
-            horasDobles += doblesHoy;
-            horasTriples += triplesHoy;
-            horasDoblesSemanaActual += doblesHoy;
-          }
-
-          if (dow === 0) domingosTrabajados++;
-        }
-      }
-    }
-
-    const sueldoDiario = emp.sueldo_diario || emp.puestos_trabajo?.salario_diario_base || 250;
+    const sueldoDiario = sueldoDiarioBase;
     const sueldoMensual = emp.sueldo_mensual !== undefined && emp.sueldo_mensual !== null
       ? emp.sueldo_mensual
       : emp.puestos_trabajo?.salario_mensual_base || Math.round(sueldoDiario * 30);

@@ -7,8 +7,9 @@ import {
   AlertCircle,
   ChevronLeft,
   ChevronRight,
+  ExternalLink,
 } from 'lucide-react';
-import { formatDate } from '@/lib/formatters';
+import { formatDate, extractReferenciaBancaria } from '@/lib/formatters';
 
 interface DepositosBancariosTabProps {
   depositosMes: any[];
@@ -18,8 +19,12 @@ interface DepositosBancariosTabProps {
   totalDepositosFacturadosMes: number;
   montoDepositosFacturadosMes: number;
   totalMontoExcluidoOtroMes: number;
+  totalMontoDepositosNoEsVenta?: number;
   toggleExcludeMovement: (id: string) => void;
+  toggleNoEsVentaMovement?: (movId: string, razon?: string) => void;
   formatCurrency: (val: number | string | null | undefined) => string;
+  handleDownloadFile?: (filePath: string, fileName?: string) => void;
+  formatTicketIdentificador?: (ticket: any) => string;
   loading: boolean;
 }
 
@@ -31,8 +36,12 @@ export const DepositosBancariosTab: React.FC<DepositosBancariosTabProps> = ({
   totalDepositosFacturadosMes,
   montoDepositosFacturadosMes,
   totalMontoExcluidoOtroMes,
+  totalMontoDepositosNoEsVenta = 0,
   toggleExcludeMovement,
+  toggleNoEsVentaMovement,
   formatCurrency,
+  handleDownloadFile,
+  formatTicketIdentificador,
   loading,
 }) => {
   // Paginación
@@ -74,6 +83,11 @@ export const DepositosBancariosTab: React.FC<DepositosBancariosTabProps> = ({
               Excluidos Otro Mes: <strong>{formatCurrency(totalMontoExcluidoOtroMes)}</strong>
             </span>
           )}
+          {Boolean(totalMontoDepositosNoEsVenta && totalMontoDepositosNoEsVenta > 0) && (
+            <span className="text-purple-700 dark:text-purple-300 bg-purple-50 dark:bg-purple-950/50 px-2 py-0.5 rounded-lg border border-purple-200 dark:border-purple-800">
+              No es Venta: <strong>{formatCurrency(totalMontoDepositosNoEsVenta)}</strong>
+            </span>
+          )}
         </div>
       </div>
 
@@ -101,8 +115,19 @@ export const DepositosBancariosTab: React.FC<DepositosBancariosTabProps> = ({
                   <td className="p-3 font-mono font-medium text-gray-600 dark:text-gray-400 whitespace-nowrap">
                     {formatDate(d.fecha)}
                   </td>
-                  <td className="p-3 font-bold text-gray-800 dark:text-gray-200 max-w-xs truncate" title={d.concepto}>
-                    {d.concepto || 'Depósito bancario'}
+                  <td className="p-3">
+                    <div className="font-bold text-gray-800 dark:text-gray-200 max-w-xs truncate" title={d.concepto}>
+                      {d.concepto || 'Depósito bancario'}
+                    </div>
+                    {(() => {
+                      const refStr = extractReferenciaBancaria(d.referencia, d.concepto);
+                      if (!refStr) return null;
+                      return (
+                        <div className="font-mono text-[10px] text-gray-500 dark:text-gray-400 mt-0.5">
+                          Ref: {refStr}
+                        </div>
+                      );
+                    })()}
                   </td>
                   <td className="p-3 font-medium text-gray-500 dark:text-gray-400 text-[11px]">
                     {cuentaNombre}
@@ -111,19 +136,56 @@ export const DepositosBancariosTab: React.FC<DepositosBancariosTabProps> = ({
                     {formatCurrency(d._monto)}
                   </td>
                   <td className="p-3 text-center">
-                    {d._hasInvoice ? (
-                      <span className="px-2.5 py-1 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 dark:bg-emerald-955/50 dark:text-emerald-300 inline-flex items-center gap-1">
-                        <CheckCircle2 size={12} /> Facturado
-                      </span>
-                    ) : d._hasTickets ? (
-                      <span className="px-2.5 py-1 rounded-full text-[10px] font-black bg-indigo-100 text-indigo-800 dark:bg-indigo-955/50 dark:text-indigo-300 inline-flex items-center gap-1">
-                        <CheckCircle2 size={12} /> Conciliado con Ticket
-                      </span>
-                    ) : (
-                      <span className="px-2.5 py-1 rounded-full text-[10px] font-black bg-amber-100 text-amber-800 dark:bg-amber-955/50 dark:text-amber-300 inline-flex items-center gap-1">
-                        <AlertCircle size={12} /> Sin Conciliar
-                      </span>
-                    )}
+                    {(() => {
+                      const hasTicketsCombined = d._hasTickets || (d._ticketsAsociados && d._ticketsAsociados.length > 0) || cdms.length > 0 || !!d.pdf_ticket_url;
+                      if (d._hasInvoice) {
+                        return (
+                          <span className="px-2.5 py-1 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 dark:bg-emerald-955/50 dark:text-emerald-300 inline-flex items-center gap-1">
+                            <CheckCircle2 size={12} /> Facturado
+                          </span>
+                        );
+                      }
+                      if (hasTicketsCombined) {
+                        return (
+                          <span className="px-2.5 py-1 rounded-full text-[10px] font-black bg-indigo-100 text-indigo-800 dark:bg-indigo-955/50 dark:text-indigo-300 inline-flex items-center gap-1">
+                            <CheckCircle2 size={12} /> Conciliado con Ticket
+                          </span>
+                        );
+                      }
+                      if (d._isNoVenta) {
+                        return (
+                          <span
+                            className="px-2.5 py-1 rounded-full text-[10px] font-black bg-purple-100 text-purple-800 dark:bg-purple-955/50 dark:text-purple-300 inline-flex items-center gap-1"
+                            title={d._noVentaRazon ? `No es Venta: ${d._noVentaRazon}` : 'Movimiento no deducible / No es venta'}
+                          >
+                            🚫 No es Venta ({d._noVentaRazon || 'Excluido'})
+                          </span>
+                        );
+                      }
+                      if (d._isOtherMonth) {
+                        return (
+                          <span
+                            className="px-2.5 py-1 rounded-full text-[10px] font-black bg-amber-100 text-amber-800 dark:bg-amber-955/50 dark:text-amber-300 inline-flex items-center gap-1"
+                            title={d._otherMonthRazon}
+                          >
+                            ⚠️ Desfase ({d._mesDetectado || 'Otro Mes'})
+                          </span>
+                        );
+                      }
+                      return (
+                        <div className="flex flex-col items-center gap-0.5">
+                          <span className="px-2.5 py-1 rounded-full text-[10px] font-black bg-amber-100 text-amber-800 dark:bg-amber-955/50 dark:text-amber-300 inline-flex items-center gap-1">
+                            <AlertCircle size={12} /> Sin Conciliar
+                          </span>
+                          <span
+                            className="text-[10px] text-gray-500 dark:text-gray-400 font-medium max-w-[150px] truncate block mt-0.5"
+                            title={d.comentarios || d.concepto || 'Sin asignar'}
+                          >
+                            {d.comentarios || d.concepto || 'Sin asignar'}
+                          </span>
+                        </div>
+                      );
+                    })()}
                   </td>
                   <td className="p-3 text-center font-sans">
                     <div className="flex flex-col items-center gap-1">
@@ -137,29 +199,103 @@ export const DepositosBancariosTab: React.FC<DepositosBancariosTabProps> = ({
                         );
                       })}
 
-                      {cdms.map((c: any, idx: number) => {
-                        const comp = c.comprobantes_deposito;
-                        const title = comp?.descripcion || `Ticket ${comp?.fecha || ''}`;
-                        const fechaComp = formatDate(comp?.fecha);
-                        return (
-                          <span
-                            key={`t-${idx}`}
-                            className="font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950 px-2 py-0.5 rounded border border-indigo-200 dark:border-indigo-800 text-[10px] inline-flex items-center gap-1 max-w-[220px] truncate"
-                            title={`${title} (${fechaComp}) - Monto Asociado: ${formatCurrency(c.monto_asociado || comp?.monto || 0)}`}
-                          >
-                            🎫 {title} {fechaComp ? `(${fechaComp})` : ''}
-                          </span>
-                        );
-                      })}
+                      {(() => {
+                        const associatedMap = new Map<string, { comp: any; montoAsociado: number }>();
+                        (d._ticketsAsociados || []).forEach((item: any) => {
+                          if (item?.ticket?.id) {
+                            associatedMap.set(item.ticket.id, { comp: item.ticket, montoAsociado: item.montoAsociado || 0 });
+                          }
+                        });
+                        cdms.forEach((c: any) => {
+                          const comp = c.comprobantes_deposito;
+                          if (comp?.id && !associatedMap.has(comp.id)) {
+                            associatedMap.set(comp.id, { comp, montoAsociado: Number(c.monto_asociado || comp.monto || 0) });
+                          }
+                        });
+                        if (associatedMap.size === 0 && d.pdf_ticket_url) {
+                          associatedMap.set(`mov_ticket_${d.id}`, {
+                            comp: {
+                              id: `mov_ticket_${d.id}`,
+                              fecha: d.fecha,
+                              descripcion: d.fecha ? `Cierre del día ${parseInt(d.fecha.split('-')[2], 10)}` : 'Ticket adjunto',
+                              archivo_url: d.pdf_ticket_url
+                            },
+                            montoAsociado: d._monto
+                          });
+                        }
+                        const ticketsList = Array.from(associatedMap.values());
+
+                        if (concs.length === 0 && ticketsList.length === 0) {
+                          if (d._isNoVenta) {
+                            return (
+                              <div className="text-[10px] font-medium text-purple-700 dark:text-purple-300 bg-purple-50 dark:bg-purple-950/40 px-2.5 py-1 rounded-lg border border-purple-200 dark:border-purple-800 text-left max-w-[260px]">
+                                <span className="font-bold">🚫 No es Venta:</span> {d._noVentaRazon || 'Excluido del cálculo'}
+                                {d.concepto && (
+                                  <div className="text-[9px] text-purple-600/80 dark:text-purple-400/80 truncate mt-0.5 font-mono" title={d.concepto}>
+                                    {d.concepto}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          }
+                          if (d._isOtherMonth) {
+                            return (
+                              <div className="text-[10px] font-medium text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 px-2.5 py-1 rounded-lg border border-amber-200 dark:border-amber-800 text-left max-w-[260px]">
+                                <span className="font-bold">⚠️ Desfase:</span> {d._otherMonthRazon || 'Movimiento de otro mes'}
+                                {d.concepto && (
+                                  <div className="text-[9px] text-amber-600/80 dark:text-amber-400/80 truncate mt-0.5 font-mono" title={d.concepto}>
+                                    {d.concepto}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          }
+                          return (
+                            <div className="text-[10px] text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-800/40 px-2.5 py-1 rounded-lg border border-gray-200 dark:border-gray-700 text-left max-w-[260px]">
+                              <span className="font-bold text-amber-700 dark:text-amber-400">Sin ticket vinculado</span>
+                              <div className="text-[9px] text-gray-600 dark:text-gray-300 truncate mt-0.5 font-mono" title={d.concepto || 'Sin asignar'}>
+                                {d.concepto || 'Sin descripción'}
+                              </div>
+                              {d.comentarios && (
+                                <div className="text-[9px] text-gray-400 italic truncate mt-0.5" title={d.comentarios}>
+                                  Nota: {d.comentarios}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        }
+
+                        return ticketsList.map(({ comp, montoAsociado }, idx: number) => {
+                          const title = formatTicketIdentificador ? formatTicketIdentificador(comp) : (comp?.descripcion || `Ticket ${comp?.fecha || ''}`);
+                          const fechaComp = formatDate(comp?.fecha);
+                          return (
+                            <div key={`t-${idx}`} className="inline-flex items-center gap-1 max-w-[240px]">
+                              {comp?.archivo_url && handleDownloadFile ? (
+                                <button
+                                  type="button"
+                                  onClick={() => handleDownloadFile(comp.archivo_url, `${title}.pdf`)}
+                                  className="font-bold text-indigo-700 hover:text-indigo-900 dark:text-indigo-300 dark:hover:text-indigo-100 bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950 dark:hover:bg-indigo-900/60 px-2 py-0.5 rounded border border-indigo-200 dark:border-indigo-800 text-[10px] inline-flex items-center gap-1 cursor-pointer transition truncate"
+                                  title={`Ver ticket: ${title} (${fechaComp}) - Monto Asociado: ${formatCurrency(montoAsociado || comp?.monto || 0)}`}
+                                >
+                                  🎫 {title} {fechaComp ? `(${fechaComp})` : ''} <ExternalLink size={10} className="shrink-0 text-indigo-500" />
+                                </button>
+                              ) : (
+                                <span
+                                  className="font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950 px-2 py-0.5 rounded border border-indigo-200 dark:border-indigo-800 text-[10px] inline-flex items-center gap-1 truncate"
+                                  title={`${title} (${fechaComp}) - Monto Asociado: ${formatCurrency(montoAsociado || comp?.monto || 0)}`}
+                                >
+                                  🎫 {title} {fechaComp ? `(${fechaComp})` : ''}
+                                </span>
+                              )}
+                            </div>
+                          );
+                        });
+                      })()}
 
                       {d._isOtherMonth && (
                         <span className="text-[9px] font-black bg-amber-100 dark:bg-amber-955 text-amber-800 dark:text-amber-300 px-1.5 py-0.5 rounded border border-amber-300 dark:border-amber-800 inline-flex items-center gap-1" title={d._otherMonthRazon}>
                           ⚠️ {d._mesDetectado ? `Mes ${d._mesDetectado}` : 'Otro Mes'}
                         </span>
-                      )}
-
-                      {concs.length === 0 && cdms.length === 0 && (
-                        <span className="text-[10px] text-gray-400 italic">-</span>
                       )}
                     </div>
                   </td>

@@ -328,8 +328,20 @@ export default function SubirFacturaPedidoModal({
         if (pdfUpErr) throw new Error(`Error al subir PDF: ${pdfUpErr.message}`);
       }
 
-      // 3. Obtener empresa_id activa
+      // 3. Obtener empresa_id correspondiente al Emisor del CFDI (o empresa activa)
       let empresaId = pedido.empresa_id;
+      if (parsedData.emisorRfc) {
+        const cleanEmisorRfc = parsedData.emisorRfc.trim().toUpperCase();
+        const { data: empEmisor } = await supabase
+          .from('empresas')
+          .select('id, rfc')
+          .ilike('rfc', cleanEmisorRfc)
+          .maybeSingle();
+
+        if (empEmisor?.id) {
+          empresaId = empEmisor.id;
+        }
+      }
       if (!empresaId) {
         const { data: { user } } = await supabase.auth.getUser();
         empresaId = user?.user_metadata?.empresa_id;
@@ -414,10 +426,11 @@ export default function SubirFacturaPedidoModal({
         if (insErr) throw insErr;
       }
 
-      // 8. Actualizar pedido con folio_factura, estatus_pago, método de pago y fecha
+      // 8. Actualizar pedido con folio_factura, estatus_pago, método de pago, fecha y empresa_id del emisor
       const updatePedidoPayload: Record<string, any> = {
         folio_factura: folioStr,
-        estatus_pago: estatusPago
+        estatus_pago: estatusPago,
+        ...(empresaId ? { empresa_id: empresaId } : {})
       };
 
       if (parsedData.formaPago) {

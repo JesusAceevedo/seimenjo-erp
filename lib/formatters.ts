@@ -62,3 +62,32 @@ export const shortUuid = (uuid: string | null | undefined, len = 8): string => {
   if (!uuid) return '—';
   return uuid.length > len ? `${uuid.substring(0, len)}…` : uuid;
 };
+
+/**
+ * Extrae o formatea una referencia bancaria legible a partir del campo referencia y del concepto.
+ * Si el campo referencia es nulo, vacío o contiene un UUID interno sintético, busca en el concepto
+ * patrones como "Ref. XXXXX", "/XXXXX", "RECIBO NO. * XXXXX", etc.
+ */
+export const extractReferenciaBancaria = (referencia?: string | null, concepto?: string | null): string => {
+  const ref = (referencia || '').trim();
+  if (ref && !ref.startsWith('COMPROBANTE_EFECTIVO_')) {
+    return ref;
+  }
+  const c = (concepto || '').trim();
+  if (!c) return '';
+
+  const matchRef = c.match(/Ref\.\s*([A-Za-z0-9_-]+)/i);
+  if (matchRef && matchRef[1]) return matchRef[1];
+
+  const matchSlash = c.match(/\/([0-9]{4,})/);
+  if (matchSlash && matchSlash[1]) return matchSlash[1];
+
+  const matchRecibo = c.match(/RECIBO\s+NO\.\s*\*\s*([0-9]+)/i);
+  if (matchRecibo && matchRecibo[1]) return matchRecibo[1];
+
+  const matchNum = c.match(/\b(00[0-9]{4,})\b/);
+  if (matchNum && matchNum[1]) return matchNum[1];
+
+  return '';
+};
+

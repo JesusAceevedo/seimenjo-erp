@@ -255,20 +255,40 @@ export function ArqueoEfectivoTab({
       if (accountName && !accountName.includes('BBVA') && !accountName.includes('BANCOMER')) return false;
       return esMovimientoEfectivo(m.concepto || '');
     }).map(m => {
-      const autoCheck = checkIsOtherMonthAuto(m);
-      const period = currentCashDepositPeriods[m.id] || (legacyArrastreIds.has(m.id) || autoCheck.isOtherMonth ? 'anterior' : 'actual');
+      let autoCheck = checkIsOtherMonthAuto(m);
+      if (!autoCheck.isOtherMonth) {
+        const linkedPrevComp = comprobantes.find(comp =>
+          (comp.comprobantes_deposito_movimientos || []).some((rel: CashTicketLink) => rel.movimiento_id === m.id) &&
+          (comp.es_venta_mes_anterior === true ||
+            (comp.mes_venta && comp.mes_venta !== selectedMonth) ||
+            (comp.fecha && comp.fecha.substring(0, 7) !== selectedMonth) ||
+            String(comp.descripcion || '').toLowerCase().includes('[venta_mes:'))
+        );
+        if (linkedPrevComp) {
+          autoCheck = {
+            isOtherMonth: true,
+            razon: `Ticket vinculado del período ${linkedPrevComp.mes_venta || (linkedPrevComp.fecha ? linkedPrevComp.fecha.substring(0, 7) : 'anterior')}`
+          };
+        }
+      }
+      const period = autoCheck.isOtherMonth && currentCashDepositPeriods[m.id] !== 'siguiente'
+        ? 'anterior'
+        : (currentCashDepositPeriods[m.id] || (legacyArrastreIds.has(m.id) ? 'anterior' : 'actual'));
       const cashAmount = Math.abs(Number(m.deposito || m.monto || 0));
       const linkedAmount = comprobantes.reduce((sum, comprobante) => {
         const relation = (comprobante.comprobantes_deposito_movimientos || []).find((item: CashTicketLink) => item.movimiento_id === m.id);
         if (!relation) return sum;
-        const ticketCashAmount = Number(comprobante.monto_efectivo || 0) + Number(comprobante.propina_efectivo || 0);
+        const rawCash = Number(comprobante.monto_efectivo || 0) + Number(comprobante.propina_efectivo || 0);
+        const ticketCashAmount = rawCash > 0 ? rawCash : Number(comprobante.monto || 0);
         return sum + Math.min(ticketCashAmount, Number(relation.monto_asociado || 0));
       }, 0);
+      const hasJustifiedNote = String((m as any).comentarios || '').includes('[Diferencia Efectivo') ||
+        (m as any).estatus_conciliacion_bancaria?.clave === 'conciliado';
       return {
         ...m,
         _cashAmount: cashAmount,
         _cashLinked: linkedAmount,
-        _cashAvailable: Math.max(0, cashAmount - linkedAmount),
+        _cashAvailable: hasJustifiedNote && linkedAmount > 0 ? 0 : Math.max(0, cashAmount - linkedAmount),
         _cashPeriod: period,
         _isArrastre: period === 'anterior',
         _razonArrastre: autoCheck.razon || (legacyArrastreIds.has(m.id) ? 'Marcado manualmente como arrastre' : '')

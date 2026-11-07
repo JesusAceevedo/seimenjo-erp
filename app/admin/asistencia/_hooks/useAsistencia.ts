@@ -8,6 +8,8 @@ import type {
   dashboardStat, ZkTecoComando
 } from '../types';
 
+const TIMEZONE = process.env.NEXT_PUBLIC_TIMEZONE || 'America/Cancun';
+
 export function useAsistencia() {
   const [empresaId, setEmpresaId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -119,7 +121,7 @@ export function useAsistencia() {
   useEffect(() => { if (empresaId) loadData(); }, [empresaId, loadData]);
 
   const calculateRealtimePresencia = (rawLogs: ChecadaRaw[], employees: EmpleadoDetalle[]) => {
-    const localTodayStr = new Date().toLocaleDateString('en-CA');
+    const localTodayStr = new Date().toLocaleDateString('en-CA', { timeZone: TIMEZONE });
     // Solo empleados activos y con PIN biométrico (excluyendo exentos) participan en presencia en tiempo real
     const activeEmployees = employees.filter(e => e.activo !== false && e.zkteco_user_id && !e.exento_reloj_checador);
     const seen = new Set<string>();
@@ -140,7 +142,7 @@ export function useAsistencia() {
     // Group logs of today by employee pin
     const logsByEmp = new Map<string, ChecadaRaw[]>();
     rawLogs
-      .filter(l => new Date(l.timestamp).toLocaleDateString('en-CA') === localTodayStr)
+      .filter(l => new Date(l.timestamp).toLocaleDateString('en-CA', { timeZone: TIMEZONE }) === localTodayStr)
       .forEach(log => {
         if (!logsByEmp.has(log.zkteco_user_id)) {
           logsByEmp.set(log.zkteco_user_id, []);
@@ -191,7 +193,7 @@ export function useAsistencia() {
       dateArray.push(current.toLocaleDateString('en-CA'));
       current.setDate(current.getDate() + 1);
     }
-    const todayLocalStr = new Date().toLocaleDateString('en-CA');
+    const todayLocalStr = new Date().toLocaleDateString('en-CA', { timeZone: TIMEZONE });
     return empleados.map(emp => {
       const empLogs = checadasRaw.filter(l => l.zkteco_user_id === emp.zkteco_user_id);
       let faltas = 0, retardos = 0, salidasTemprano = 0, horasExtras = 0, totalHorasTrabajadas = 0;
@@ -213,7 +215,7 @@ export function useAsistencia() {
           i.empleado_id === emp.id && dateStr >= i.fecha_inicio && dateStr <= i.fecha_fin && i.estatus === 'aprobado'
         );
         const dayLogs = empLogs
-          .filter(l => new Date(l.timestamp).toLocaleDateString('en-CA') === dateStr)
+          .filter(l => new Date(l.timestamp).toLocaleDateString('en-CA', { timeZone: TIMEZONE }) === dateStr)
           .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
         const hasChecked = dayLogs.length > 0;
 

@@ -2323,11 +2323,20 @@ export async function sincronizarFacturasEmitidasDesdeDepositos(
     if (movErr) throw movErr;
     if (!movs || movs.length === 0) return { success: true, insertadasCount: 0 };
 
-    // 3. Catálogos auxiliares
+    // 3. Catálogos auxiliares y facturas ya sincronizadas (para evitar descargas innecesarias de Storage)
     const { data: estatusList } = await supabaseAdmin.from('estatus_factura').select('id, nombre');
     const facturadoEstatus = (estatusList || []).find((e: any) => e.nombre?.toLowerCase() === 'facturado') || estatusList?.[0];
     const { data: formasPagoList } = await supabaseAdmin.from('formas_pago').select('id, codigo');
     const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_' });
+
+    // Consultar previamente UUIDs y rutas ya registradas para no descargar archivos de Storage que ya están en base de datos
+    const { data: existingFcList } = await supabaseAdmin
+      .from('facturas_clientes')
+      .select('uuid_fiscal, xml_url')
+      .eq('empresa_id', empresaId);
+
+    const existingUuids = new Set((existingFcList || []).map(f => (f.uuid_fiscal || '').toLowerCase()).filter(Boolean));
+    const existingPaths = new Set((existingFcList || []).map(f => f.xml_url).filter(Boolean));
 
     let insertadasCount = 0;
 
@@ -2337,6 +2346,7 @@ export async function sincronizarFacturasEmitidasDesdeDepositos(
 
       for (let i = 0; i < xmlPaths.length; i++) {
         const path = xmlPaths[i];
+        if (existingPaths.has(path)) continue; // Ya sincronizado previamente, omitir descarga de Storage
         const pdfPath = pdfPaths[i] || pdfPaths[0] || null;
 
         try {
@@ -2352,20 +2362,13 @@ export async function sincronizarFacturasEmitidasDesdeDepositos(
           const uuid = (timbre?.['@_UUID'] || timbre?.['@_uuid'] || '').trim();
           if (!uuid) continue;
 
+          if (existingUuids.has(uuid.toLowerCase())) continue; // Ya existe en base de datos
+
           const emisor = cfdi?.['cfdi:Emisor'] || cfdi?.['Emisor'];
           const emisorRfc = (emisor?.['@_Rfc'] || emisor?.['@_rfc'] || '').trim().toUpperCase();
 
           // Validar que el CFDI sea emitido por esta empresa
           if (emisorRfc !== empresaRfc) continue;
-
-          // Verificar si ya existe en facturas_clientes
-          const { data: existingFc } = await supabaseAdmin
-            .from('facturas_clientes')
-            .select('id')
-            .eq('uuid_fiscal', uuid.toLowerCase())
-            .maybeSingle();
-
-          if (existingFc) continue;
 
           const receptor = cfdi?.['cfdi:Receptor'] || cfdi?.['Receptor'];
           const receptorRfc = (receptor?.['@_Rfc'] || receptor?.['@_rfc'] || '').trim().toUpperCase();
