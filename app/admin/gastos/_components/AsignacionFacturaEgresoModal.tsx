@@ -103,7 +103,7 @@ export default function AsignacionFacturaEgresoModal({
         .from('movimientos_bancarios')
         .select(`
           *,
-          cuentas_bancarias(nombre, banco),
+          cuentas_bancarias(id, nombre, numero_cuenta),
           estatus_conciliacion_bancaria(clave, nombre, color),
           conciliaciones_bancarias(
             id,
