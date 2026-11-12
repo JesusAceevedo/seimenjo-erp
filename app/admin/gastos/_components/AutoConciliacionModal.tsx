@@ -502,11 +502,18 @@ export default function AutoConciliacionModal({
                           <Receipt size={13} className="text-gray-400" />
                           <span>{propuesta.tipo === 'deposito_pedido' ? 'Pedido / Cliente' : 'Factura / Proveedor'}</span>
                         </div>
-                        {propuesta.coincidencia?.folio_factura && (
-                          <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 font-mono border border-blue-200 dark:border-blue-800/40">
-                            Folio: {propuesta.coincidencia.folio_factura}
-                          </span>
-                        )}
+                        <div className="flex items-center gap-1.5">
+                          {propuesta.tipo === 'retiro_gasto' && !(propuesta.coincidencia?.xml_url || propuesta.coincidencia?.uuid_fiscal || propuesta.movimiento?.xml_url) && (
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800/40" title="Se vinculará el egreso, pero quedará pendiente de asignar factura CFDI">
+                              Sin Factura XML
+                            </span>
+                          )}
+                          {propuesta.coincidencia?.folio_factura && (
+                            <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 font-mono border border-blue-200 dark:border-blue-800/40">
+                              Folio: {propuesta.coincidencia.folio_factura}
+                            </span>
+                          )}
+                        </div>
                       </div>
 
                       <div className="pt-1">

@@ -10,7 +10,8 @@ import { usePeriod } from '../../../../lib/hooks/usePeriod';
 import { formatCurrency, formatDate } from '../../../../lib/formatters';
 import {
   asignarFacturaAMovimientoEgreso,
-  desvincularFacturaDeMovimientoEgreso
+  desvincularFacturaDeMovimientoEgreso,
+  revalidarMovimientosSinFacturaAction
 } from '../reconciliationActions';
 import { useCfdiViewer } from '../../_components/CfdiViewerContext';
 import {
@@ -342,6 +343,29 @@ export default function AsignacionFacturaEgresoModal({
     }
   };
 
+  const handleRevalidarSinFactura = async () => {
+    setSaving(true);
+    setMessage(null);
+    try {
+      const token = await getSessionToken();
+      const res = await revalidarMovimientosSinFacturaAction(token);
+      if (!res.success) throw new Error(res.error);
+      setMessage({
+        text:
+          res.updatedCount && res.updatedCount > 0
+            ? `Se corrigieron ${res.updatedCount} movimiento(s) que figuraban como conciliados sin factura.`
+            : 'Todos los movimientos conciliados ya cuentan con factura o están marcados como pendientes.',
+        type: res.updatedCount && res.updatedCount > 0 ? 'success' : 'info'
+      });
+      await fetchData();
+      if (onSuccess) onSuccess();
+    } catch (err: any) {
+      setMessage({ text: err.message || 'Error al revalidar estatus.', type: 'error' });
+    } finally {
+      setSaving(false);
+    }
+  };
+
   if (!isOpen) return null;
 
   const diferencia = movMonto - sumaFacturasSeleccionadas;
@@ -370,6 +394,15 @@ export default function AsignacionFacturaEgresoModal({
             </p>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleRevalidarSinFactura}
+              disabled={saving || loading}
+              className="px-2.5 py-1.5 rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 hover:bg-amber-100 text-amber-700 dark:text-amber-300 text-[11px] font-bold transition-colors cursor-pointer disabled:opacity-50"
+              title="Corrige el estatus de movimientos marcados como Conciliados que no tienen XML de factura"
+            >
+              Corregir conciliados sin factura
+            </button>
             <button
               type="button"
               onClick={fetchData}

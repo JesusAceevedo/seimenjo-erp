@@ -1200,6 +1200,9 @@ export async function autoConciliarMovimientos(token: string): Promise<{ success
     }
     const statusConciliado = getStatusId('conciliado');
     const statusParcial = getStatusId('parcial');
+    const statusIncompletoComprobado = getStatusId('incompleto_comprobado');
+    const statusIncompleto = getStatusId('incompleto');
+    const statusSinFactura = statusIncompletoComprobado || statusParcial || statusIncompleto;
     const statusNoDeducible = getStatusId('no_deducible');
 
     // 1. Get bank movements for this company that are candidates (pendiente, no_deducible, or null)
@@ -1310,20 +1313,21 @@ export async function autoConciliarMovimientos(token: string): Promise<{ success
         if (matches.length === 1) {
           const bestMatch = matches[0];
           const disc = detectarDiscrepanciaPago(mov.concepto, bestMatch.metodo_pago);
-          let targetStatusId = statusConciliado;
           
           // Consolidar URLs para sincronización bidireccional
           const xmlToSet = mov.xml_url || bestMatch.xml_url || null;
           const pdfToSet = mov.pdf_factura_url || bestMatch.pdf_url || null;
           const ticketToSet = mov.pdf_ticket_url || bestMatch.ticket_url || null;
+          const hasFactura = !!(xmlToSet || bestMatch.uuid_fiscal);
+          let targetStatusId = hasFactura ? statusConciliado : (statusSinFactura || statusConciliado);
 
           if (disc.tieneDiscrepancia) {
-            targetStatusId = statusNoDeducible || statusConciliado;
+            targetStatusId = statusNoDeducible || statusSinFactura || statusConciliado;
             await supabaseAdmin
               .from('gastos')
               .update({ 
                 movimiento_bancario_id: mov.id, 
-                estatus_facturado: true,
+                estatus_facturado: hasFactura,
                 es_deducible: false,
                 comentarios: `[DISCREPANCIA FISCAL: ${disc.detalle}]${bestMatch.comentarios ? ' | ' + bestMatch.comentarios : ''}`.substring(0, 1000),
                 ...(xmlToSet ? { xml_url: xmlToSet } : {}),
@@ -1337,7 +1341,7 @@ export async function autoConciliarMovimientos(token: string): Promise<{ success
               .from('gastos')
               .update({ 
                 movimiento_bancario_id: mov.id, 
-                estatus_facturado: true,
+                estatus_facturado: hasFactura,
                 ...(xmlToSet ? { xml_url: xmlToSet } : {}),
                 ...(pdfToSet ? { pdf_url: pdfToSet } : {}),
                 ...(ticketToSet ? { ticket_url: ticketToSet } : {})
@@ -2030,6 +2034,9 @@ export async function aplicarPropuestasConciliacion(
     const getStatusId = (clave: string) => catalog?.find((c) => c.clave === clave)?.id || null;
     const statusConciliado = getStatusId('conciliado');
     const statusParcial = getStatusId('parcial');
+    const statusIncompletoComprobado = getStatusId('incompleto_comprobado');
+    const statusIncompleto = getStatusId('incompleto');
+    const statusSinFactura = statusIncompletoComprobado || statusParcial || statusIncompleto;
     const statusNoDeducible = getStatusId('no_deducible');
 
     let appliedCount = 0;
@@ -2059,17 +2066,22 @@ export async function aplicarPropuestasConciliacion(
       if (prop.tipo === 'retiro_gasto' && prop.coincidencia) {
         const gastoId = prop.coincidencia.id;
         const disc = prop.discrepancia || { tieneDiscrepancia: false };
-        const targetStatusId = disc.tieneDiscrepancia ? (statusNoDeducible || statusConciliado) : statusConciliado;
 
         const xmlToSet = prop.movimiento.xml_url || prop.coincidencia.xml_url || null;
         const pdfToSet = prop.movimiento.pdf_factura_url || prop.coincidencia.pdf_url || null;
         const ticketToSet = prop.movimiento.pdf_ticket_url || prop.coincidencia.ticket_url || null;
+        const hasFactura = !!(xmlToSet || prop.coincidencia.uuid_fiscal);
+        const targetStatusId = disc.tieneDiscrepancia
+          ? (statusNoDeducible || statusSinFactura || statusConciliado)
+          : hasFactura
+          ? statusConciliado
+          : (statusSinFactura || statusConciliado);
 
         await supabaseAdmin
           .from('gastos')
           .update({
             movimiento_bancario_id: movId,
-            estatus_facturado: true,
+            estatus_facturado: hasFactura,
             ...(disc.tieneDiscrepancia ? { es_deducible: false } : {}),
             ...(xmlToSet ? { xml_url: xmlToSet } : {}),
             ...(pdfToSet ? { pdf_url: pdfToSet } : {}),
@@ -5347,5 +5359,87 @@ export async function desvincularFacturaDeMovimientoEgreso(
   } catch (err: any) {
     console.error('Error en desvincularFacturaDeMovimientoEgreso:', err);
     return { success: false, error: err.message || 'Error al desvincular factura.' };
+  }
+}
+
+/**
+ * Corrige movimientos bancarios de tipo Retiro que fueron marcados como 'conciliado' o 'comprobado'
+ * sin tener factura XML (ni en el movimiento ni en sus gastos vinculados o hijos).
+ */
+export async function revalidarMovimientosSinFacturaAction(
+  token: string
+): Promise<{ success: boolean; updatedCount?: number; error?: string }> {
+  try {
+    const { empresaId } = await getUserEmpresaId(token);
+
+    const { data: catalog } = await supabaseAdmin
+      .from('estatus_conciliacion_bancaria')
+      .select('id, clave');
+
+    const getStatusId = (clave: string) => catalog?.find((c) => c.clave === clave)?.id || null;
+    const statusConciliado = getStatusId('conciliado');
+    const statusComprobado = getStatusId('comprobado');
+    const statusSinFactura =
+      getStatusId('incompleto_comprobado') || getStatusId('parcial') || getStatusId('incompleto');
+
+    if (!statusSinFactura) {
+      return { success: false, error: 'No se encontró un estatus de pendiente/parcial en el catálogo.' };
+    }
+
+    const targetIds = [statusConciliado, statusComprobado].filter(Boolean) as string[];
+    if (targetIds.length === 0) return { success: true, updatedCount: 0 };
+
+    const { data: movs, error: movsErr } = await supabaseAdmin
+      .from('movimientos_bancarios')
+      .select(`
+        id,
+        xml_url,
+        conciliaciones_bancarias(
+          gastos(id, uuid_fiscal, xml_url)
+        )
+      `)
+      .eq('empresa_id', empresaId)
+      .or('tipo_movimiento.eq.Retiro,retiro.gt.0,monto.lt.0')
+      .in('estatus_conciliacion_id', targetIds);
+
+    if (movsErr) throw movsErr;
+
+    const { data: hijas } = await supabaseAdmin
+      .from('gastos')
+      .select('gasto_padre_id')
+      .eq('empresa_id', empresaId)
+      .not('gasto_padre_id', 'is', null)
+      .or('uuid_fiscal.not.is.null,xml_url.not.is.null');
+
+    const padresConFactura = new Set((hijas || []).map((h: any) => h.gasto_padre_id));
+
+    const idsToDowngrade: string[] = [];
+    for (const m of movs || []) {
+      if (m.xml_url) continue;
+      const concs = (m.conciliaciones_bancarias as any[]) || [];
+      const hasFacturaEnGasto = concs.some((c: any) => {
+        const g = c.gastos;
+        if (!g) return false;
+        return !!(g.uuid_fiscal || g.xml_url || padresConFactura.has(g.id));
+      });
+      if (!hasFacturaEnGasto) {
+        idsToDowngrade.push(m.id);
+      }
+    }
+
+    if (idsToDowngrade.length > 0) {
+      const { error: upErr } = await supabaseAdmin
+        .from('movimientos_bancarios')
+        .update({ estatus_conciliacion_id: statusSinFactura })
+        .in('id', idsToDowngrade)
+        .eq('empresa_id', empresaId);
+
+      if (upErr) throw upErr;
+    }
+
+    return { success: true, updatedCount: idsToDowngrade.length };
+  } catch (err: any) {
+    console.error('Error en revalidarMovimientosSinFacturaAction:', err);
+    return { success: false, error: err.message || 'Error al revalidar movimientos.' };
   }
 }
