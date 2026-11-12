@@ -14,8 +14,10 @@ import {
   Scale,
   ShoppingBag,
   Sparkles,
+  Calculator,
 } from 'lucide-react';
 import PeriodSelector from '../../_components/PeriodSelector';
+import EstimacionImpuestosView from '../../_components/EstimacionImpuestosView';
 import { useSessionToken } from '../../../../lib/hooks/useSessionToken';
 import { useFacturaPublicoGeneralData } from '../_hooks/useFacturaPublicoGeneralData';
 import { crearPedidoDesdeFacturaSeimenjo, vincularFacturaAPedidoSeimenjo } from './actions';
@@ -144,7 +146,7 @@ export default function SeimenjoPedidosPage() {
     depositosMes,
     formatCurrency,
   } = useFacturaPublicoGeneralData();
-  const [seimenjoTabActiva, setSeimenjoTabActiva] = useState<'auditoria_contable' | 'gestion_pedidos'>('auditoria_contable');
+  const [seimenjoTabActiva, setSeimenjoTabActiva] = useState<'auditoria_contable' | 'gestion_pedidos' | 'impuestos'>('auditoria_contable');
   const [creatingFacturaId, setCreatingFacturaId] = useState('');
   const [selectedPedidoByFactura, setSelectedPedidoByFactura] = useState<Record<string, string>>({});
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -406,12 +408,26 @@ export default function SeimenjoPedidosPage() {
             <ShoppingBag size={15} />
             <span>2. Gestión de Pedidos y Vinculación CFDI ({pedidosAsignables.length} por facturar)</span>
           </button>
+          <button
+            type="button"
+            onClick={() => setSeimenjoTabActiva('impuestos')}
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all ${
+              seimenjoTabActiva === 'impuestos'
+                ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-sm'
+                : 'bg-white dark:bg-gray-900 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800'
+            }`}
+          >
+            <Calculator size={15} />
+            <span>3. Estimación de Impuestos y Efectivo</span>
+          </button>
         </div>
 
         {loading ? (
           <div className="flex items-center justify-center gap-2 rounded-lg border border-gray-200 bg-white p-8 text-sm text-gray-500 dark:border-gray-800 dark:bg-gray-900">
             <LoaderCircle size={16} className="animate-spin" /> Cargando pedidos y facturas…
           </div>
+        ) : seimenjoTabActiva === 'impuestos' ? (
+          <EstimacionImpuestosView />
         ) : seimenjoTabActiva === 'auditoria_contable' ? (
           <ComparativoContableSeimenjoTab
             pedidosMes={pedidosMes}

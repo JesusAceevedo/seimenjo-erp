@@ -15,6 +15,7 @@ import {
   Sparkles,
   AlertTriangle,
   CheckCircle2,
+  Calculator,
 } from 'lucide-react';
 
 import { useFacturaPublicoGeneralData } from './_hooks/useFacturaPublicoGeneralData';
@@ -25,6 +26,7 @@ import { ComparativosTab } from './_components/tabs/ComparativosTab';
 import { DepositosBancariosTab } from './_components/tabs/DepositosBancariosTab';
 import { ResumenContableTab } from './_components/tabs/ResumenContableTab';
 import { WizardConfiguracionGlobalModal } from './_components/WizardConfiguracionGlobalModal';
+import EstimacionImpuestosView from '../_components/EstimacionImpuestosView';
 
 export const dynamic = 'force-dynamic';
 
@@ -312,10 +314,25 @@ export default function FacturaPublicoGeneralPage() {
               <Building2 size={15} />
               <span>Depósitos Bancarios ({depositosMes.length})</span>
             </button>
+
+            <button
+              type="button"
+              onClick={() => setTabActiva('impuestos')}
+              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-black transition-all cursor-pointer ${
+                tabActiva === 'impuestos'
+                  ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-md'
+                  : 'bg-white dark:bg-gray-900 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800'
+              }`}
+            >
+              <Calculator size={15} />
+              <span>Estimación de Impuestos</span>
+            </button>
           </div>
 
           {/* CONTENEDOR PRINCIPAL SEGÚN PESTAÑA */}
-          {tabActiva === 'cierre' ? (
+          {tabActiva === 'impuestos' ? (
+            <EstimacionImpuestosView />
+          ) : tabActiva === 'cierre' ? (
             <ResumenContableTab
               selectedMonth={selectedMonth}
               formatCurrency={formatCurrency}

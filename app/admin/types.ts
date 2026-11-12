@@ -46,6 +46,7 @@ export interface Pedido {
   comentarios_generales?: string;
   folio_factura?: string;
   facturas_clientes?: any;
+  facturas_clientes_pedidos?: any[];
   movimiento_bancario_id?: string | null;
 }
 
@@ -169,6 +170,7 @@ export interface VentaFacturada {
     es_anonimo?: boolean;
   };
   facturas_clientes?: {
+    id?: string;
     uuid_fiscal?: string;
     xml_url?: string;
     pdf_url?: string;
@@ -178,7 +180,11 @@ export interface VentaFacturada {
     iva_trasladado?: number;
     fecha_emision?: string;
     serie_folio?: string;
+    pedido_id?: string | null;
+    _monto_asignado?: number;
+    _pedidos_vinculados?: { id: string; numero_pedido?: number | string; monto_asignado?: number; precio_total?: number }[];
   }[];
+  facturas_clientes_pedidos?: any[];
   movimiento_bancario_id?: string | null;
 }
 

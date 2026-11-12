@@ -27,8 +27,8 @@ export function useFacturaPublicoGeneralData() {
   const [movimientosDeposito, setMovimientosDeposito] = useState<any[]>([]);
   const [cargasEstadosCuenta, setCargasEstadosCuenta] = useState<any[]>([]);
 
-  // Pestaña principal activa: 'facturas', 'tickets', 'comparativos' o 'depositos'
-  const [tabActiva, setTabActiva] = useState<'cierre' | 'facturas' | 'tickets' | 'comparativos' | 'depositos'>('facturas');
+  // Pestaña principal activa: 'facturas', 'tickets', 'comparativos', 'depositos' o 'impuestos'
+  const [tabActiva, setTabActiva] = useState<'cierre' | 'facturas' | 'tickets' | 'comparativos' | 'depositos' | 'impuestos'>('facturas');
 
   // Subpestaña para la sección de comparativos: 'efectivo', 'tarjetas', 'bbva_banco' o 'desfase_mes'
   const [subTabComparativo, setSubTabComparativo] = useState<'efectivo' | 'tarjetas' | 'bbva_banco' | 'desfase_mes'>('efectivo');

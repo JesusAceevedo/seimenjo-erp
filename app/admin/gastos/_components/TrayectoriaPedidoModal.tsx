@@ -97,12 +97,12 @@ export default function TrayectoriaPedidoModal({
   };
 
   const handleDesvincularFactura = async (facturaId: string) => {
-    if (!confirm('¿Deseas desvincular esta factura de este pedido? El pedido quedará en estatus "Pendiente de Facturar".')) return;
+    if (!confirm('¿Deseas desvincular esta factura de este pedido? El pedido actualizará su estatus de facturación.')) return;
 
     setActionLoading(true);
     try {
       const token = await getSessionToken();
-      const res = await desvincularFacturaDePedido(facturaId, token);
+      const res = await desvincularFacturaDePedido(facturaId, token, pedidoId);
       if (res.success) {
         await fetchTrayectoria();
         if (onRefresh) onRefresh();
@@ -342,6 +342,11 @@ export default function TrayectoriaPedidoModal({
                               <div>
                                 <span className="text-gray-400 block">Total XML</span>
                                 <span className="font-bold font-mono text-gray-900 dark:text-white">{formatCurrency(f.total)}</span>
+                                {f._monto_asignado != null && f._monto_asignado !== f.total && (
+                                  <span className="block text-[10px] text-purple-600 dark:text-purple-400 font-bold font-mono">
+                                    Asignado: {formatCurrency(f._monto_asignado)}
+                                  </span>
+                                )}
                               </div>
                               <div>
                                 <span className="text-gray-400 block">IVA Trasladado</span>

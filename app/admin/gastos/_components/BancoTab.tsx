@@ -152,6 +152,7 @@ export interface BancoTabProps {
   manualMatchSearch: string;
   setManualMatchSearch: (v: string) => void;
   handleOpenReconcileModal?: (m: any) => void;
+  onOpenAsignarFactura?: (m: any) => void;
   handleSaveReconciliation?: (
     customGastosIds?: string[],
     customEstatusClave?: string,
@@ -596,6 +597,7 @@ export default function BancoTab({
   reconcileModal, setReconcileModal,
   manualMatchSearch, setManualMatchSearch,
   handleOpenReconcileModal, handleSaveReconciliation,
+  onOpenAsignarFactura,
   handleUploadReconciliationFile, handleRemoveReconciliationFile,
   handleToggleVisibility, handleUpdateCategoria,
   selectedGlobalDepositId, setSelectedGlobalDepositId,
@@ -4225,6 +4227,22 @@ export default function BancoTab({
                                     title="Conciliación Manual"
                                   >
                                     <ArrowRightLeft size={13} />
+                                  </button>
+                                )}
+
+                                {/* Asignar Factura CFDI (Paso 3 para Retiros/Egresos) */}
+                                {!(m as any)._isCajaGasto && onOpenAsignarFactura && (m.tipo_movimiento === 'Retiro' || Number(m.retiro || 0) > 0 || Number(m.monto || 0) < 0) && (
+                                  <button
+                                    type="button"
+                                    onClick={() => onOpenAsignarFactura(m)}
+                                    className={`p-1.5 rounded-lg border transition-colors cursor-pointer ${
+                                      m.xml_url
+                                        ? 'text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-955/40 hover:bg-emerald-100 border-emerald-200 dark:border-emerald-800'
+                                        : 'text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-955/40 hover:bg-rose-100 border-rose-200 dark:border-rose-800'
+                                    }`}
+                                    title={m.xml_url ? 'Gestionar / Asignar otra Factura CFDI' : 'Asignar Factura CFDI a este pago'}
+                                  >
+                                    <Receipt size={13} />
                                   </button>
                                 )}
 

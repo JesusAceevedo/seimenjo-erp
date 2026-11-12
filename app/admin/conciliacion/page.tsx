@@ -39,11 +39,12 @@ import {
 import { ComprobanteDeposito } from '../types';
 import {
   RefreshCw, AlertTriangle, CheckCircle, Sun, Moon,
-  Calendar, ArrowRightLeft, Landmark, FileSpreadsheet, Link2
+  Calendar, ArrowRightLeft, Landmark, FileSpreadsheet, Link2, Receipt
 } from 'lucide-react';
 import BancoTab from '../gastos/_components/BancoTab';
 import PeriodSelector from '../_components/PeriodSelector';
 import AsignacionXmlModal from '../gastos/_components/AsignacionXmlModal';
+import AsignacionFacturaEgresoModal from '../gastos/_components/AsignacionFacturaEgresoModal';
 import { formatDate } from '@/lib/formatters';
 
 export const dynamic = 'force-dynamic';
@@ -52,6 +53,7 @@ export default function BankReconciliationModule() {
   const router = useRouter();
   const { isDarkMode, toggleDarkMode } = useThemeMode();
   const [showAsignacionXmlModal, setShowAsignacionXmlModal] = useState(false);
+  const [asignacionFacturaModal, setAsignacionFacturaModal] = useState<{ open: boolean; movimientoId?: string }>({ open: false });
 
   // Helper de Formato Contable
   const formatCurrency = (val: number) => {
@@ -1734,10 +1736,19 @@ export default function BankReconciliationModule() {
             <button
               onClick={() => setShowAsignacionXmlModal(true)}
               className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-xs transition-all shadow-sm cursor-pointer"
-              title="Abrir Asignación de Facturas XML a Pedidos por Coincidencia de Importe"
+              title="Abrir Asignación de Facturas XML a Pedidos (Ingresos)"
             >
               <Link2 size={15} />
-              <span>Asignación XML</span>
+              <span>Asignación XML (Ingresos)</span>
+            </button>
+
+            <button
+              onClick={() => setAsignacionFacturaModal({ open: true })}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-extrabold text-xs transition-all shadow-sm cursor-pointer"
+              title="Asignar Facturas CFDI a Pagos en Estado de Cuenta (Egresos)"
+            >
+              <Receipt size={15} />
+              <span>Asignar Facturas (Egresos)</span>
             </button>
 
             <button
@@ -2031,6 +2042,7 @@ NOTIFY pgrst, 'reload schema';`}
               manualMatchSearch={manualMatchSearch}
               setManualMatchSearch={setManualMatchSearch}
               handleOpenReconcileModal={handleOpenReconcileModal}
+              onOpenAsignarFactura={(m) => setAsignacionFacturaModal({ open: true, movimientoId: m.id })}
               handleSaveReconciliation={handleSaveManualReconcile}
               handleUploadReconciliationFile={handleUploadReconciliationFile}
               handleRemoveReconciliationFile={handleRemoveReconciliationFile}
@@ -2221,6 +2233,19 @@ NOTIFY pgrst, 'reload schema';`}
           onClose={() => setShowAsignacionXmlModal(false)}
           onSuccess={() => {
             setShowAsignacionXmlModal(false);
+            fetchData();
+          }}
+        />
+      )}
+
+      {/* MODAL DE ASIGNACIÓN DE FACTURAS A PAGOS DE EGRESOS */}
+      {asignacionFacturaModal.open && (
+        <AsignacionFacturaEgresoModal
+          isOpen={asignacionFacturaModal.open}
+          initialMonth={selectedMonth}
+          initialMovimientoId={asignacionFacturaModal.movimientoId}
+          onClose={() => setAsignacionFacturaModal({ open: false })}
+          onSuccess={() => {
             fetchData();
           }}
         />

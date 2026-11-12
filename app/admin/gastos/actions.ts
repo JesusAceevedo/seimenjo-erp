@@ -423,10 +423,11 @@ export async function enviarFacturaPorCorreo(
   }
 }
 
-// Desvincular factura errónea de un pedido por ID del pedido
+// Desvincular factura(s) de un pedido por ID del pedido (sin eliminar el CFDI de facturas_clientes)
 export async function desvincularFacturaDePedidoId(
   pedidoId: string,
-  token: string
+  token: string,
+  facturaIdEspecifica?: string
 ): Promise<{ success: boolean; error?: string }> {
   try {
     const { empresaId } = await getUserEmpresaId(token);
@@ -444,28 +445,75 @@ export async function desvincularFacturaDePedidoId(
     const { data: pedido, error: pedErr } = await pedQuery.maybeSingle();
     if (pedErr || !pedido) throw new Error('Pedido no encontrado o sin permisos');
 
-    // 2. Desvincular/Eliminar registros de facturas_clientes asociados al pedido
-    await supabaseAdmin
+    // 2. Identificar qué facturas estaban vinculadas a este pedido (por tabla puente o por pedido_id directo)
+    const { data: junctionLinks } = await supabaseAdmin
+      .from('facturas_clientes_pedidos')
+      .select('factura_id')
+      .eq('pedido_id', pedidoId);
+
+    const { data: directLinks } = await supabaseAdmin
       .from('facturas_clientes')
+      .select('id')
+      .eq('pedido_id', pedidoId);
+
+    const affectedFacturaIds = Array.from(new Set([
+      ...(junctionLinks || []).map((r: any) => r.factura_id),
+      ...(directLinks || []).map((r: any) => r.id),
+      ...(facturaIdEspecifica ? [facturaIdEspecifica] : [])
+    ])).filter(Boolean);
+
+    // 3. Eliminar relación de la tabla puente facturas_clientes_pedidos
+    let delJunction = supabaseAdmin
+      .from('facturas_clientes_pedidos')
       .delete()
       .eq('pedido_id', pedidoId);
 
-    if (pedido.folio_factura) {
-      let facDelQuery = supabaseAdmin
-        .from('facturas_clientes')
-        .delete()
-        .or(`serie_folio.eq.${pedido.folio_factura},uuid_fiscal.eq.${pedido.folio_factura}`);
+    if (facturaIdEspecifica) {
+      delJunction = delJunction.eq('factura_id', facturaIdEspecifica);
+    }
+    await delJunction;
 
-      if (pedido.empresa_id) {
-        facDelQuery = facDelQuery.eq('empresa_id', pedido.empresa_id);
-      }
-      await facDelQuery;
+    // 4. Actualizar facturas_clientes.pedido_id sin borrar el CFDI
+    for (const fId of affectedFacturaIds) {
+      if (facturaIdEspecifica && fId !== facturaIdEspecifica) continue;
+
+      const { data: otherPedidoLinks } = await supabaseAdmin
+        .from('facturas_clientes_pedidos')
+        .select('pedido_id')
+        .eq('factura_id', fId)
+        .neq('pedido_id', pedidoId)
+        .limit(1);
+
+      const nextPrimaryPedidoId = otherPedidoLinks && otherPedidoLinks.length > 0
+        ? otherPedidoLinks[0].pedido_id
+        : null;
+
+      await supabaseAdmin
+        .from('facturas_clientes')
+        .update({ pedido_id: nextPrimaryPedidoId })
+        .eq('id', fId)
+        .eq('pedido_id', pedidoId);
     }
 
-    // 3. Limpiar folio_factura en el pedido
+    // 5. Recalcular folio_factura en el pedido según las facturas que le queden vinculadas
+    const { data: remainingLinks } = await supabaseAdmin
+      .from('facturas_clientes_pedidos')
+      .select('factura_id, facturas_clientes(id, serie_folio, uuid_fiscal)')
+      .eq('pedido_id', pedidoId);
+
+    const remainingFolios = Array.from(new Set(
+      (remainingLinks || [])
+        .map((r: any) => {
+          const fc = Array.isArray(r.facturas_clientes) ? r.facturas_clientes[0] : r.facturas_clientes;
+          if (!fc) return '';
+          return fc.serie_folio || (fc.uuid_fiscal ? `UUID:${String(fc.uuid_fiscal).substring(0, 8)}` : '');
+        })
+        .filter(Boolean)
+    ));
+
     const { error: updErr } = await supabaseAdmin
       .from('pedidos')
-      .update({ folio_factura: null })
+      .update({ folio_factura: remainingFolios.length > 0 ? remainingFolios.join(', ') : null })
       .eq('id', pedidoId);
 
     if (updErr) throw updErr;
@@ -1818,132 +1866,442 @@ export async function consultarSatYActualizarCfdi(
 // 12. Vinculación Manual y Trayectoria de Pedidos (Ventas ↔ XML ↔ Conciliación)
 // ---------------------------------------------------------------------------
 
+export interface VincularFacturasOptions {
+  actualizarEstatusPago?: boolean;
+  marcarFacturadoCompleto?: boolean;
+  montosPersonalizados?: Record<string, number>; // key: `${facturaId}_${pedidoId}` o `${pedidoId}`
+}
+
 export async function vincularFacturaAPedido(
-  facturaId: string,
+  facturaId: string | string[],
   pedidoId: string | string[],
-  token: string
-): Promise<{ success: boolean; error?: string }> {
+  token: string,
+  options?: VincularFacturasOptions
+): Promise<{ success: boolean; vinculadosCount?: number; error?: string }> {
   try {
     const { empresaId } = await getUserEmpresaId(token);
     if (!empresaId) throw new Error('Sesión no válida o empresa no especificada.');
 
-    const targetPedidoIds = Array.isArray(pedidoId) ? pedidoId : [pedidoId];
+    const targetFacturaIds = Array.from(new Set(Array.isArray(facturaId) ? facturaId : [facturaId])).filter(Boolean);
+    const targetPedidoIds = Array.from(new Set(Array.isArray(pedidoId) ? pedidoId : [pedidoId])).filter(Boolean);
+
+    if (targetFacturaIds.length === 0) throw new Error('Debes seleccionar al menos una factura XML.');
     if (targetPedidoIds.length === 0) throw new Error('Debes seleccionar al menos un pedido.');
 
-    // 1. Obtener la factura de cliente
-    const { data: factura, error: fErr } = await supabaseAdmin
+    // 1. Obtener todas las facturas seleccionadas
+    const { data: facturasList, error: fErr } = await supabaseAdmin
       .from('facturas_clientes')
-      .select('*')
-      .eq('id', facturaId)
-      .eq('empresa_id', empresaId)
-      .single();
+      .select('*, formas_pago(id, codigo, nombre)')
+      .in('id', targetFacturaIds)
+      .eq('empresa_id', empresaId);
 
-    if (fErr || !factura) throw new Error('Factura de cliente no encontrada.');
+    if (fErr || !facturasList || facturasList.length === 0) {
+      throw new Error('Factura(s) de cliente no encontrada(s).');
+    }
 
-    // 2. Obtener los pedidos objetivos
+    // 2. Obtener todos los pedidos objetivos
     const { data: pedidosList, error: pErr } = await supabaseAdmin
       .from('pedidos')
-      .select('*, clientes(rfc)')
+      .select('*, clientes(id, rfc, nombre_local)')
       .in('id', targetPedidoIds)
       .eq('empresa_id', empresaId);
 
-    if (pErr || !pedidosList || pedidosList.length === 0) throw new Error('Pedido(s) no encontrado(s).');
-
-    // 3. Vincular la factura al primer pedido en la tabla facturas_clientes
-    const primaryPedidoId = targetPedidoIds[0];
-    const { error: updFErr } = await supabaseAdmin
-      .from('facturas_clientes')
-      .update({ pedido_id: primaryPedidoId })
-      .eq('id', facturaId)
-      .eq('empresa_id', empresaId);
-
-    if (updFErr) throw updFErr;
-
-    // 4. Sincronizar el folio de factura en TODOS los pedidos seleccionados
-    const folioStr = factura.serie_folio || (factura.uuid_fiscal ? `UUID:${factura.uuid_fiscal.substring(0, 8)}` : '');
-    if (folioStr) {
-      await supabaseAdmin
-        .from('pedidos')
-        .update({ folio_factura: folioStr })
-        .in('id', targetPedidoIds)
-        .eq('empresa_id', empresaId);
+    if (pErr || !pedidosList || pedidosList.length === 0) {
+      throw new Error('Pedido(s) no encontrado(s).');
     }
 
-    // 5. Si alguno de los pedidos ya tiene un movimiento bancario conciliado, sincronizar los documentos XML/PDF al movimiento bancario
-    const xmlToSet = factura.xml_url || null;
-    const pdfToSet = factura.pdf_url || null;
-    const ticketToSet = factura.ticket_url || null;
+    // 3. Consultar asignaciones existentes en facturas_clientes_pedidos para estas facturas y pedidos
+    const [existingByFacturaRes, existingByPedidoRes] = await Promise.all([
+      supabaseAdmin
+        .from('facturas_clientes_pedidos')
+        .select('factura_id, pedido_id, monto_asignado')
+        .in('factura_id', targetFacturaIds)
+        .eq('empresa_id', empresaId),
+      supabaseAdmin
+        .from('facturas_clientes_pedidos')
+        .select('factura_id, pedido_id, monto_asignado')
+        .in('pedido_id', targetPedidoIds)
+        .eq('empresa_id', empresaId),
+    ]);
 
-    for (const p of pedidosList) {
+    const existingByFactura = existingByFacturaRes.data || [];
+    const existingByPedido = existingByPedidoRes.data || [];
+
+    // Calcular cuánto lleva asignado cada factura y cada pedido fuera de los pares actuales
+    const usedFacturaMap = new Map<string, number>();
+    existingByFactura.forEach((row: any) => {
+      if (!targetPedidoIds.includes(row.pedido_id)) {
+        usedFacturaMap.set(row.factura_id, (usedFacturaMap.get(row.factura_id) || 0) + Number(row.monto_asignado || 0));
+      }
+    });
+
+    const coveredPedidoMap = new Map<string, number>();
+    existingByPedido.forEach((row: any) => {
+      if (!targetFacturaIds.includes(row.factura_id)) {
+        coveredPedidoMap.set(row.pedido_id, (coveredPedidoMap.get(row.pedido_id) || 0) + Number(row.monto_asignado || 0));
+      }
+    });
+
+    // 4. Algoritmo de distribución de monto_asignado (1:1, 1:N, N:1 y N:M)
+    const upsertRows: {
+      factura_id: string;
+      pedido_id: string;
+      monto_asignado: number;
+      empresa_id: string;
+    }[] = [];
+
+    // Ordenar pedidos y facturas respetando el orden de selección del usuario
+    const orderedFacturas = targetFacturaIds
+      .map(id => facturasList.find(f => f.id === id))
+      .filter(Boolean) as any[];
+    const orderedPedidos = targetPedidoIds
+      .map(id => pedidosList.find(p => p.id === id))
+      .filter(Boolean) as any[];
+
+    if (orderedFacturas.length === 1 && orderedPedidos.length === 1) {
+      // Caso 1:1
+      const f = orderedFacturas[0];
+      const p = orderedPedidos[0];
+      const fAvail = Math.max(0, Number(f.total || 0) - (usedFacturaMap.get(f.id) || 0));
+      const pRem = Math.max(0, Number(p.precio_total || 0) - (coveredPedidoMap.get(p.id) || 0));
+
+      let monto = fAvail > 0 ? Math.min(fAvail, pRem > 0 ? pRem : fAvail) : Number(f.total || 0);
+      if (options?.marcarFacturadoCompleto && pRem > 0) {
+        monto = pRem;
+      }
+      const customKey = `${f.id}_${p.id}`;
+      if (options?.montosPersonalizados?.[customKey] !== undefined) {
+        monto = Number(options.montosPersonalizados[customKey]);
+      } else if (options?.montosPersonalizados?.[p.id] !== undefined) {
+        monto = Number(options.montosPersonalizados[p.id]);
+      }
+
+      upsertRows.push({
+        factura_id: f.id,
+        pedido_id: p.id,
+        monto_asignado: Math.round(monto * 100) / 100,
+        empresa_id: empresaId,
+      });
+    } else if (orderedFacturas.length === 1 && orderedPedidos.length > 1) {
+      // Caso 1:N (1 Factura Consolidada -> Múltiples Pedidos)
+      const f = orderedFacturas[0];
+      let remainingXml = Math.max(0, Number(f.total || 0) - (usedFacturaMap.get(f.id) || 0));
+      if (remainingXml <= 0) remainingXml = Number(f.total || 0);
+
+      orderedPedidos.forEach((p, idx) => {
+        const pNeed = Math.max(0, Number(p.precio_total || 0) - (coveredPedidoMap.get(p.id) || 0)) || Number(p.precio_total || 0);
+        let assigned = 0;
+
+        if (options?.marcarFacturadoCompleto) {
+          assigned = pNeed;
+        } else if (idx === orderedPedidos.length - 1 && remainingXml > 0 && Math.abs(remainingXml - pNeed) <= 1.0) {
+          assigned = remainingXml;
+        } else {
+          assigned = Math.min(remainingXml, pNeed);
+        }
+
+        remainingXml = Math.max(0, remainingXml - assigned);
+        upsertRows.push({
+          factura_id: f.id,
+          pedido_id: p.id,
+          monto_asignado: Math.round(assigned * 100) / 100,
+          empresa_id: empresaId,
+        });
+      });
+    } else if (orderedFacturas.length > 1 && orderedPedidos.length === 1) {
+      // Caso N:1 (Múltiples Facturas Parciales / Divididas -> 1 Pedido)
+      const p = orderedPedidos[0];
+      let remainingPedido = Math.max(0, Number(p.precio_total || 0) - (coveredPedidoMap.get(p.id) || 0));
+      if (remainingPedido <= 0) remainingPedido = Number(p.precio_total || 0);
+
+      orderedFacturas.forEach((f, idx) => {
+        const fAvail = Math.max(0, Number(f.total || 0) - (usedFacturaMap.get(f.id) || 0)) || Number(f.total || 0);
+        let assigned = fAvail;
+        if (options?.marcarFacturadoCompleto && idx === orderedFacturas.length - 1 && remainingPedido > fAvail) {
+          assigned = remainingPedido;
+        }
+        remainingPedido = Math.max(0, remainingPedido - assigned);
+
+        upsertRows.push({
+          factura_id: f.id,
+          pedido_id: p.id,
+          monto_asignado: Math.round(assigned * 100) / 100,
+          empresa_id: empresaId,
+        });
+      });
+    } else {
+      // Caso N:M general (Múltiples Facturas -> Múltiples Pedidos por lote FIFO)
+      const fBalances = orderedFacturas.map(f => ({
+        factura: f,
+        avail: Math.max(0, Number(f.total || 0) - (usedFacturaMap.get(f.id) || 0)) || Number(f.total || 0),
+      }));
+      const pBalances = orderedPedidos.map(p => ({
+        pedido: p,
+        need: Math.max(0, Number(p.precio_total || 0) - (coveredPedidoMap.get(p.id) || 0)) || Number(p.precio_total || 0),
+      }));
+
+      for (const fb of fBalances) {
+        for (const pb of pBalances) {
+          if (fb.avail <= 0.009 || pb.need <= 0.009) continue;
+          const alloc = Math.min(fb.avail, pb.need);
+          fb.avail -= alloc;
+          pb.need -= alloc;
+          upsertRows.push({
+            factura_id: fb.factura.id,
+            pedido_id: pb.pedido.id,
+            monto_asignado: Math.round(alloc * 100) / 100,
+            empresa_id: empresaId,
+          });
+        }
+      }
+
+      // Asegurar que ninguna factura ni pedido seleccionado quede sin registro en la tabla puente
+      for (const f of orderedFacturas) {
+        if (!upsertRows.some(r => r.factura_id === f.id)) {
+          upsertRows.push({
+            factura_id: f.id,
+            pedido_id: orderedPedidos[0].id,
+            monto_asignado: Number(f.total || 0),
+            empresa_id: empresaId,
+          });
+        }
+      }
+      for (const p of orderedPedidos) {
+        if (!upsertRows.some(r => r.pedido_id === p.id)) {
+          upsertRows.push({
+            factura_id: orderedFacturas[0].id,
+            pedido_id: p.id,
+            monto_asignado: options?.marcarFacturadoCompleto ? Number(p.precio_total || 0) : 0,
+            empresa_id: empresaId,
+          });
+        }
+      }
+    }
+
+    // 5. Guardar asignaciones en facturas_clientes_pedidos
+    if (upsertRows.length > 0) {
+      const { error: jErr } = await supabaseAdmin
+        .from('facturas_clientes_pedidos')
+        .upsert(upsertRows, { onConflict: 'factura_id,pedido_id' });
+
+      if (jErr) {
+        console.warn('Aviso al insertar en facturas_clientes_pedidos:', jErr.message);
+      }
+    }
+
+    // 6. Actualizar pedido_id primario en facturas_clientes (para retrocompatibilidad 100%)
+    for (const f of orderedFacturas) {
+      const assignedPair = upsertRows.find(r => r.factura_id === f.id);
+      const primaryPedidoForFactura = f.pedido_id && targetPedidoIds.includes(f.pedido_id)
+        ? f.pedido_id
+        : (assignedPair?.pedido_id || targetPedidoIds[0]);
+
+      const { error: updFErr } = await supabaseAdmin
+        .from('facturas_clientes')
+        .update({ pedido_id: primaryPedidoForFactura })
+        .eq('id', f.id)
+        .eq('empresa_id', empresaId);
+
+      if (updFErr) throw updFErr;
+    }
+
+    // 7. Recalcular y sincronizar folios, estatus de pago, método de pago y bancos para cada pedido
+    for (const p of orderedPedidos) {
+      const { data: allPedidoLinks } = await supabaseAdmin
+        .from('facturas_clientes_pedidos')
+        .select('monto_asignado, facturas_clientes(id, serie_folio, uuid_fiscal, xml_url, pdf_url, ticket_url, cliente_id, metodo_pago, formas_pago(codigo))')
+        .eq('pedido_id', p.id)
+        .eq('empresa_id', empresaId);
+
+      const linkedInvoices = (allPedidoLinks || [])
+        .map((r: any) => (Array.isArray(r.facturas_clientes) ? r.facturas_clientes[0] : r.facturas_clientes))
+        .filter(Boolean);
+
+      // Fallback si la consulta puente aún no devolvió filas
+      const effectiveInvoices = linkedInvoices.length > 0 ? linkedInvoices : orderedFacturas;
+
+      const foliosUnicos = Array.from(new Set(
+        effectiveInvoices
+          .map((inv: any) => inv.serie_folio || (inv.uuid_fiscal ? `UUID:${String(inv.uuid_fiscal).substring(0, 8)}` : ''))
+          .filter(Boolean)
+      ));
+
+      const pedidoUpdatePayload: Record<string, any> = {};
+      if (foliosUnicos.length > 0) {
+        pedidoUpdatePayload.folio_factura = foliosUnicos.join(', ');
+      }
+
+      // Heredar cliente_id si el pedido no lo tenía
+      const firstInvWithClient = effectiveInvoices.find((inv: any) => !!inv.cliente_id);
+      if (!p.cliente_id && firstInvWithClient?.cliente_id) {
+        pedidoUpdatePayload.cliente_id = firstInvWithClient.cliente_id;
+      }
+
+      // Heredar forma/método de pago y actualizar estatus_pago si está habilitado (por defecto true)
+      if (options?.actualizarEstatusPago !== false) {
+        const firstInv = effectiveInvoices[0];
+        const fpObj = Array.isArray(firstInv?.formas_pago) ? firstInv?.formas_pago[0] : firstInv?.formas_pago;
+        const fpCodigo = fpObj?.codigo || firstInv?.metodo_pago || '';
+
+        if (fpCodigo && fpCodigo !== '99' && !p.metodo_pago) {
+          pedidoUpdatePayload.metodo_pago = String(fpCodigo).trim().padStart(2, '0');
+        }
+        if (fpCodigo !== '99' && (!p.estatus_pago || p.estatus_pago === 'Pendiente' || p.estatus_pago === 'No liquidado')) {
+          pedidoUpdatePayload.estatus_pago = 'Liquidado';
+        }
+      }
+
+      if (Object.keys(pedidoUpdatePayload).length > 0) {
+        await supabaseAdmin
+          .from('pedidos')
+          .update(pedidoUpdatePayload)
+          .eq('id', p.id)
+          .eq('empresa_id', empresaId);
+      }
+
+      // 8. Si el pedido ya tiene un movimiento bancario conciliado, sincronizar todos los XML/PDF asociados
       if (p.movimiento_bancario_id) {
+        const xmlUrls = Array.from(new Set(effectiveInvoices.map((i: any) => i.xml_url).filter(Boolean))).join(',');
+        const pdfUrls = Array.from(new Set(effectiveInvoices.map((i: any) => i.pdf_url).filter(Boolean))).join(',');
+        const ticketUrls = Array.from(new Set(effectiveInvoices.map((i: any) => i.ticket_url).filter(Boolean))).join(',');
+
         await supabaseAdmin
           .from('movimientos_bancarios')
           .update({
-            ...(xmlToSet ? { xml_url: xmlToSet } : {}),
-            ...(pdfToSet ? { pdf_url: pdfToSet } : {}),
-            ...(ticketToSet ? { pdf_ticket_url: ticketToSet } : {})
+            ...(xmlUrls ? { xml_url: xmlUrls } : {}),
+            ...(pdfUrls ? { pdf_url: pdfUrls } : {}),
+            ...(ticketUrls ? { pdf_ticket_url: ticketUrls } : {})
           })
           .eq('id', p.movimiento_bancario_id)
           .eq('empresa_id', empresaId);
       }
     }
 
-    return { success: true };
+    return { success: true, vinculadosCount: upsertRows.length };
   } catch (err: any) {
-    console.error('Error al vincular factura a pedido(s):', err);
-    return { success: false, error: err.message || 'Error al vincular factura.' };
+    console.error('Error al vincular factura(s) a pedido(s):', err);
+    return { success: false, error: err.message || 'Error al vincular factura(s).' };
   }
+}
+
+export async function vincularFacturasAPedidos(
+  facturaIds: string | string[],
+  pedidoIds: string | string[],
+  token: string,
+  options?: VincularFacturasOptions
+): Promise<{ success: boolean; vinculadosCount?: number; error?: string }> {
+  return vincularFacturaAPedido(facturaIds, pedidoIds, token, options);
 }
 
 export async function desvincularFacturaDePedido(
   facturaId: string,
-  token: string
+  token: string,
+  pedidoIdEspecifico?: string
 ): Promise<{ success: boolean; error?: string }> {
   try {
     const { empresaId } = await getUserEmpresaId(token);
     if (!empresaId) throw new Error('Sesión no válida o empresa no especificada.');
 
-    // 1. Obtener la factura para saber cuál pedido tenía
-    const { data: factura } = await supabaseAdmin
-      .from('facturas_clientes')
-      .select('pedido_id')
-      .eq('id', facturaId)
-      .eq('empresa_id', empresaId)
-      .single();
+    // 1. Obtener la factura y todos los pedidos que tenía vinculados (en tabla puente y en columna directa)
+    const [{ data: factura }, { data: junctionLinks }] = await Promise.all([
+      supabaseAdmin
+        .from('facturas_clientes')
+        .select('id, pedido_id, serie_folio, uuid_fiscal')
+        .eq('id', facturaId)
+        .eq('empresa_id', empresaId)
+        .maybeSingle(),
+      supabaseAdmin
+        .from('facturas_clientes_pedidos')
+        .select('pedido_id')
+        .eq('factura_id', facturaId)
+        .eq('empresa_id', empresaId),
+    ]);
 
-    const previousPedidoId = factura?.pedido_id;
+    const affectedPedidoIds = new Set<string>();
+    if (pedidoIdEspecifico) {
+      affectedPedidoIds.add(pedidoIdEspecifico);
+    } else {
+      if (factura?.pedido_id) affectedPedidoIds.add(factura.pedido_id);
+      (junctionLinks || []).forEach((r: any) => {
+        if (r.pedido_id) affectedPedidoIds.add(r.pedido_id);
+      });
 
-    // 2. Desvincular la factura
-    const { error: updErr } = await supabaseAdmin
-      .from('facturas_clientes')
-      .update({ pedido_id: null })
-      .eq('id', facturaId)
+      // También buscar pedidos que tuvieran el folio de esta factura escrito como texto
+      if (factura?.serie_folio) {
+        const { data: pByFolio } = await supabaseAdmin
+          .from('pedidos')
+          .select('id')
+          .eq('empresa_id', empresaId)
+          .ilike('folio_factura', `%${factura.serie_folio}%`);
+        (pByFolio || []).forEach((p: any) => affectedPedidoIds.add(p.id));
+      }
+    }
+
+    // 2. Eliminar de la tabla puente facturas_clientes_pedidos
+    let delQuery = supabaseAdmin
+      .from('facturas_clientes_pedidos')
+      .delete()
+      .eq('factura_id', facturaId)
       .eq('empresa_id', empresaId);
 
-    if (updErr) throw updErr;
+    if (pedidoIdEspecifico) {
+      delQuery = delQuery.eq('pedido_id', pedidoIdEspecifico);
+    }
+    await delQuery;
 
-    // 3. Si había un pedido vinculado, verificar si le quedan otras facturas
-    if (previousPedidoId) {
-      const { data: remaining } = await supabaseAdmin
+    // 3. Actualizar facturas_clientes.pedido_id
+    const { data: remainingForFactura } = await supabaseAdmin
+      .from('facturas_clientes_pedidos')
+      .select('pedido_id')
+      .eq('factura_id', facturaId)
+      .eq('empresa_id', empresaId)
+      .limit(1);
+
+    const nextPrimaryPedidoId = remainingForFactura && remainingForFactura.length > 0
+      ? remainingForFactura[0].pedido_id
+      : null;
+
+    if (!pedidoIdEspecifico || factura?.pedido_id === pedidoIdEspecifico) {
+      const { error: updErr } = await supabaseAdmin
         .from('facturas_clientes')
-        .select('id, serie_folio, uuid_fiscal')
-        .eq('pedido_id', previousPedidoId)
+        .update({ pedido_id: nextPrimaryPedidoId })
+        .eq('id', facturaId)
         .eq('empresa_id', empresaId);
 
-      if (!remaining || remaining.length === 0) {
-        await supabaseAdmin
-          .from('pedidos')
-          .update({ folio_factura: null })
-          .eq('id', previousPedidoId)
-          .eq('empresa_id', empresaId);
-      } else {
-        const nextFolio = remaining[0].serie_folio || `UUID:${remaining[0].uuid_fiscal?.substring(0, 8)}`;
-        await supabaseAdmin
-          .from('pedidos')
-          .update({ folio_factura: nextFolio })
-          .eq('id', previousPedidoId)
-          .eq('empresa_id', empresaId);
-      }
+      if (updErr) throw updErr;
+    }
+
+    // 4. Para cada pedido afectado, recalcular su folio_factura con las facturas que aún conserve
+    for (const pedId of Array.from(affectedPedidoIds)) {
+      const [{ data: remJunction }, { data: remDirect }] = await Promise.all([
+        supabaseAdmin
+          .from('facturas_clientes_pedidos')
+          .select('factura_id, facturas_clientes(id, serie_folio, uuid_fiscal)')
+          .eq('pedido_id', pedId)
+          .eq('empresa_id', empresaId),
+        supabaseAdmin
+          .from('facturas_clientes')
+          .select('id, serie_folio, uuid_fiscal')
+          .eq('pedido_id', pedId)
+          .eq('empresa_id', empresaId),
+      ]);
+
+      const remainingInvoices = [
+        ...(remJunction || []).map((r: any) => (Array.isArray(r.facturas_clientes) ? r.facturas_clientes[0] : r.facturas_clientes)).filter(Boolean),
+        ...(remDirect || [])
+      ];
+
+      const uniqueFolios = Array.from(new Set(
+        remainingInvoices
+          .map((inv: any) => inv.serie_folio || (inv.uuid_fiscal ? `UUID:${String(inv.uuid_fiscal).substring(0, 8)}` : ''))
+          .filter(Boolean)
+      ));
+
+      await supabaseAdmin
+        .from('pedidos')
+        .update({ folio_factura: uniqueFolios.length > 0 ? uniqueFolios.join(', ') : null })
+        .eq('id', pedId)
+        .eq('empresa_id', empresaId);
     }
 
     return { success: true };
@@ -1954,7 +2312,8 @@ export async function desvincularFacturaDePedido(
 }
 
 export async function obtenerFacturasClientesSinVincular(
-  token: string
+  token: string,
+  incluirConSaldoDisponible = true
 ): Promise<{ success: boolean; data?: any[]; error?: string }> {
   try {
     const { empresaId } = await getUserEmpresaId(token);
@@ -1962,13 +2321,34 @@ export async function obtenerFacturasClientesSinVincular(
 
     const { data, error } = await supabaseAdmin
       .from('facturas_clientes')
-      .select('*, clientes(nombre_local, rfc, email_facturacion), estatus_factura(nombre)')
+      .select('*, clientes(id, nombre_local, razon_social, rfc, email_facturacion), estatus_factura(nombre), facturas_clientes_pedidos(pedido_id, monto_asignado, pedidos(id, numero_pedido, precio_total))')
       .eq('empresa_id', empresaId)
-      .is('pedido_id', null)
       .order('fecha_emision', { ascending: false });
 
     if (error) throw error;
-    return { success: true, data: data || [] };
+
+    const filtradas = (data || []).filter((f: any) => {
+      const links = f.facturas_clientes_pedidos || [];
+      if (!f.pedido_id && links.length === 0) return true;
+      if (!incluirConSaldoDisponible) return false;
+
+      const totalFactura = Number(f.total || 0);
+      const montoUsado = links.reduce((acc: number, l: any) => acc + Number(l.monto_asignado || 0), 0);
+      const saldoDisponible = totalFactura - montoUsado;
+      return saldoDisponible > 0.05;
+    }).map((f: any) => {
+      const links = f.facturas_clientes_pedidos || [];
+      const totalFactura = Number(f.total || 0);
+      const montoUsado = links.reduce((acc: number, l: any) => acc + Number(l.monto_asignado || 0), 0);
+      return {
+        ...f,
+        _monto_asignado_total: montoUsado,
+        _saldo_disponible: Math.max(0, Math.round((totalFactura - montoUsado) * 100) / 100),
+        _pedidos_vinculados_count: links.length,
+      };
+    });
+
+    return { success: true, data: filtradas };
   } catch (err: any) {
     console.error('Error al obtener facturas sin vincular:', err);
     return { success: false, error: err.message || 'Error al cargar facturas sin vincular.' };
@@ -1993,25 +2373,68 @@ export async function obtenerTrayectoriaPedido(
 
     if (pErr || !pedido) throw new Error('Pedido no encontrado.');
 
-    // 2. Facturas de clientes asociadas
-    let { data: facturas } = await supabaseAdmin
-      .from('facturas_clientes')
-      .select('*, estatus_factura(nombre), formas_pago(nombre, codigo)')
-      .eq('pedido_id', pedidoId)
-      .eq('empresa_id', empresaId);
-
-    // Fallback: Si la factura fue vinculada a múltiples pedidos o mediante folio_factura
-    if ((!facturas || facturas.length === 0) && pedido.folio_factura) {
-      const folioClean = pedido.folio_factura.trim().toLowerCase();
-      const { data: factByFolio } = await supabaseAdmin
+    // 2. Facturas de clientes asociadas (vía tabla puente N:M + vía pedido_id directo)
+    const [{ data: junctionRows }, { data: directFacturas }] = await Promise.all([
+      supabaseAdmin
+        .from('facturas_clientes_pedidos')
+        .select('monto_asignado, factura_id, facturas_clientes(*, estatus_factura(nombre), formas_pago(nombre, codigo), facturas_clientes_pedidos(pedido_id, monto_asignado, pedidos(id, numero_pedido, precio_total)))')
+        .eq('pedido_id', pedidoId)
+        .eq('empresa_id', empresaId),
+      supabaseAdmin
         .from('facturas_clientes')
-        .select('*, estatus_factura(nombre), formas_pago(nombre, codigo)')
-        .eq('empresa_id', empresaId)
-        .or(`serie_folio.ilike.%${folioClean}%,uuid_fiscal.ilike.%${folioClean}%`);
+        .select('*, estatus_factura(nombre), formas_pago(nombre, codigo), facturas_clientes_pedidos(pedido_id, monto_asignado, pedidos(id, numero_pedido, precio_total))')
+        .eq('pedido_id', pedidoId)
+        .eq('empresa_id', empresaId),
+    ]);
 
-      if (factByFolio && factByFolio.length > 0) {
-        facturas = factByFolio;
+    const facturasMap = new Map<string, any>();
+    (junctionRows || []).forEach((row: any) => {
+      const fc = Array.isArray(row.facturas_clientes) ? row.facturas_clientes[0] : row.facturas_clientes;
+      if (fc?.id) {
+        facturasMap.set(fc.id, {
+          ...fc,
+          _monto_asignado: Number(row.monto_asignado || fc.total || 0),
+        });
       }
+    });
+
+    (directFacturas || []).forEach((fc: any) => {
+      if (fc?.id && !facturasMap.has(fc.id)) {
+        facturasMap.set(fc.id, {
+          ...fc,
+          _monto_asignado: Number(fc.total || 0),
+        });
+      }
+    });
+
+    let facturas = Array.from(facturasMap.values());
+
+    // Fallback: Si la factura fue vinculada mediante folio_factura separado por comas
+    if (facturas.length === 0 && pedido.folio_factura) {
+      const folios = String(pedido.folio_factura)
+        .split(',')
+        .map((s: string) => s.trim())
+        .filter(Boolean);
+
+      for (const fToken of folios) {
+        const clean = fToken.replace(/^UUID:/i, '').trim();
+        if (!clean) continue;
+        const { data: factByFolio } = await supabaseAdmin
+          .from('facturas_clientes')
+          .select('*, estatus_factura(nombre), formas_pago(nombre, codigo), facturas_clientes_pedidos(pedido_id, monto_asignado, pedidos(id, numero_pedido, precio_total))')
+          .eq('empresa_id', empresaId)
+          .or(`serie_folio.ilike.%${clean}%,uuid_fiscal.ilike.%${clean}%`);
+
+        (factByFolio || []).forEach((fc: any) => {
+          if (fc?.id && !facturasMap.has(fc.id)) {
+            facturasMap.set(fc.id, {
+              ...fc,
+              _monto_asignado: Number(fc.total || 0),
+            });
+          }
+        });
+      }
+      facturas = Array.from(facturasMap.values());
     }
 
     // 3. Movimiento bancario (si existe)

@@ -155,13 +155,13 @@ export default function VentasFacturadasModule() {
           .maybeSingle(),
         supabase
           .from('pedidos')
-          .select('*, clientes(nombre_local, rfc, email_facturacion, facturar_publico_general, es_anonimo), facturas_clientes(*)')
+          .select('*, clientes(nombre_local, rfc, email_facturacion, facturar_publico_general, es_anonimo), facturas_clientes(*), facturas_clientes_pedidos(id, factura_id, pedido_id, monto_asignado, facturas_clientes(*))')
           .eq('empresa_id', empresaId)
           .neq('estatus_pago', 'Cancelado')
           .order('creado_en', { ascending: false }),
         supabase
           .from('facturas_clientes')
-          .select('*, clientes(nombre_local, rfc, email_facturacion, facturar_publico_general, es_anonimo)')
+          .select('*, clientes(nombre_local, rfc, email_facturacion, facturar_publico_general, es_anonimo), facturas_clientes_pedidos(id, pedido_id, monto_asignado)')
           .eq('empresa_id', empresaId)
           .is('pedido_id', null)
           .order('fecha_emision', { ascending: false }),
@@ -171,6 +171,7 @@ export default function VentasFacturadasModule() {
             *,
             clientes(id, nombre_local, razon_social, rfc, email_facturacion, telefono),
             pedidos(id, numero_pedido, precio_total, estatus_pago, creado_en),
+            facturas_clientes_pedidos(id, pedido_id, monto_asignado, pedidos(id, numero_pedido, precio_total, estatus_pago, creado_en)),
             formas_pago(id, nombre, codigo),
             estatus_factura(id, nombre)
           `)
@@ -214,11 +215,68 @@ export default function VentasFacturadasModule() {
         return Boolean(cliRfc && cliRfc === activeRfc);
       };
 
-      // 1. Ventas y Facturas Sueltas
+      // 1. Ventas y Facturas Sueltas (con soporte completo N:M vía facturas_clientes_pedidos)
+      const fcEmitidasRaw = (fcEmitidasRes.data || []).filter((f: any) => !isSelfReceptor(f.clientes));
+      const facturaPedidosMap = new Map<string, any[]>();
+      fcEmitidasRaw.forEach((f: any) => {
+        const jLinks = (f.facturas_clientes_pedidos || []).map((jl: any) => ({
+          id: jl.pedido_id,
+          numero_pedido: jl.pedidos?.numero_pedido,
+          precio_total: jl.pedidos?.precio_total,
+          monto_asignado: Number(jl.monto_asignado || 0),
+        }));
+        if (jLinks.length === 0 && f.pedidos) {
+          const pObj = Array.isArray(f.pedidos) ? f.pedidos[0] : f.pedidos;
+          if (pObj?.id) {
+            jLinks.push({
+              id: pObj.id,
+              numero_pedido: pObj.numero_pedido,
+              precio_total: pObj.precio_total,
+              monto_asignado: Number(f.total || 0),
+            });
+          }
+        }
+        facturaPedidosMap.set(f.id, jLinks);
+      });
+
       const vAll = vAllRes.data || [];
       const fSueltas = fSueltasRes.data || [];
-      const vAllFiltered = vAll.filter((p: any) => !isSelfReceptor(p.clientes));
-      const fSueltasFiltered = fSueltas.filter((f: any) => !isSelfReceptor(f.clientes));
+      const vAllFiltered = vAll
+        .filter((p: any) => !isSelfReceptor(p.clientes))
+        .map((p: any) => {
+          const invMap = new Map<string, any>();
+          // Facturas desde tabla puente N:M
+          (p.facturas_clientes_pedidos || []).forEach((j: any) => {
+            const fc = Array.isArray(j.facturas_clientes) ? j.facturas_clientes[0] : j.facturas_clientes;
+            if (fc?.id) {
+              invMap.set(fc.id, {
+                ...fc,
+                _monto_asignado: Number(j.monto_asignado || fc.total || 0),
+                _pedidos_vinculados: facturaPedidosMap.get(fc.id) || [],
+              });
+            }
+          });
+          // Facturas directas por pedido_id
+          (p.facturas_clientes || []).forEach((fc: any) => {
+            if (fc?.id && !invMap.has(fc.id)) {
+              invMap.set(fc.id, {
+                ...fc,
+                _monto_asignado: Number(fc.total || 0),
+                _pedidos_vinculados: facturaPedidosMap.get(fc.id) || [],
+              });
+            }
+          });
+          return {
+            ...p,
+            facturas_clientes: Array.from(invMap.values()),
+          };
+        });
+
+      const fSueltasFiltered = fSueltas.filter((f: any) => {
+        if (isSelfReceptor(f.clientes)) return false;
+        const hasJunctionLinks = Array.isArray(f.facturas_clientes_pedidos) && f.facturas_clientes_pedidos.length > 0;
+        return !hasJunctionLinks;
+      });
 
       const sueltasFormatted = fSueltasFiltered.map((f: any) => ({
         id: `suelta_${f.id}`,
@@ -241,8 +299,7 @@ export default function VentasFacturadasModule() {
       setVentasFacturadas([...vAllFiltered, ...sueltasFormatted]);
 
       // Facturas Emitidas
-      const fcEmitidas = fcEmitidasRes.data || [];
-      setFacturasEmitidas(fcEmitidas.filter((f: any) => !isSelfReceptor(f.clientes)));
+      setFacturasEmitidas(fcEmitidasRaw);
 
       // Clientes
       setClientes(cliRes.data || []);
@@ -767,6 +824,7 @@ export default function VentasFacturadasModule() {
                     onSendEmail={handleSendEmail}
                     onViewCfdi={setCfdiViewerUrl}
                     onDeleteVenta={handleDeleteVenta}
+                    onDeleteFacturaSuelta={(id) => handleDeleteFacturaCliente(String(id).replace(/^suelta_/, ''))}
                     onEditVenta={setEditingVenta}
                     onRefresh={fetchData}
                     selectedMonth={selectedMonth}

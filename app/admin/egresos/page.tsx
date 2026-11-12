@@ -46,6 +46,9 @@ interface Gasto {
   monto: number;
   movimiento_bancario_id?: string | null;
   gasto_padre_id?: string | null;
+  uuid_fiscal?: string | null;
+  xml_url?: string | null;
+  estatus_facturado?: boolean | null;
   padre?: { concepto: string } | null;
   movimientos_bancarios?: {
     id: string;
@@ -1134,6 +1137,24 @@ export default function AdminGastos() {
                                   Banco
                                 </span>
                               )}
+                              {(() => {
+                                const tieneBanco = !!g.movimiento_bancario_id;
+                                const tieneFactura = !!g.uuid_fiscal || !!g.xml_url || !!g.estatus_facturado || hijos.some((h: any) => !!h.uuid_fiscal || !!h.xml_url);
+                                return (
+                                  <span
+                                    className={`inline-block px-2 py-0.5 rounded text-[10px] font-semibold border ${
+                                      tieneFactura
+                                        ? 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800/50'
+                                        : tieneBanco
+                                        ? 'bg-rose-100 dark:bg-rose-900/30 text-rose-700 dark:text-rose-400 border-rose-200 dark:border-rose-800/50'
+                                        : 'bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 border-gray-200 dark:border-gray-700'
+                                    }`}
+                                    title="Flujo: 1. Egreso → 2. Banco → 3. Factura"
+                                  >
+                                    {tieneFactura ? 'Factura Asignada' : tieneBanco ? 'Pendiente Factura' : 'Sin Banco / Factura'}
+                                  </span>
+                                );
+                              })()}
                               {hasHijos && (
                                 <span className="inline-block px-2 py-0.5 rounded text-[10px] font-semibold bg-indigo-100 dark:bg-indigo-900/30 text-indigo-750 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800/50">
                                   {hijos.length} {hijos.length === 1 ? 'Parcialidad' : 'Parcialidades'}

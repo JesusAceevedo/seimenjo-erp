@@ -34,6 +34,7 @@ import { formatCurrency, formatDate as formatSharedDate } from '../../../../lib/
 import { getMetodoPagoLabel } from '../../../../lib/constants/sat';
 import CargaXmlMasivaModal from '../../gastos/_components/CargaXmlMasivaModal';
 import CargaManualModal from '../../gastos/_components/CargaManualModal';
+import AsignacionXmlModal from '../../gastos/_components/AsignacionXmlModal';
 import { useCfdiViewer } from '../../_components/CfdiViewerContext';
 import { useSessionToken } from '../../../../lib/hooks/useSessionToken';
 import {
@@ -74,6 +75,7 @@ export default function FacturasEmitidasTab({
   // Modales de carga
   const [showXmlModal, setShowXmlModal] = useState(false);
   const [showManualModal, setShowManualModal] = useState(false);
+  const [asignarModalXmlId, setAsignarModalXmlId] = useState<string | null>(null);
 
   // Modal para ligar/cambiar cliente por RFC
   const [rfcModal, setRfcModal] = useState<{
@@ -687,15 +689,54 @@ export default function FacturasEmitidasTab({
 
                     {/* Pedido */}
                     <td className="p-3">
-                      {f.pedidos ? (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-400 border border-blue-200 dark:border-blue-800">
-                          #PED-{f.pedidos.numero_pedido || f.pedidos.id.substring(0, 5)}
-                        </span>
-                      ) : (
-                        <span className="text-[10px] text-gray-400 italic font-medium">
-                          Directa (Sin Pedido)
-                        </span>
-                      )}
+                      {(() => {
+                        const junctions = f.facturas_clientes_pedidos || [];
+                        if (junctions.length > 0) {
+                          return (
+                            <div className="flex flex-wrap items-center gap-1 max-w-[170px]">
+                              {junctions.map((j: any, idx: number) => {
+                                const num = j.pedidos?.numero_pedido || (j.pedido_id ? String(j.pedido_id).substring(0, 5) : idx + 1);
+                                return (
+                                  <span
+                                    key={j.id || idx}
+                                    title={`Monto asignado: ${formatCurrency(Number(j.monto_asignado || 0))}`}
+                                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-400 border border-blue-200 dark:border-blue-800 font-mono"
+                                  >
+                                    #{num}
+                                  </span>
+                                );
+                              })}
+                              {junctions.length > 1 && (
+                                <span className="text-[9px] px-1 py-0.2 rounded bg-purple-100 dark:bg-purple-950/50 text-purple-700 dark:text-purple-300 font-bold">
+                                  ({junctions.length} ped.)
+                                </span>
+                              )}
+                            </div>
+                          );
+                        }
+                        if (f.pedidos) {
+                          return (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-400 border border-blue-200 dark:border-blue-800">
+                              #PED-{f.pedidos.numero_pedido || f.pedidos.id.substring(0, 5)}
+                            </span>
+                          );
+                        }
+                        return (
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[10px] text-gray-400 italic font-medium">
+                              Directa (Sin Pedido)
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setAsignarModalXmlId(f.id)}
+                              className="p-1 rounded bg-blue-50 hover:bg-blue-100 text-blue-600 dark:bg-blue-950/50 dark:hover:bg-blue-900/60 dark:text-blue-400 text-[10px] font-bold flex items-center gap-0.5 transition-colors cursor-pointer"
+                              title="Asignar esta factura a uno o más pedidos"
+                            >
+                              <Link2 size={11} /> Asignar
+                            </button>
+                          </div>
+                        );
+                      })()}
                     </td>
 
                     {/* Forma de Pago / SAT */}
@@ -982,6 +1023,20 @@ export default function FacturasEmitidasTab({
             </form>
           </div>
         </div>
+      )}
+
+      {/* MODAL: ASIGNACION XML A PEDIDOS */}
+      {asignarModalXmlId && (
+        <AsignacionXmlModal
+          isOpen={Boolean(asignarModalXmlId)}
+          initialMonth={selectedMonth}
+          initialSelectedXmlIds={[asignarModalXmlId]}
+          onClose={() => setAsignarModalXmlId(null)}
+          onSuccess={() => {
+            setAsignarModalXmlId(null);
+            onRefresh();
+          }}
+        />
       )}
 
       {/* MODAL: CARGA MASIVA DE XML DE VENTAS */}

@@ -27,6 +27,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Building2,
+  Calculator,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { useSessionToken } from '../../../lib/hooks/useSessionToken';
@@ -34,6 +35,7 @@ import { useEmpresaId } from '../../../lib/hooks/useEmpresaId';
 import { usePeriod } from '../../../lib/hooks/usePeriod';
 import { useThemeMode } from '../../../lib/useThemeMode';
 import PeriodSelector from '../_components/PeriodSelector';
+import EstimacionImpuestosView from '../_components/EstimacionImpuestosView';
 import { obtenerMovimientosNoDeduciblesAtemporal } from '../gastos/reconciliationActions';
 import { formatDate } from '@/lib/formatters';
 
@@ -78,7 +80,7 @@ export default function ReportesOperacionPage() {
   const [filtroTipoOperacion, setFiltroTipoOperacion] = useState<'todos' | 'ingreso' | 'egreso'>('todos');
 
   // Sub-tab activa
-  const [subTab, setSubTab] = useState<'general' | 'contabilidad' | 'conciliacion' | 'expediente' | 'herramientas'>('general');
+  const [subTab, setSubTab] = useState<'impuestos' | 'general' | 'contabilidad' | 'conciliacion' | 'expediente' | 'herramientas'>('impuestos');
 
   // Paginación
   const [currentPage, setCurrentPage] = useState<number>(0);
@@ -268,7 +270,7 @@ export default function ReportesOperacionPage() {
   const filteredRecords = useMemo(() => {
     return records.filter((r) => {
       // 1. SubTab / Módulo
-      if (subTab !== 'general' && r.modulo !== subTab) return false;
+      if (subTab !== 'general' && subTab !== 'impuestos' && r.modulo !== subTab) return false;
       if (filtroModulo !== 'todos' && r.modulo !== filtroModulo) return false;
 
       // 2. Estatus
@@ -440,102 +442,21 @@ export default function ReportesOperacionPage() {
 
       {/* CONTENIDO PRINCIPAL SCROLLABLE */}
       <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-5">
-        {/* TARJETAS KPI DE RESUMEN (INTERACTIVAS) */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-          <div
-            onClick={() => { setFiltroTipoOperacion('todos'); setCurrentPage(0); }}
-            className={`bg-white dark:bg-gray-900 border rounded-2xl p-4 shadow-sm flex flex-col justify-between cursor-pointer transition-all hover:scale-[1.01] ${
-              filtroTipoOperacion === 'todos'
-                ? 'border-amber-500 ring-2 ring-amber-500/20'
-                : 'border-gray-200 dark:border-gray-800'
-            }`}
-          >
-            <div className="flex items-center justify-between text-gray-500 dark:text-gray-400 text-xs font-bold">
-              <span>Total Registros</span>
-              <FileText size={16} className="text-amber-500" />
-            </div>
-            <div className="mt-2">
-              <span className="text-2xl font-black tracking-tight text-gray-900 dark:text-white">
-                {kpis.total.toLocaleString()}
-              </span>
-              <p className="text-[10px] text-gray-400 mt-0.5">Click para ver todos</p>
-            </div>
-          </div>
+        {/* BARRA DE NAVEGACIÓN SUB-TABS SUPERIOR */}
+        <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-3 shadow-sm">
+          <div className="flex items-center gap-2 overflow-x-auto">
+            <button
+              type="button"
+              onClick={() => { setSubTab('impuestos'); setCurrentPage(0); }}
+              className={`px-4 py-2 rounded-xl text-xs font-extrabold transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer ${
+                subTab === 'impuestos'
+                  ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-md shadow-indigo-500/20'
+                  : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800'
+              }`}
+            >
+              <Calculator size={15} /> Estimación de Impuestos y Efectivo
+            </button>
 
-          <div
-            onClick={() => { setFiltroTipoOperacion('ingreso'); setCurrentPage(0); }}
-            className={`bg-white dark:bg-gray-900 border rounded-2xl p-4 shadow-sm flex flex-col justify-between cursor-pointer transition-all hover:scale-[1.01] ${
-              filtroTipoOperacion === 'ingreso'
-                ? 'border-emerald-500 ring-2 ring-emerald-500/20 bg-emerald-500/5'
-                : 'border-gray-200 dark:border-gray-800'
-            }`}
-          >
-            <div className="flex items-center justify-between text-emerald-600 dark:text-emerald-400 text-xs font-bold">
-              <span>Ventas & Ingresos</span>
-              <ArrowUpRight size={18} />
-            </div>
-            <div className="mt-2">
-              <span className="text-xl md:text-2xl font-black tracking-tight text-emerald-600 dark:text-emerald-400">
-                {formatCurrency(kpis.ingresos)}
-              </span>
-              <p className="text-[10px] text-gray-400 mt-0.5">Click para aislar Ventas</p>
-            </div>
-          </div>
-
-          <div
-            onClick={() => { setFiltroTipoOperacion('egreso'); setCurrentPage(0); }}
-            className={`bg-white dark:bg-gray-900 border rounded-2xl p-4 shadow-sm flex flex-col justify-between cursor-pointer transition-all hover:scale-[1.01] ${
-              filtroTipoOperacion === 'egreso'
-                ? 'border-rose-500 ring-2 ring-rose-500/20 bg-rose-500/5'
-                : 'border-gray-200 dark:border-gray-800'
-            }`}
-          >
-            <div className="flex items-center justify-between text-rose-600 dark:text-rose-400 text-xs font-bold">
-              <span>Egresos & Gastos</span>
-              <ArrowDownRight size={18} />
-            </div>
-            <div className="mt-2">
-              <span className="text-xl md:text-2xl font-black tracking-tight text-rose-600 dark:text-rose-400">
-                -{formatCurrency(kpis.egresos)}
-              </span>
-              <p className="text-[10px] text-gray-400 mt-0.5">Click para aislar Egresos</p>
-            </div>
-          </div>
-
-          <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-4 shadow-sm flex flex-col justify-between">
-            <div className="flex items-center justify-between text-gray-500 dark:text-gray-400 text-xs font-bold">
-              <span>Saldo Operativo Neto</span>
-              <DollarSign size={16} className={kpis.saldoNeto >= 0 ? 'text-emerald-500' : 'text-rose-500'} />
-            </div>
-            <div className="mt-2">
-              <span className={`text-xl md:text-2xl font-black tracking-tight ${kpis.saldoNeto >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
-                {formatCurrency(kpis.saldoNeto)}
-              </span>
-              <p className="text-[10px] text-gray-400 mt-0.5">Balance neto del periodo</p>
-            </div>
-          </div>
-
-          <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-4 shadow-sm flex flex-col justify-between">
-            <div className="flex items-center justify-between text-blue-600 dark:text-blue-400 text-xs font-bold">
-              <span>Conciliados</span>
-              <CheckCircle2 size={18} />
-            </div>
-            <div className="mt-2">
-              <div className="flex items-baseline gap-2">
-                <span className="text-2xl font-black tracking-tight text-blue-600 dark:text-blue-400">
-                  {kpis.tasaConciliacion}%
-                </span>
-                <span className="text-xs font-bold text-gray-400">({kpis.conciliadosCount})</span>
-              </div>
-              <p className="text-[10px] text-gray-400 mt-0.5">{kpis.pendientesCount} registros pendientes</p>
-            </div>
-          </div>
-        </div>
-
-        {/* CONTROLES DE SUB-TAB Y FILTROS AVANZADOS */}
-        <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-4 shadow-sm space-y-4">
-          {/* BARRA DE NAVEGACIÓN SUB-TABS */}
-          <div className="flex items-center gap-2 overflow-x-auto pb-1 border-b border-gray-200 dark:border-gray-800">
             <button
               type="button"
               onClick={() => { setSubTab('general'); setCurrentPage(0); }}
@@ -596,9 +517,108 @@ export default function ReportesOperacionPage() {
               <Wrench size={15} /> Herramientas & Atemporal
             </button>
           </div>
+        </div>
 
-          {/* FILTROS DE BÚSQUEDA, TIPO DE OPERACIÓN Y ALCANCE DE PERIODO */}
-          <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-center">
+        {subTab === 'impuestos' ? (
+          <EstimacionImpuestosView />
+        ) : (
+          <>
+            {/* TARJETAS KPI DE RESUMEN (INTERACTIVAS) */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+              <div
+                onClick={() => { setFiltroTipoOperacion('todos'); setCurrentPage(0); }}
+                className={`bg-white dark:bg-gray-900 border rounded-2xl p-4 shadow-sm flex flex-col justify-between cursor-pointer transition-all hover:scale-[1.01] ${
+                  filtroTipoOperacion === 'todos'
+                    ? 'border-amber-500 ring-2 ring-amber-500/20'
+                    : 'border-gray-200 dark:border-gray-800'
+                }`}
+              >
+                <div className="flex items-center justify-between text-gray-500 dark:text-gray-400 text-xs font-bold">
+                  <span>Total Registros</span>
+                  <FileText size={16} className="text-amber-500" />
+                </div>
+                <div className="mt-2">
+                  <span className="text-2xl font-black tracking-tight text-gray-900 dark:text-white">
+                    {kpis.total.toLocaleString()}
+                  </span>
+                  <p className="text-[10px] text-gray-400 mt-0.5">Click para ver todos</p>
+                </div>
+              </div>
+
+              <div
+                onClick={() => { setFiltroTipoOperacion('ingreso'); setCurrentPage(0); }}
+                className={`bg-white dark:bg-gray-900 border rounded-2xl p-4 shadow-sm flex flex-col justify-between cursor-pointer transition-all hover:scale-[1.01] ${
+                  filtroTipoOperacion === 'ingreso'
+                    ? 'border-emerald-500 ring-2 ring-emerald-500/20 bg-emerald-500/5'
+                    : 'border-gray-200 dark:border-gray-800'
+                }`}
+              >
+                <div className="flex items-center justify-between text-emerald-600 dark:text-emerald-400 text-xs font-bold">
+                  <span>Ventas & Ingresos</span>
+                  <ArrowUpRight size={18} />
+                </div>
+                <div className="mt-2">
+                  <span className="text-xl md:text-2xl font-black tracking-tight text-emerald-600 dark:text-emerald-400">
+                    {formatCurrency(kpis.ingresos)}
+                  </span>
+                  <p className="text-[10px] text-gray-400 mt-0.5">Click para aislar Ventas</p>
+                </div>
+              </div>
+
+              <div
+                onClick={() => { setFiltroTipoOperacion('egreso'); setCurrentPage(0); }}
+                className={`bg-white dark:bg-gray-900 border rounded-2xl p-4 shadow-sm flex flex-col justify-between cursor-pointer transition-all hover:scale-[1.01] ${
+                  filtroTipoOperacion === 'egreso'
+                    ? 'border-rose-500 ring-2 ring-rose-500/20 bg-rose-500/5'
+                    : 'border-gray-200 dark:border-gray-800'
+                }`}
+              >
+                <div className="flex items-center justify-between text-rose-600 dark:text-rose-400 text-xs font-bold">
+                  <span>Egresos & Gastos</span>
+                  <ArrowDownRight size={18} />
+                </div>
+                <div className="mt-2">
+                  <span className="text-xl md:text-2xl font-black tracking-tight text-rose-600 dark:text-rose-400">
+                    -{formatCurrency(kpis.egresos)}
+                  </span>
+                  <p className="text-[10px] text-gray-400 mt-0.5">Click para aislar Egresos</p>
+                </div>
+              </div>
+
+              <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-4 shadow-sm flex flex-col justify-between">
+                <div className="flex items-center justify-between text-gray-500 dark:text-gray-400 text-xs font-bold">
+                  <span>Saldo Operativo Neto</span>
+                  <DollarSign size={16} className={kpis.saldoNeto >= 0 ? 'text-emerald-500' : 'text-rose-500'} />
+                </div>
+                <div className="mt-2">
+                  <span className={`text-xl md:text-2xl font-black tracking-tight ${kpis.saldoNeto >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
+                    {formatCurrency(kpis.saldoNeto)}
+                  </span>
+                  <p className="text-[10px] text-gray-400 mt-0.5">Balance neto del periodo</p>
+                </div>
+              </div>
+
+              <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-4 shadow-sm flex flex-col justify-between">
+                <div className="flex items-center justify-between text-blue-600 dark:text-blue-400 text-xs font-bold">
+                  <span>Conciliados</span>
+                  <CheckCircle2 size={18} />
+                </div>
+                <div className="mt-2">
+                  <div className="flex items-baseline gap-2">
+                    <span className="text-2xl font-black tracking-tight text-blue-600 dark:text-blue-400">
+                      {kpis.tasaConciliacion}%
+                    </span>
+                    <span className="text-xs font-bold text-gray-400">({kpis.conciliadosCount})</span>
+                  </div>
+                  <p className="text-[10px] text-gray-400 mt-0.5">{kpis.pendientesCount} registros pendientes</p>
+                </div>
+              </div>
+            </div>
+
+            {/* FILTROS AVANZADOS */}
+            <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-4 shadow-sm space-y-4">
+              {/* FILTROS DE BÚSQUEDA, TIPO DE OPERACIÓN Y ALCANCE DE PERIODO */}
+              <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-center">
             {/* Buscador */}
             <div className="md:col-span-4 relative">
               <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
@@ -840,6 +860,8 @@ export default function ReportesOperacionPage() {
             </div>
           </div>
         </div>
+        </>
+        )}
       </div>
 
       {/* MODAL SLIDE-OVER DE DETALLE DEL REGISTRO */}

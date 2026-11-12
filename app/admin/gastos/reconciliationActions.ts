@@ -4877,3 +4877,475 @@ export async function adjuntarArchivoDirectoAction(
     return { success: false, error: err.message || 'Error al adjuntar archivo' };
   }
 }
+
+/**
+ * Helper interno para parsear un XML CFDI ya subido al bucket 'facturas' y crear/recuperar su registro en 'gastos'.
+ */
+async function parsearYRegistrarGastoDesdeXml(params: {
+  xmlPath: string;
+  pdfPath?: string | null;
+  empresaId: string;
+  staffId: string | null;
+  gastoPadreId?: string | null;
+  movimientoId?: string | null;
+}): Promise<{ gastoId: string; xmlUrl: string; pdfUrl: string | null; monto: number; rfcEmisor: string | null } | null> {
+  const { xmlPath, pdfPath, empresaId, staffId, gastoPadreId, movimientoId } = params;
+  const { data: fileData, error: downloadError } = await supabaseAdmin.storage
+    .from('facturas')
+    .download(xmlPath);
+
+  if (downloadError || !fileData) return null;
+
+  const xmlText = await fileData.text();
+  const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_' });
+  const jsonObj = parser.parse(xmlText);
+  const cfdi = jsonObj['cfdi:Comprobante'] || jsonObj['Comprobante'];
+  if (!cfdi) return null;
+
+  const timbre =
+    cfdi['cfdi:Complemento']?.['tfd:TimbreFiscalDigital'] ||
+    cfdi['cfdi:Complemento']?.['TimbreFiscalDigital'] ||
+    cfdi['Complemento']?.['tfd:TimbreFiscalDigital'] ||
+    cfdi['Complemento']?.['TimbreFiscalDigital'];
+  const uuid = timbre?.['@_UUID'] || timbre?.['@_uuid'];
+  if (!uuid) return null;
+
+  const cleanUuid = String(uuid).trim().toUpperCase();
+  const emisor = cfdi['cfdi:Emisor'] || cfdi['Emisor'];
+  const receptor = cfdi['cfdi:Receptor'] || cfdi['Receptor'];
+  const rfcEmisor = (emisor?.['@_Rfc'] || emisor?.['@_rfc'] || '').trim().toUpperCase() || null;
+  const nombreEmisor = emisor?.['@_Nombre'] || emisor?.['@_nombre'] || null;
+  const rfcReceptor = (receptor?.['@_Rfc'] || receptor?.['@_rfc'] || '').trim().toUpperCase() || null;
+
+  const tipoDeComprobante = cfdi['@_TipoDeComprobante'] || cfdi['@_tipoDeComprobante'] || 'I';
+  const isNomina =
+    tipoDeComprobante === 'N' ||
+    !!cfdi['cfdi:Complemento']?.['nomina12:Nomina'] ||
+    !!cfdi['cfdi:Complemento']?.['Nomina'] ||
+    !!cfdi['Complemento']?.['nomina12:Nomina'] ||
+    !!cfdi['Complemento']?.['Nomina'];
+
+  const total = parseFloat(cfdi['@_Total'] || cfdi['@_total'] || '0') || 0;
+  const subtotal = parseFloat(cfdi['@_SubTotal'] || cfdi['@_subtotal'] || '0') || total;
+  const fecha = cfdi['@_Fecha'] || cfdi['@_fecha'] || '';
+  const fechaEmision = fecha ? String(fecha).split('T')[0] : new Date().toISOString().split('T')[0];
+  const serie = cfdi['@_Serie'] || cfdi['@_serie'] || '';
+  const folio = cfdi['@_Folio'] || cfdi['@_folio'] || '';
+  const folioStr = folio ? `${serie}${folio}`.trim() : (serie ? String(serie).trim() : null);
+  const formaPagoCode = cfdi['@_FormaPago'] || cfdi['@_formaPago'] || '';
+
+  // Verificar si ya existe por UUID fiscal
+  const { data: existingGasto } = await supabaseAdmin
+    .from('gastos')
+    .select('id, monto, xml_url, pdf_url')
+    .eq('uuid_fiscal', cleanUuid)
+    .eq('empresa_id', empresaId)
+    .maybeSingle();
+
+  if (existingGasto) {
+    const updateExisting: Record<string, any> = { estatus_facturado: true };
+    if (!existingGasto.xml_url) updateExisting.xml_url = xmlPath;
+    if (pdfPath && !existingGasto.pdf_url) updateExisting.pdf_url = pdfPath;
+    if (gastoPadreId) updateExisting.gasto_padre_id = gastoPadreId;
+    else if (movimientoId) updateExisting.movimiento_bancario_id = movimientoId;
+
+    await supabaseAdmin
+      .from('gastos')
+      .update(updateExisting)
+      .eq('id', existingGasto.id)
+      .eq('empresa_id', empresaId);
+
+    return {
+      gastoId: existingGasto.id,
+      xmlUrl: existingGasto.xml_url || xmlPath,
+      pdfUrl: pdfPath || existingGasto.pdf_url || null,
+      monto: Number(existingGasto.monto || total),
+      rfcEmisor
+    };
+  }
+
+  // Calcular IVA
+  let globalIva = 0;
+  const impuestos = cfdi['cfdi:Impuestos'] || cfdi['Impuestos'];
+  const traslados = impuestos?.['cfdi:Traslados']?.['cfdi:Traslado'] || impuestos?.['Traslados']?.['Traslado'];
+  if (traslados) {
+    const trasladosArr = Array.isArray(traslados) ? traslados : [traslados];
+    for (const t of trasladosArr) {
+      if (t['@_Impuesto'] === '002') {
+        globalIva += parseFloat(t['@_Importe'] || '0') || 0;
+      }
+    }
+  }
+
+  const targetRfc = isNomina ? rfcReceptor : rfcEmisor;
+  const targetNombre = isNomina
+    ? (receptor?.['@_Nombre'] || receptor?.['@_nombre'] || 'Personal Nómina')
+    : (nombreEmisor || rfcEmisor);
+
+  let proveedorId: string | null = null;
+  if (targetRfc) {
+    const { data: prov } = await supabaseAdmin
+      .from('proveedores')
+      .select('id')
+      .eq('rfc', targetRfc)
+      .eq('empresa_id', empresaId)
+      .maybeSingle();
+    if (prov) {
+      proveedorId = prov.id;
+    } else {
+      const { data: newProv } = await supabaseAdmin
+        .from('proveedores')
+        .insert({
+          rfc: targetRfc,
+          nombre_comercial: targetNombre || targetRfc,
+          razon_social: targetNombre || targetRfc,
+          empresa_id: empresaId
+        })
+        .select('id')
+        .single();
+      proveedorId = newProv?.id || null;
+    }
+  }
+
+  const { data: formasPagoData } = await supabaseAdmin.from('formas_pago').select('id, codigo');
+  const code = formaPagoCode ? String(formaPagoCode).trim().padStart(2, '0') : '03';
+  const formaMatch = formasPagoData?.find(f => f.codigo === code) || formasPagoData?.find(f => f.codigo === '99');
+  const metodoMap: Record<string, string> = {
+    '01': 'Efectivo',
+    '02': 'Cheque',
+    '03': 'Transferencia',
+    '04': 'Tarjeta de crédito',
+    '28': 'Tarjeta de débito'
+  };
+  const metodoPago = metodoMap[code] || 'Por definir';
+
+  const { data: estatusData } = await supabaseAdmin
+    .from('estatus_factura')
+    .select('id')
+    .ilike('nombre', 'Facturado')
+    .maybeSingle();
+
+  const { data: newGasto, error: insertErr } = await supabaseAdmin
+    .from('gastos')
+    .insert({
+      folio_factura: folioStr,
+      uuid_fiscal: cleanUuid,
+      monto: total,
+      subtotal,
+      iva_acreditable: globalIva,
+      xml_url: xmlPath,
+      pdf_url: pdfPath || null,
+      fecha_gasto: fechaEmision,
+      empresa_id: empresaId,
+      concepto: isNomina ? `Nómina - ${targetNombre}` : `Factura XML ${folioStr || cleanUuid.substring(0, 8)}`,
+      registrado_por: staffId,
+      proveedor_id: proveedorId,
+      forma_pago_id: formaMatch?.id || null,
+      estatus_factura_id: estatusData?.id || null,
+      estatus_facturado: true,
+      metodo_pago: metodoPago,
+      es_deducible: true,
+      gasto_padre_id: gastoPadreId || null,
+      movimiento_bancario_id: gastoPadreId ? null : (movimientoId || null)
+    })
+    .select('id')
+    .single();
+
+  if (insertErr || !newGasto) {
+    throw new Error(insertErr?.message || 'No se pudo registrar la factura XML en gastos.');
+  }
+
+  return {
+    gastoId: newGasto.id,
+    xmlUrl: xmlPath,
+    pdfUrl: pdfPath || null,
+    monto: total,
+    rfcEmisor: targetRfc
+  };
+}
+
+/**
+ * Paso 3 del flujo (Egreso -> Pago Estado de Cuenta -> Asignación de Factura):
+ * Asigna una o más facturas XML (existentes en 'gastos' o recién subidas) a un movimiento bancario de tipo Retiro,
+ * evitando duplicar el monto cuando el movimiento ya está conciliado con un egreso manual sin factura.
+ */
+export async function asignarFacturaAMovimientoEgreso(
+  payload: {
+    movimientoId: string;
+    facturasIds?: string[];
+    uploadedXmlPaths?: string[];
+    uploadedPdfPaths?: string[];
+    storageProvider?: 'Supabase' | 'GoogleDrive';
+  },
+  token: string
+): Promise<{ success: boolean; error?: string; assignedCount?: number }> {
+  try {
+    const { empresaId, userId } = await getUserEmpresaId(token);
+    const { movimientoId, facturasIds = [], uploadedXmlPaths = [], uploadedPdfPaths = [] } = payload;
+
+    if (!movimientoId) throw new Error('Debe seleccionar un movimiento bancario.');
+    if (facturasIds.length === 0 && uploadedXmlPaths.length === 0 && uploadedPdfPaths.length === 0) {
+      throw new Error('Debe seleccionar al menos una factura o subir un archivo XML/PDF.');
+    }
+
+    const { data: staffData } = await supabaseAdmin
+      .from('usuarios_staff')
+      .select('id')
+      .eq('supabase_auth_id', userId)
+      .maybeSingle();
+    const staffId = staffData?.id || null;
+
+    // 1. Obtener el movimiento bancario y sus conciliaciones existentes
+    const { data: mov, error: movErr } = await supabaseAdmin
+      .from('movimientos_bancarios')
+      .select(`
+        *,
+        conciliaciones_bancarias(
+          id,
+          gasto_id,
+          monto_asociado,
+          gastos(id, monto, uuid_fiscal, xml_url, pdf_url, gasto_padre_id)
+        )
+      `)
+      .eq('id', movimientoId)
+      .eq('empresa_id', empresaId)
+      .single();
+
+    if (movErr || !mov) throw new Error('Movimiento bancario no encontrado.');
+
+    // Detectar si ya existe un egreso principal vinculado al movimiento
+    const concs = (mov.conciliaciones_bancarias as any[]) || [];
+    const linkedGastos = concs.map((c: any) => c.gastos).filter(Boolean);
+    const egresoManualPadre =
+      linkedGastos.find((g: any) => !g.uuid_fiscal && !g.xml_url) ||
+      linkedGastos.find((g: any) => !g.gasto_padre_id) ||
+      null;
+
+    const xmlUrlsToMerge: string[] = mov.xml_url ? String(mov.xml_url).split(',').map((s: string) => s.trim()).filter(Boolean) : [];
+    const pdfUrlsToMerge: string[] = mov.pdf_factura_url ? String(mov.pdf_factura_url).split(',').map((s: string) => s.trim()).filter(Boolean) : [];
+    let detectedRfc: string | null = mov.rfc_proveedor || null;
+    let totalFacturasAsignadas = 0;
+    let assignedCount = 0;
+
+    // 2. Procesar facturas existentes seleccionadas en 'gastos'
+    if (facturasIds.length > 0) {
+      const { data: existingFacturas, error: facErr } = await supabaseAdmin
+        .from('gastos')
+        .select('id, monto, xml_url, pdf_url, uuid_fiscal, proveedores(rfc)')
+        .in('id', facturasIds)
+        .eq('empresa_id', empresaId);
+
+      if (facErr) throw facErr;
+
+      for (const fac of existingFacturas || []) {
+        if (fac.xml_url) {
+          String(fac.xml_url).split(',').map((s: string) => s.trim()).filter(Boolean).forEach((u: string) => {
+            if (!xmlUrlsToMerge.includes(u)) xmlUrlsToMerge.push(u);
+          });
+        }
+        if (fac.pdf_url) {
+          String(fac.pdf_url).split(',').map((s: string) => s.trim()).filter(Boolean).forEach((u: string) => {
+            if (!pdfUrlsToMerge.includes(u)) pdfUrlsToMerge.push(u);
+          });
+        }
+        const provObj = Array.isArray(fac.proveedores) ? fac.proveedores[0] : fac.proveedores;
+        if (!detectedRfc && provObj?.rfc) detectedRfc = provObj.rfc;
+
+        if (egresoManualPadre) {
+          // El movimiento ya tiene un egreso manual: vincular factura como respaldo documental sin duplicar monto
+          if (fac.id !== egresoManualPadre.id) {
+            await supabaseAdmin
+              .from('gastos')
+              .update({
+                gasto_padre_id: egresoManualPadre.id,
+                estatus_facturado: true
+              })
+              .eq('id', fac.id)
+              .eq('empresa_id', empresaId);
+          }
+        } else {
+          // Pago directo sin egreso previo: crear vínculo en conciliaciones_bancarias
+          await supabaseAdmin
+            .from('gastos')
+            .update({ movimiento_bancario_id: movimientoId, estatus_facturado: true })
+            .eq('id', fac.id)
+            .eq('empresa_id', empresaId);
+
+          const alreadyLinked = concs.some((c: any) => c.gasto_id === fac.id);
+          if (!alreadyLinked) {
+            await supabaseAdmin.from('conciliaciones_bancarias').insert({
+              movimiento_id: movimientoId,
+              gasto_id: fac.id,
+              monto_asociado: Math.abs(Number(fac.monto || 0)),
+              empresa_id: empresaId
+            });
+          }
+        }
+        totalFacturasAsignadas += Math.abs(Number(fac.monto || 0));
+        assignedCount++;
+      }
+    }
+
+    // 3. Procesar archivos XML recién subidos
+    for (let i = 0; i < uploadedXmlPaths.length; i++) {
+      const xmlPath = uploadedXmlPaths[i];
+      const pdfPath = uploadedPdfPaths[i] || uploadedPdfPaths[0] || null;
+      if (!xmlUrlsToMerge.includes(xmlPath)) xmlUrlsToMerge.push(xmlPath);
+      if (pdfPath && !pdfUrlsToMerge.includes(pdfPath)) pdfUrlsToMerge.push(pdfPath);
+
+      const parsed = await parsearYRegistrarGastoDesdeXml({
+        xmlPath,
+        pdfPath,
+        empresaId,
+        staffId,
+        gastoPadreId: egresoManualPadre ? egresoManualPadre.id : null,
+        movimientoId: egresoManualPadre ? null : movimientoId
+      });
+
+      if (parsed) {
+        if (!detectedRfc && parsed.rfcEmisor) detectedRfc = parsed.rfcEmisor;
+        if (!egresoManualPadre) {
+          const alreadyLinked = concs.some((c: any) => c.gasto_id === parsed.gastoId);
+          if (!alreadyLinked) {
+            await supabaseAdmin.from('conciliaciones_bancarias').insert({
+              movimiento_id: movimientoId,
+              gasto_id: parsed.gastoId,
+              monto_asociado: Math.abs(Number(parsed.monto || 0)),
+              empresa_id: empresaId
+            });
+          }
+        }
+        totalFacturasAsignadas += Math.abs(Number(parsed.monto || 0));
+        assignedCount++;
+      }
+    }
+
+    // Si solo se subieron PDFs (sin XMLs nuevos ni facturas existentes)
+    for (const pdfPath of uploadedPdfPaths) {
+      if (!pdfUrlsToMerge.includes(pdfPath)) pdfUrlsToMerge.push(pdfPath);
+    }
+
+    // Marcar egreso padre como facturado si existe
+    if (egresoManualPadre) {
+      await supabaseAdmin
+        .from('gastos')
+        .update({
+          estatus_facturado: true,
+          ...(uploadedPdfPaths.length > 0 && !egresoManualPadre.pdf_url ? { pdf_url: uploadedPdfPaths.join(',') } : {})
+        })
+        .eq('id', egresoManualPadre.id)
+        .eq('empresa_id', empresaId);
+    }
+
+    // 4. Determinar estatus de conciliación resultante en movimientos_bancarios
+    const movMonto = Math.abs(Number(mov.monto || mov.retiro || 0));
+    const hasXml = xmlUrlsToMerge.length > 0;
+    const isExactOrCovered = totalFacturasAsignadas > 0 && Math.abs(movMonto - totalFacturasAsignadas) <= 0.05;
+
+    const { data: allStatuses } = await supabaseAdmin
+      .from('estatus_conciliacion_bancaria')
+      .select('id, clave');
+
+    let targetClave = hasXml ? (isExactOrCovered ? 'comprobado' : 'incompleto_comprobado') : 'incompleto';
+    let estatusMatch = allStatuses?.find(s => s.clave === targetClave);
+    if (!estatusMatch) {
+      const fallbackClave = hasXml ? (isExactOrCovered ? 'conciliado' : 'parcial') : 'parcial';
+      estatusMatch = allStatuses?.find(s => s.clave === fallbackClave);
+    }
+
+    const updateMovPayload: Record<string, any> = {
+      xml_url: xmlUrlsToMerge.length > 0 ? xmlUrlsToMerge.join(',') : null,
+      pdf_factura_url: pdfUrlsToMerge.length > 0 ? pdfUrlsToMerge.join(',') : null,
+      visible_egresos: true
+    };
+    if (detectedRfc) updateMovPayload.rfc_proveedor = detectedRfc;
+    if (payload.storageProvider) updateMovPayload.storage_provider = payload.storageProvider;
+    if (estatusMatch?.id) updateMovPayload.estatus_conciliacion_id = estatusMatch.id;
+
+    const { error: upMovErr } = await supabaseAdmin
+      .from('movimientos_bancarios')
+      .update(updateMovPayload)
+      .eq('id', movimientoId)
+      .eq('empresa_id', empresaId);
+
+    if (upMovErr) throw upMovErr;
+
+    return { success: true, assignedCount };
+  } catch (err: any) {
+    console.error('Error en asignarFacturaAMovimientoEgreso:', err);
+    return { success: false, error: err.message || 'Error al asignar factura al movimiento.' };
+  }
+}
+
+/**
+ * Desvincula una factura XML previamente asignada a un movimiento bancario (egreso).
+ */
+export async function desvincularFacturaDeMovimientoEgreso(
+  movimientoId: string,
+  facturaGastoId: string,
+  token: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { empresaId } = await getUserEmpresaId(token);
+    if (!movimientoId || !facturaGastoId) throw new Error('Parámetros insuficientes.');
+
+    const { data: fac } = await supabaseAdmin
+      .from('gastos')
+      .select('id, xml_url, pdf_url, gasto_padre_id, movimiento_bancario_id')
+      .eq('id', facturaGastoId)
+      .eq('empresa_id', empresaId)
+      .single();
+
+    if (!fac) throw new Error('Factura no encontrada.');
+
+    if (fac.gasto_padre_id) {
+      await supabaseAdmin
+        .from('gastos')
+        .update({ gasto_padre_id: null })
+        .eq('id', facturaGastoId)
+        .eq('empresa_id', empresaId);
+    } else {
+      await supabaseAdmin
+        .from('conciliaciones_bancarias')
+        .delete()
+        .eq('movimiento_id', movimientoId)
+        .eq('gasto_id', facturaGastoId)
+        .eq('empresa_id', empresaId);
+
+      await supabaseAdmin
+        .from('gastos')
+        .update({ movimiento_bancario_id: null })
+        .eq('id', facturaGastoId)
+        .eq('empresa_id', empresaId);
+    }
+
+    // Limpiar URLs de esa factura del movimiento
+    const { data: mov } = await supabaseAdmin
+      .from('movimientos_bancarios')
+      .select('xml_url, pdf_factura_url')
+      .eq('id', movimientoId)
+      .eq('empresa_id', empresaId)
+      .single();
+
+    if (mov) {
+      const facXmls = fac.xml_url ? String(fac.xml_url).split(',').map((s: string) => s.trim()) : [];
+      const facPdfs = fac.pdf_url ? String(fac.pdf_url).split(',').map((s: string) => s.trim()) : [];
+      const nextXmls = (mov.xml_url ? String(mov.xml_url).split(',').map((s: string) => s.trim()) : []).filter((u: string) => u && !facXmls.includes(u));
+      const nextPdfs = (mov.pdf_factura_url ? String(mov.pdf_factura_url).split(',').map((s: string) => s.trim()) : []).filter((u: string) => u && !facPdfs.includes(u));
+
+      await supabaseAdmin
+        .from('movimientos_bancarios')
+        .update({
+          xml_url: nextXmls.length > 0 ? nextXmls.join(',') : null,
+          pdf_factura_url: nextPdfs.length > 0 ? nextPdfs.join(',') : null
+        })
+        .eq('id', movimientoId)
+        .eq('empresa_id', empresaId);
+    }
+
+    return { success: true };
+  } catch (err: any) {
+    console.error('Error en desvincularFacturaDeMovimientoEgreso:', err);
+    return { success: false, error: err.message || 'Error al desvincular factura.' };
+  }
+}

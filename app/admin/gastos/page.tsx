@@ -40,6 +40,7 @@ import EgresosTab from './_components/EgresosTab';
 import BancoTab from './_components/BancoTab';
 import CfdiViewerModal from './_components/CfdiViewerModal';
 import GastoConciliacionDrawer from './_components/GastoConciliacionDrawer';
+import AsignacionFacturaEgresoModal from './_components/AsignacionFacturaEgresoModal';
 import PeriodSelector from '../_components/PeriodSelector';
 import { formatCurrency, formatDate } from '../../../lib/formatters';
 
@@ -84,6 +85,7 @@ export default function EgresosModule() {
   const [isConciliacionDrawerOpen, setIsConciliacionDrawerOpen] = useState(false);
   const [editingGasto, setEditingGasto] = useState<any>(null);
   const [editingMovimiento, setEditingMovimiento] = useState<any>(null);
+  const [asignacionFacturaModal, setAsignacionFacturaModal] = useState<{ open: boolean; movimientoId?: string }>({ open: false });
 
   // Filtros BancoTab
   const [selectedCuentaId, setSelectedCuentaId] = useState('');
@@ -802,6 +804,7 @@ export default function EgresosModule() {
                     manualMatchSearch={manualMatchSearch}
                     setManualMatchSearch={setManualMatchSearch}
                     handleOpenReconcileModal={handleOpenReconcileModal}
+                    onOpenAsignarFactura={(m) => setAsignacionFacturaModal({ open: true, movimientoId: m.id })}
                     handleSaveReconciliation={handleSaveManualReconcile}
                     handleUploadReconciliationFile={handleUploadReconciliationFile}
                     handleRemoveReconciliationFile={handleRemoveReconciliationFile}
@@ -1028,6 +1031,18 @@ export default function EgresosModule() {
               </div>
             </div>
           </div>
+        )}
+        {/* MODAL: ASIGNACIÓN DE FACTURAS A PAGOS DE EGRESOS */}
+        {asignacionFacturaModal.open && (
+          <AsignacionFacturaEgresoModal
+            isOpen={asignacionFacturaModal.open}
+            initialMonth={selectedMonth}
+            initialMovimientoId={asignacionFacturaModal.movimientoId}
+            onClose={() => setAsignacionFacturaModal({ open: false })}
+            onSuccess={() => {
+              fetchData();
+            }}
+          />
         )}
       </div>
     </div>
