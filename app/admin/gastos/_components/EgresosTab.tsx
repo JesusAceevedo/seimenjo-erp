@@ -1142,7 +1142,11 @@ export default function EgresosTab({
 
                   {/* Renderizar panel de desglose y parcialidades/hijos anidados */}
                   {hasHijos && isExpanded && (() => {
-                    const allComprobantes = [g, ...hijos];
+                    // Si el padre es un egreso manual sin UUID propio (o su UUID es el mismo que el de su factura hija sincronizada),
+                    // los CFDIs reales del paquete son únicamente los hijos; así evitamos duplicar el monto ($1,281 x 2).
+                    const padreEsEgresoManualRespaldado =
+                      !g.uuid_fiscal || hijos.some((h) => !!h.uuid_fiscal && h.uuid_fiscal === g.uuid_fiscal);
+                    const allComprobantes = padreEsEgresoManualRespaldado ? hijos : [g, ...hijos];
                     const totalFacturadoBruto = allComprobantes.reduce((sum, item) => sum + Number(item.monto || 0), 0);
                     
                     const condonaciones = allComprobantes.filter(item => {
