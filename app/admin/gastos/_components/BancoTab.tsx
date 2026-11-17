@@ -3791,7 +3791,7 @@ export default function BancoTab({
 
                                     {/* Encabezado con el ACUMULADO DEL GASTO (Suma de Facturas / Comprobantes) */}
                                     {(() => {
-                                      const countFacturas = concList.filter((l: any) => l.gasto ? (!!l.gasto.uuid_fiscal || !!l.gasto.xml_url) : (!!l.pedido?.folio_factura || !!l.pedido?.uuid_fiscal)).length;
+                                      const countFacturas = concList.filter((l: any) => l.gasto ? (!!l.gasto.uuid_fiscal || !!l.gasto.xml_url || !!l.gasto.estatus_facturado || !!m.xml_url) : (!!l.pedido?.folio_factura || !!l.pedido?.uuid_fiscal)).length;
                                       const countTickets = concList.filter((l: any) => l.gasto ? (!l.gasto.uuid_fiscal && !l.gasto.xml_url && (!!l.gasto.ticket_url || !!l.gasto.pdf_url)) : false).length;
                                       const countSinComprobante = concList.length - countFacturas - countTickets;
 
@@ -3846,7 +3846,7 @@ export default function BancoTab({
                                       if (!item) return null;
                                       
                                       const dateDocStr = formatDate(item.fecha_gasto || item.fecha_pedido);
-                                      const hasFacturaXml = isGasto ? (!!item.uuid_fiscal || !!item.xml_url) : (!!item.folio_factura || !!item.uuid_fiscal);
+                                      const hasFacturaXml = isGasto ? (!!item.uuid_fiscal || !!item.xml_url || !!item.estatus_facturado || !!m.xml_url) : (!!item.folio_factura || !!item.uuid_fiscal);
                                       const hasTicket = isGasto ? (!hasFacturaXml && (!!item.ticket_url || !!item.pdf_url)) : false;
 
                                       let itemTipoTitulo = '';

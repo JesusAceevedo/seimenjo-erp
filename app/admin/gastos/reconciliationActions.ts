@@ -5136,6 +5136,8 @@ export async function asignarFacturaAMovimientoEgreso(
     const xmlUrlsToMerge: string[] = mov.xml_url ? String(mov.xml_url).split(',').map((s: string) => s.trim()).filter(Boolean) : [];
     const pdfUrlsToMerge: string[] = mov.pdf_factura_url ? String(mov.pdf_factura_url).split(',').map((s: string) => s.trim()).filter(Boolean) : [];
     let detectedRfc: string | null = mov.rfc_proveedor || null;
+    let firstAssignedUuid: string | null = null;
+    let firstAssignedFolio: string | null = null;
     let totalFacturasAsignadas = 0;
     let assignedCount = 0;
 
@@ -5143,13 +5145,15 @@ export async function asignarFacturaAMovimientoEgreso(
     if (facturasIds.length > 0) {
       const { data: existingFacturas, error: facErr } = await supabaseAdmin
         .from('gastos')
-        .select('id, monto, xml_url, pdf_url, uuid_fiscal, proveedores(rfc)')
+        .select('id, monto, xml_url, pdf_url, uuid_fiscal, folio_factura, proveedores(rfc)')
         .in('id', facturasIds)
         .eq('empresa_id', empresaId);
 
       if (facErr) throw facErr;
 
       for (const fac of existingFacturas || []) {
+        if (!firstAssignedUuid && fac.uuid_fiscal) firstAssignedUuid = fac.uuid_fiscal;
+        if (!firstAssignedFolio && fac.folio_factura) firstAssignedFolio = fac.folio_factura;
         if (fac.xml_url) {
           String(fac.xml_url).split(',').map((s: string) => s.trim()).filter(Boolean).forEach((u: string) => {
             if (!xmlUrlsToMerge.includes(u)) xmlUrlsToMerge.push(u);
@@ -5237,14 +5241,27 @@ export async function asignarFacturaAMovimientoEgreso(
       if (!pdfUrlsToMerge.includes(pdfPath)) pdfUrlsToMerge.push(pdfPath);
     }
 
-    // Marcar egreso padre como facturado si existe
+    // Marcar egreso padre como facturado y sincronizar archivos/UUID para que EgresosTab y BancoTab muestren XML/PDF/CFDI
     if (egresoManualPadre) {
+      const padreUpdate: Record<string, any> = {
+        estatus_facturado: true
+      };
+      if (xmlUrlsToMerge.length > 0) {
+        padreUpdate.xml_url = xmlUrlsToMerge.join(',');
+      }
+      if (pdfUrlsToMerge.length > 0) {
+        padreUpdate.pdf_url = pdfUrlsToMerge.join(',');
+      }
+      if (firstAssignedUuid && !egresoManualPadre.uuid_fiscal) {
+        padreUpdate.uuid_fiscal = firstAssignedUuid;
+      }
+      if (firstAssignedFolio) {
+        padreUpdate.folio_factura = firstAssignedFolio;
+      }
+
       await supabaseAdmin
         .from('gastos')
-        .update({
-          estatus_facturado: true,
-          ...(uploadedPdfPaths.length > 0 && !egresoManualPadre.pdf_url ? { pdf_url: uploadedPdfPaths.join(',') } : {})
-        })
+        .update(padreUpdate)
         .eq('id', egresoManualPadre.id)
         .eq('empresa_id', empresaId);
     }

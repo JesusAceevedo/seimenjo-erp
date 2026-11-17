@@ -1008,8 +1008,23 @@ export default function EgresosTab({
 
                     {/* Archivos */}
                     <td className="p-3">
+                      {(() => {
+                        const effectiveXmlUrls = Array.from(new Set([
+                          ...(g.xml_url ? g.xml_url.split(',').map(s => s.trim()).filter(Boolean) : []),
+                          ...hijos.flatMap(h => h.xml_url ? h.xml_url.split(',').map(s => s.trim()).filter(Boolean) : [])
+                        ]));
+                        const effectivePdfUrls = Array.from(new Set([
+                          ...(g.pdf_url ? g.pdf_url.split(',').map(s => s.trim()).filter(Boolean) : []),
+                          ...hijos.flatMap(h => h.pdf_url ? h.pdf_url.split(',').map(s => s.trim()).filter(Boolean) : [])
+                        ]));
+                        const effectiveTicketUrls = Array.from(new Set([
+                          ...(g.ticket_url ? g.ticket_url.split(',').map(s => s.trim()).filter(Boolean) : []),
+                          ...hijos.flatMap(h => h.ticket_url ? h.ticket_url.split(',').map(s => s.trim()).filter(Boolean) : [])
+                        ]));
+
+                        return (
                       <div className="flex gap-1 justify-center flex-wrap">
-                        {g.xml_url && g.xml_url.split(',').filter(Boolean).map((url, idx, arr) => (
+                        {effectiveXmlUrls.map((url, idx, arr) => (
                           <button
                             key={idx}
                             onClick={() => onDownloadFile(url)}
@@ -1020,7 +1035,7 @@ export default function EgresosTab({
                             {arr.length > 1 && <span className="text-[9px] font-bold">{idx + 1}</span>}
                           </button>
                         ))}
-                        {g.pdf_url && g.pdf_url.split(',').filter(Boolean).map((url, idx, arr) => (
+                        {effectivePdfUrls.map((url, idx, arr) => (
                           <button
                             key={idx}
                             onClick={() => onDownloadFile(url)}
@@ -1031,17 +1046,17 @@ export default function EgresosTab({
                             {arr.length > 1 && <span className="text-[9px] font-bold">{idx + 1}</span>}
                           </button>
                         ))}
-                        {g.xml_url && handleViewCfdi && (
+                        {effectiveXmlUrls.length > 0 && handleViewCfdi && (
                           <button
                             type="button"
-                            onClick={() => handleViewCfdi(g.xml_url!.split(',')[0].trim())}
+                            onClick={() => handleViewCfdi(effectiveXmlUrls[0])}
                             title="Ver representación impresa del XML (CFDI)"
                             className="p-1.5 bg-indigo-50 dark:bg-indigo-900/20 hover:bg-indigo-100 dark:hover:bg-indigo-900/40 rounded border border-indigo-200 dark:border-indigo-900/50 text-indigo-600 flex items-center gap-0.5 cursor-pointer"
                           >
                             <Eye size={13} />
                           </button>
                         )}
-                        {g.ticket_url && g.ticket_url.split(',').filter(Boolean).map((url, idx, arr) => (
+                        {effectiveTicketUrls.map((url, idx, arr) => (
                           <button
                             key={idx}
                             onClick={() => onDownloadFile(url)}
@@ -1052,7 +1067,7 @@ export default function EgresosTab({
                             {arr.length > 1 && <span className="text-[9px] font-bold">{idx + 1}</span>}
                           </button>
                         ))}
-                        {hasHijos && (g.ticket_url || hijos.some(h => h.ticket_url)) && (
+                        {hasHijos && effectiveTicketUrls.length > 0 && (
                           <button
                             type="button"
                             onClick={() => handlePropagarTicket(g)}
@@ -1063,7 +1078,7 @@ export default function EgresosTab({
                             <span>Asignar ticket a todos</span>
                           </button>
                         )}
-                        {!g.xml_url && !g.pdf_url && !g.ticket_url && (
+                        {effectiveXmlUrls.length === 0 && effectivePdfUrls.length === 0 && effectiveTicketUrls.length === 0 && (
                           <span className="text-[10px] text-gray-300 dark:text-gray-600 italic">Sin archivos</span>
                         )}
                         <button 
@@ -1074,6 +1089,8 @@ export default function EgresosTab({
                           <Plus size={14} />
                         </button>
                       </div>
+                        );
+                      })()}
                     </td>
 
                     {/* Acciones */}
