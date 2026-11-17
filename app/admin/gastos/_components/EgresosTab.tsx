@@ -1009,17 +1009,28 @@ export default function EgresosTab({
                     {/* Archivos */}
                     <td className="p-3">
                       {(() => {
+                        const splitUrls = (val?: string | null) =>
+                          val ? String(val).split(',').map(s => s.trim()).filter(s => s && s !== 'no_lleva') : [];
+
+                        const movsVinculados = [
+                          ...(g.movimientos_bancarios ? [g.movimientos_bancarios] : []),
+                          ...((g.conciliaciones_bancarias || []).map((c: any) => c.movimiento_bancario || c.movimientos_bancarios).filter(Boolean))
+                        ];
+
                         const effectiveXmlUrls = Array.from(new Set([
-                          ...(g.xml_url ? g.xml_url.split(',').map(s => s.trim()).filter(Boolean) : []),
-                          ...hijos.flatMap(h => h.xml_url ? h.xml_url.split(',').map(s => s.trim()).filter(Boolean) : [])
+                          ...splitUrls(g.xml_url),
+                          ...hijos.flatMap(h => splitUrls(h.xml_url)),
+                          ...movsVinculados.flatMap((m: any) => splitUrls(m.xml_url))
                         ]));
                         const effectivePdfUrls = Array.from(new Set([
-                          ...(g.pdf_url ? g.pdf_url.split(',').map(s => s.trim()).filter(Boolean) : []),
-                          ...hijos.flatMap(h => h.pdf_url ? h.pdf_url.split(',').map(s => s.trim()).filter(Boolean) : [])
+                          ...splitUrls(g.pdf_url),
+                          ...hijos.flatMap(h => splitUrls(h.pdf_url)),
+                          ...movsVinculados.flatMap((m: any) => splitUrls(m.pdf_factura_url))
                         ]));
                         const effectiveTicketUrls = Array.from(new Set([
-                          ...(g.ticket_url ? g.ticket_url.split(',').map(s => s.trim()).filter(Boolean) : []),
-                          ...hijos.flatMap(h => h.ticket_url ? h.ticket_url.split(',').map(s => s.trim()).filter(Boolean) : [])
+                          ...splitUrls(g.ticket_url),
+                          ...hijos.flatMap(h => splitUrls(h.ticket_url)),
+                          ...movsVinculados.flatMap((m: any) => splitUrls(m.pdf_ticket_url))
                         ]));
 
                         return (
