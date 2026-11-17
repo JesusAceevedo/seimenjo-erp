@@ -2476,34 +2476,72 @@ export async function guardarConciliacionManual(
                     ? `Nómina - ${targetNombre}`
                     : `Gasto por factura XML (UUID: ${uuid.substring(0, 8)})`;
 
-                  // Insertar nuevo Gasto en Egresos
-                  const { data: newGastoData, error: insertGastoErr } = await supabaseAdmin
-                    .from('gastos')
-                    .insert({
-                      folio_factura: folioStr || null,
-                      uuid_fiscal: uuid.toUpperCase(),
-                      monto: total,
-                      subtotal: subtotal,
-                      iva_acreditable: globalIva,
-                      xml_url: path,
-                      fecha_gasto: fecha_emision,
-                      empresa_id: empresaId,
-                      concepto: gastoConcepto,
-                      registrado_por: staffId,
-                      proveedor_id: proveedorId,
-                      categoria_id: categoriaGastoId,
-                      forma_pago_id: formaPagoId,
-                      estatus_factura_id: defaultEstatusId,
-                      estatus_facturado: true,
-                      metodo_pago: metodoPago,
-                      es_deducible: true,
-                      movimiento_bancario_id: primaryMovId
-                    })
-                    .select('id')
-                    .single();
+                  // Si el usuario ya seleccionó un egreso manual sin XML en esta conciliación,
+                  // enriquecer ese mismo egreso en lugar de crear un gasto duplicado.
+                  let targetManualEgresoId: string | null = null;
+                  if (!isNomina && payload.gastosIds.length > 0) {
+                    const { data: selectedManuals } = await supabaseAdmin
+                      .from('gastos')
+                      .select('id, monto, uuid_fiscal, xml_url, proveedor_id')
+                      .in('id', payload.gastosIds)
+                      .eq('empresa_id', empresaId)
+                      .is('uuid_fiscal', null)
+                      .is('xml_url', null);
 
-                  if (!insertGastoErr && newGastoData) {
-                    gastoId = newGastoData.id;
+                    const manualMatch =
+                      selectedManuals?.find((m) => Math.abs(Number(m.monto || 0) - total) < 0.05) ||
+                      (selectedManuals?.length === 1 ? selectedManuals[0] : null);
+
+                    if (manualMatch) {
+                      targetManualEgresoId = manualMatch.id;
+                      await supabaseAdmin
+                        .from('gastos')
+                        .update({
+                          folio_factura: folioStr || null,
+                          uuid_fiscal: uuid.toUpperCase(),
+                          subtotal: subtotal,
+                          iva_acreditable: globalIva,
+                          xml_url: path,
+                          estatus_facturado: true,
+                          movimiento_bancario_id: primaryMovId,
+                          ...(!manualMatch.proveedor_id && proveedorId ? { proveedor_id: proveedorId } : {})
+                        })
+                        .eq('id', manualMatch.id)
+                        .eq('empresa_id', empresaId);
+                      gastoId = manualMatch.id;
+                    }
+                  }
+
+                  if (!targetManualEgresoId) {
+                    // Insertar nuevo Gasto en Egresos
+                    const { data: newGastoData, error: insertGastoErr } = await supabaseAdmin
+                      .from('gastos')
+                      .insert({
+                        folio_factura: folioStr || null,
+                        uuid_fiscal: uuid.toUpperCase(),
+                        monto: total,
+                        subtotal: subtotal,
+                        iva_acreditable: globalIva,
+                        xml_url: path,
+                        fecha_gasto: fecha_emision,
+                        empresa_id: empresaId,
+                        concepto: gastoConcepto,
+                        registrado_por: staffId,
+                        proveedor_id: proveedorId,
+                        categoria_id: categoriaGastoId,
+                        forma_pago_id: formaPagoId,
+                        estatus_factura_id: defaultEstatusId,
+                        estatus_facturado: true,
+                        metodo_pago: metodoPago,
+                        es_deducible: true,
+                        movimiento_bancario_id: primaryMovId
+                      })
+                      .select('id')
+                      .single();
+
+                    if (!insertGastoErr && newGastoData) {
+                      gastoId = newGastoData.id;
+                    }
                   }
                 }
 
@@ -2555,6 +2593,69 @@ export async function guardarConciliacionManual(
     let associatedTicket = null;
 
     if (primaryMov.tipo_movimiento === 'Retiro' && payload.gastosIds.length > 0) {
+      // Conectar en cadena sin duplicar: si vienen egresos manuales (sin XML/UUID) + facturas XML juntos,
+      // fusionar (1 a 1) o vincular como respaldo (1 a N) sobre el egreso manual.
+      if (payload.gastosIds.length > 1) {
+        const { data: selGastosRows } = await supabaseAdmin
+          .from('gastos')
+          .select('id, monto, uuid_fiscal, xml_url, pdf_url, folio_factura, subtotal, iva_acreditable, proveedor_id')
+          .in('id', payload.gastosIds)
+          .eq('empresa_id', empresaId);
+
+        const manuales = (selGastosRows || []).filter((g: any) => !g.uuid_fiscal && !g.xml_url);
+        const facturas = (selGastosRows || []).filter((g: any) => !!g.uuid_fiscal || !!g.xml_url);
+
+        if (manuales.length === 1 && facturas.length >= 1) {
+          const egresoManual = manuales[0];
+          if (facturas.length === 1) {
+            const fac = facturas[0];
+            await supabaseAdmin
+              .from('gastos')
+              .update({
+                uuid_fiscal: fac.uuid_fiscal,
+                folio_factura: fac.folio_factura,
+                subtotal: fac.subtotal,
+                iva_acreditable: fac.iva_acreditable,
+                xml_url: fac.xml_url,
+                pdf_url: fac.pdf_url || egresoManual.pdf_url,
+                estatus_facturado: true,
+                ...(!egresoManual.proveedor_id && fac.proveedor_id ? { proveedor_id: fac.proveedor_id } : {})
+              })
+              .eq('id', egresoManual.id)
+              .eq('empresa_id', empresaId);
+
+            // Eliminar el registro duplicado de la factura si no tiene otras conciliaciones
+            const { data: otrasConcs } = await supabaseAdmin
+              .from('conciliaciones_bancarias')
+              .select('id')
+              .eq('gasto_id', fac.id)
+              .limit(1);
+            if (!otrasConcs || otrasConcs.length === 0) {
+              await supabaseAdmin.from('gastos').delete().eq('id', fac.id).eq('empresa_id', empresaId);
+            }
+          } else {
+            const facIds = facturas.map((f: any) => f.id);
+            const mergedXmls = Array.from(new Set(facturas.flatMap((f: any) => (f.xml_url ? String(f.xml_url).split(',').map((s: string) => s.trim()).filter(Boolean) : []))));
+            const mergedPdfs = Array.from(new Set(facturas.flatMap((f: any) => (f.pdf_url ? String(f.pdf_url).split(',').map((s: string) => s.trim()).filter(Boolean) : []))));
+            await supabaseAdmin
+              .from('gastos')
+              .update({ gasto_padre_id: egresoManual.id, estatus_facturado: true })
+              .in('id', facIds)
+              .eq('empresa_id', empresaId);
+            await supabaseAdmin
+              .from('gastos')
+              .update({
+                estatus_facturado: true,
+                ...(mergedXmls.length > 0 ? { xml_url: mergedXmls.join(',') } : {}),
+                ...(mergedPdfs.length > 0 ? { pdf_url: mergedPdfs.join(',') } : {})
+              })
+              .eq('id', egresoManual.id)
+              .eq('empresa_id', empresaId);
+          }
+          payload.gastosIds = [egresoManual.id];
+        }
+      }
+
       const isNoDeducible = payload.estatusClave === 'no_deducible';
 
       const xmlToSet = payload.xmlUrl || associatedXml || primaryMov.xml_url || null;
@@ -4873,14 +4974,37 @@ export async function adjuntarArchivoDirectoAction(
 
     if (updateErr) throw updateErr;
 
-    // Sincronizar con gastos vinculados si aplica
+    // Sincronizar con gastos vinculados (tanto por movimiento_bancario_id como por conciliaciones_bancarias)
     if (fileType === 'xml' || fileType === 'pdf_factura' || fileType === 'pdf_ticket') {
       const gastoField = fileType === 'xml' ? 'xml_url' : fileType === 'pdf_factura' ? 'pdf_url' : 'ticket_url';
+      const { data: concLinks } = await supabaseAdmin
+        .from('conciliaciones_bancarias')
+        .select('gasto_id')
+        .eq('movimiento_id', movimientoId)
+        .eq('empresa_id', empresaId)
+        .not('gasto_id', 'is', null);
+
+      const linkedIds = (concLinks || []).map((c: any) => c.gasto_id).filter(Boolean);
+
       await supabaseAdmin
         .from('gastos')
-        .update({ [gastoField]: newFieldValue })
+        .update({
+          [gastoField]: newFieldValue,
+          ...(fileType === 'xml' ? { estatus_facturado: true } : {})
+        })
         .eq('movimiento_bancario_id', movimientoId)
         .eq('empresa_id', empresaId);
+
+      if (linkedIds.length > 0) {
+        await supabaseAdmin
+          .from('gastos')
+          .update({
+            [gastoField]: newFieldValue,
+            ...(fileType === 'xml' ? { estatus_facturado: true } : {})
+          })
+          .in('id', linkedIds)
+          .eq('empresa_id', empresaId);
+      }
     }
 
     return { success: true };

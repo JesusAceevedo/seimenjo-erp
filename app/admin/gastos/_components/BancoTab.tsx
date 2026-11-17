@@ -6344,10 +6344,20 @@ export default function BancoTab({
           });
         }
 
+        // 1b. Si hay un egreso manual (sin XML/UUID) + factura(s) XML seleccionadas juntas en el modal,
+        // el egreso manual se fusionará/respaldará con la(s) factura(s) al guardar, así que no sumar doble.
+        const hasSelectedManualEgreso = isOutflow && selectedGastosList.some((g: any) => !g.uuid_fiscal && !g.xml_url);
+        const hasSelectedXmlFactura = isOutflow && selectedGastosList.some((g: any) => !!g.uuid_fiscal || !!g.xml_url);
+        const isManualBackedByXml = hasSelectedManualEgreso && hasSelectedXmlFactura;
+
         const totalEgresosSistema = isOutflow 
           ? selectedGastosList.reduce((s, g) => {
               // Si este gasto es un REP de pago que liquida una factura ya seleccionada, no sumar doble
               if (repGastoIds.has(g.id)) {
+                return s;
+              }
+              // Si es un egreso manual acompañado de su(s) factura(s) XML, no sumar el manual + el XML
+              if (isManualBackedByXml && !(g as any).uuid_fiscal && !g.xml_url) {
                 return s;
               }
 
@@ -6433,7 +6443,14 @@ export default function BancoTab({
             return xmlUrls.some((xp: string) => xp === x.path || xp.endsWith(fileName) || x.path.endsWith(xp.split('/').pop() || ''));
           });
 
-          if (isAlreadyInSelectedGastos || isAlreadyInSelectedPedidos) return s;
+          const manualesSinXml = isOutflow ? selectedGastosList.filter((g: any) => !(g as any).uuid_fiscal && !g.xml_url) : [];
+          const sumManualesSinXml = manualesSinXml.reduce((acc, m) => acc + Math.abs(Number(m.monto || 0)), 0);
+          const isBackingSelectedManual =
+            manualesSinXml.length > 0 &&
+            (manualesSinXml.some((m: any) => Math.abs(Number(m.monto || 0) - x.val) < 0.05) ||
+              Math.abs(sumManualesSinXml - sumAllXmls) < 0.05);
+
+          if (isAlreadyInSelectedGastos || isAlreadyInSelectedPedidos || isBackingSelectedManual) return s;
           if (redundantXmlPaths.has(x.path)) return s;
           if (x.tipo === 'E') return s - x.val; // Nota de Crédito (resta)
 
