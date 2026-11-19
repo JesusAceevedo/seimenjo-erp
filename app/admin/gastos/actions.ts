@@ -384,15 +384,42 @@ export async function enviarFacturaPorCorreo(
       throw new Error('No se encontró factura emitida para este pedido.');
     }
 
-    // Validar coincidencia de montos entre factura(s) y pedido
+    // Validar coincidencia de montos entre factura(s) y pedido (soportando facturas que amparan múltiples pedidos)
+    let isMultiPedidoFactura = false;
     if (pedido.precio_total != null) {
       const sumaFacturas = facturasEncontradas.reduce((sum: number, f: any) => sum + Number(f.total || 0), 0);
       const diffSingle = factura.total != null ? Math.abs(Number(factura.total) - Number(pedido.precio_total)) : 0;
       const diffSum = Math.abs(sumaFacturas - Number(pedido.precio_total));
+
       if (diffSingle > 0.05 && diffSum > 0.05 && facturasEncontradas.length === 1 && factura.total != null) {
-        throw new Error(
-          `El monto de la factura ($${Number(factura.total).toFixed(2)}) no coincide con el total del pedido ($${Number(pedido.precio_total).toFixed(2)}). Por favor corrige la factura con el monto exacto antes de enviarla.`
-        );
+        // Verificar si esta factura ampara varios pedidos en facturas_clientes_pedidos
+        if (factura.id) {
+          const { data: pedidosVinculados } = await supabaseAdmin
+            .from('facturas_clientes_pedidos')
+            .select('pedido_id, pedidos(precio_total)')
+            .eq('factura_id', factura.id);
+
+          if (pedidosVinculados && pedidosVinculados.length > 1) {
+            isMultiPedidoFactura = true;
+            const sumaPedidos = pedidosVinculados.reduce(
+              (acc: number, row: any) => acc + Number(row.pedidos?.precio_total || 0),
+              0
+            );
+            if (Math.abs(sumaPedidos - Number(factura.total)) <= 1.0) {
+              // Cuadra con la suma de los pedidos que ampara la factura
+            } else {
+              throw new Error(
+                `El monto de la factura ($${Number(factura.total).toFixed(2)}) no coincide con la suma de los pedidos vinculados ($${sumaPedidos.toFixed(2)}).`
+              );
+            }
+          }
+        }
+
+        if (!isMultiPedidoFactura) {
+          throw new Error(
+            `El monto de la factura ($${Number(factura.total).toFixed(2)}) no coincide con el total del pedido ($${Number(pedido.precio_total).toFixed(2)}). Por favor corrige la factura con el monto exacto antes de enviarla.`
+          );
+        }
       }
     }
 
