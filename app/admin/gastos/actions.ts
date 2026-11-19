@@ -325,41 +325,71 @@ export async function enviarFacturaPorCorreo(
         .eq('id', cliente.id);
     }
 
-    // 2. Get Factura files (primary lookup by pedido_id, fallback to folio_factura)
-    let factura: any = null;
-    const { data: facByPedido } = await supabaseAdmin
+    // 2. Get Factura files (primary lookup by pedido_id, junction table facturas_clientes_pedidos, fallback to folio_factura)
+    let facturasEncontradas: any[] = [];
+    const { data: facsByPedido } = await supabaseAdmin
       .from('facturas_clientes')
-      .select('xml_url, pdf_url, uuid_fiscal, serie_folio, total')
+      .select('id, xml_url, pdf_url, uuid_fiscal, serie_folio, total')
       .eq('pedido_id', pedidoId)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
+      .order('created_at', { ascending: false });
 
-    if (facByPedido) {
-      factura = facByPedido;
-    } else if (pedido.folio_factura) {
-      let facFolioQuery = supabaseAdmin
-        .from('facturas_clientes')
-        .select('xml_url, pdf_url, uuid_fiscal, serie_folio, total');
-      if (pedido.empresa_id) {
-        facFolioQuery = facFolioQuery.eq('empresa_id', pedido.empresa_id);
-      }
-      const { data: facByFolio } = await facFolioQuery
-        .or(`serie_folio.eq.${pedido.folio_factura},uuid_fiscal.eq.${pedido.folio_factura}`)
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      if (facByFolio) factura = facByFolio;
+    if (facsByPedido && facsByPedido.length > 0) {
+      facturasEncontradas = facsByPedido;
     }
+
+    if (facturasEncontradas.length === 0) {
+      const { data: junctionFacs } = await supabaseAdmin
+        .from('facturas_clientes_pedidos')
+        .select('facturas_clientes(id, xml_url, pdf_url, uuid_fiscal, serie_folio, total)')
+        .eq('pedido_id', pedidoId);
+      const mappedJunction = (junctionFacs || []).map((j: any) => j.facturas_clientes).filter(Boolean);
+      if (mappedJunction.length > 0) {
+        facturasEncontradas = mappedJunction;
+      }
+    }
+
+    if (facturasEncontradas.length === 0 && pedido.folio_factura) {
+      const tokens = String(pedido.folio_factura)
+        .split(/[,;/yY&\s]+/)
+        .map((t) => t.replace(/^#/, '').trim())
+        .filter((t) => t.length >= 2);
+
+      if (tokens.length > 0) {
+        let facFolioQuery = supabaseAdmin
+          .from('facturas_clientes')
+          .select('id, xml_url, pdf_url, uuid_fiscal, serie_folio, total');
+        if (pedido.empresa_id) {
+          facFolioQuery = facFolioQuery.eq('empresa_id', pedido.empresa_id);
+        }
+        const orFilters = tokens
+          .flatMap((t) => [`serie_folio.ilike.%${t}%`, `uuid_fiscal.ilike.%${t}%`])
+          .join(',');
+        const { data: facsByFolio } = await facFolioQuery
+          .or(orFilters)
+          .order('created_at', { ascending: false })
+          .limit(10);
+        if (facsByFolio && facsByFolio.length > 0) {
+          facturasEncontradas = facsByFolio;
+        }
+      }
+    }
+
+    const factura =
+      facturasEncontradas.find((f: any) => !!f.pdf_url && !!f.xml_url) ||
+      facturasEncontradas.find((f: any) => !!f.xml_url || !!f.pdf_url) ||
+      facturasEncontradas[0] ||
+      null;
 
     if (!factura) {
       throw new Error('No se encontró factura emitida para este pedido.');
     }
 
-    // Validar coincidencia de montos entre factura y pedido
-    if (factura.total != null && pedido.precio_total != null) {
-      const diff = Math.abs(Number(factura.total) - Number(pedido.precio_total));
-      if (diff > 0.05) {
+    // Validar coincidencia de montos entre factura(s) y pedido
+    if (pedido.precio_total != null) {
+      const sumaFacturas = facturasEncontradas.reduce((sum: number, f: any) => sum + Number(f.total || 0), 0);
+      const diffSingle = factura.total != null ? Math.abs(Number(factura.total) - Number(pedido.precio_total)) : 0;
+      const diffSum = Math.abs(sumaFacturas - Number(pedido.precio_total));
+      if (diffSingle > 0.05 && diffSum > 0.05 && facturasEncontradas.length === 1 && factura.total != null) {
         throw new Error(
           `El monto de la factura ($${Number(factura.total).toFixed(2)}) no coincide con el total del pedido ($${Number(pedido.precio_total).toFixed(2)}). Por favor corrige la factura con el monto exacto antes de enviarla.`
         );
