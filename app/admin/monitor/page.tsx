@@ -5,7 +5,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../../lib/supabase';
-import { Plus, Filter, Soup, ShoppingCart, Truck, FileCheck, Search, Sun, Moon, FileText, ChevronLeft, ChevronRight, Users, LayoutDashboard, Printer, Mail, FileCode, Edit3, Trash2, DollarSign, AlertTriangle, UploadCloud, Loader2, RefreshCw, ChevronDown, Check, X, User } from 'lucide-react';
+import { Plus, Filter, Soup, ShoppingCart, Truck, FileCheck, Search, Sun, Moon, FileText, ChevronLeft, ChevronRight, Users, LayoutDashboard, Printer, Mail, FileCode, Edit3, Trash2, DollarSign, AlertTriangle, UploadCloud, Loader2, RefreshCw, ChevronDown, Check, X, User, RotateCcw } from 'lucide-react';
 import { useThemeMode } from '../../../lib/useThemeMode';
 import { enviarFacturaPorCorreo, obtenerSignedUrl } from '../gastos/actions';
 import { eliminarDetallesPedido, recuperarDetalleDeFacturaXml, ConceptoRecuperado, eliminarPedidoAdmin } from './actions';
@@ -780,6 +780,26 @@ export default function AdminMonitor() {
     }
   };
 
+  const handleRevertirCobro = async (p: Pedido) => {
+    if (!confirm(`¿Deseas regresar el cobro del pedido #${p.numero_pedido} a 'Pendiente' (sin cobro)?`)) {
+      return;
+    }
+    try {
+      const { error } = await supabase
+        .from('pedidos')
+        .update({
+          estatus_pago: 'Pendiente',
+          metodo_pago: null
+        })
+        .eq('id', p.id);
+
+      if (error) throw error;
+      fetchPedidos();
+    } catch (err: any) {
+      alert(err.message || 'Error al revertir el cobro');
+    }
+  };
+
 
 
   const [cargandoDocPedidoId, setCargandoDocPedidoId] = useState<string | null>(null);
@@ -787,34 +807,86 @@ export default function AdminMonitor() {
   const handleVerDocumentoPedido = async (pedido: any, tipo: 'pdf' | 'xml') => {
     setCargandoDocPedidoId(`${pedido.id}_${tipo}`);
     try {
-      const fac = Array.isArray(pedido.facturas_clientes) ? pedido.facturas_clientes[0] : pedido.facturas_clientes;
-      let targetPath = tipo === 'pdf' ? fac?.pdf_url : fac?.xml_url;
+      const facsInline = Array.isArray(pedido.facturas_clientes)
+        ? pedido.facturas_clientes
+        : pedido.facturas_clientes
+        ? [pedido.facturas_clientes]
+        : [];
 
-      let facDb: any = null;
+      const pickPath = (list: any[]) =>
+        list.map((f: any) => (tipo === 'pdf' ? f?.pdf_url : f?.xml_url)).find((u: any) => !!u && String(u).trim() !== '');
+
+      let targetPath = pickPath(facsInline);
+      let allFoundFacturas: any[] = [...facsInline];
+
       if (!targetPath) {
-        const { data: foundDb } = await supabase
+        // 1. Buscar todas las facturas por pedido_id directo (sin maybeSingle para soportar múltiples facturas)
+        const { data: directFacs } = await supabase
           .from('facturas_clientes')
-          .select('xml_url, pdf_url')
-          .eq('pedido_id', pedido.id)
-          .maybeSingle();
-        facDb = foundDb;
+          .select('xml_url, pdf_url, serie_folio, uuid_fiscal')
+          .eq('pedido_id', pedido.id);
 
-        if (!facDb && pedido.folio_factura) {
-          const { data: facByFolio } = await supabase
-            .from('facturas_clientes')
-            .select('xml_url, pdf_url')
-            .or(`serie_folio.eq.${pedido.folio_factura},uuid_fiscal.eq.${pedido.folio_factura}`)
-            .limit(1)
-            .maybeSingle();
-          if (facByFolio) facDb = facByFolio;
+        if (directFacs && directFacs.length > 0) {
+          allFoundFacturas.push(...directFacs);
+          targetPath = pickPath(directFacs);
         }
 
-        targetPath = tipo === 'pdf' ? facDb?.pdf_url : facDb?.xml_url;
+        // 2. Buscar también en la tabla puente facturas_clientes_pedidos (N-a-N)
+        if (!targetPath) {
+          const { data: junctionFacs } = await supabase
+            .from('facturas_clientes_pedidos')
+            .select('facturas_clientes(xml_url, pdf_url, serie_folio, uuid_fiscal)')
+            .eq('pedido_id', pedido.id);
+
+          const mappedJunction = (junctionFacs || [])
+            .map((j: any) => j.facturas_clientes)
+            .filter(Boolean);
+          if (mappedJunction.length > 0) {
+            allFoundFacturas.push(...mappedJunction);
+            targetPath = pickPath(mappedJunction);
+          }
+        }
+
+        // 3. Fallback por folio_factura (soportando múltiples folios como "#271 y #267")
+        if (!targetPath && pedido.folio_factura) {
+          const tokens = String(pedido.folio_factura)
+            .split(/[,;/yY&\s]+/)
+            .map((t) => t.replace(/^#/, '').trim())
+            .filter((t) => t.length >= 2);
+
+          if (tokens.length > 0) {
+            const orFilters = tokens
+              .flatMap((t) => [`serie_folio.ilike.%${t}%`, `uuid_fiscal.ilike.%${t}%`])
+              .join(',');
+            const { data: facByFolio } = await supabase
+              .from('facturas_clientes')
+              .select('xml_url, pdf_url, serie_folio, uuid_fiscal')
+              .or(orFilters)
+              .limit(10);
+
+            if (facByFolio && facByFolio.length > 0) {
+              allFoundFacturas.push(...facByFolio);
+              targetPath = pickPath(facByFolio);
+            }
+          }
+        }
+
+        // 4. Fallback desde movimiento_bancario_id vinculado al pedido
+        if (!targetPath && pedido.movimiento_bancario_id) {
+          const { data: movDoc } = await supabase
+            .from('movimientos_bancarios')
+            .select('xml_url, pdf_factura_url')
+            .eq('id', pedido.movimiento_bancario_id)
+            .maybeSingle();
+          if (movDoc) {
+            targetPath = tipo === 'pdf' ? movDoc.pdf_factura_url : movDoc.xml_url;
+          }
+        }
       }
 
       if (!targetPath) {
         if (tipo === 'pdf') {
-          const xmlCandidate = fac?.xml_url || facDb?.xml_url;
+          const xmlCandidate = allFoundFacturas.map((f: any) => f?.xml_url).find((u: any) => !!u);
           if (xmlCandidate) {
             openCfdi(xmlCandidate);
             return;
@@ -1429,7 +1501,19 @@ export default function AdminMonitor() {
                         {p.estatus_pago !== 'Liquidado' ? (
                           <button onClick={() => setLiquidarModal({ open: true, pedido: p, fecha: new Date().toISOString().split('T')[0], costo_envio: Number(p.costo_envio) || 0, entregado_por: p.entregado_por || '', metodo_pago: p.metodo_pago || '' })} className="w-full px-2 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-medium rounded shadow transition-colors">Liquidar Orden</button>
                         ) : (
-                          <div className="text-emerald-600 dark:text-emerald-400 font-medium bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20 rounded py-1 px-2 text-[10px] flex items-center justify-center gap-1"><FileCheck className="w-3 h-3" /> Cobro Listo</div>
+                          <div className="flex items-center gap-1">
+                            <div className="flex-1 text-emerald-600 dark:text-emerald-400 font-medium bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20 rounded py-1 px-2 text-[10px] flex items-center justify-center gap-1"><FileCheck className="w-3 h-3" /> Cobro Listo</div>
+                            {!folioFactura && !p.movimiento_bancario_id && (
+                              <button
+                                type="button"
+                                onClick={() => handleRevertirCobro(p)}
+                                title="Revertir cobro a Pendiente (sin cobro)"
+                                className="p-1 text-gray-400 hover:text-amber-600 dark:hover:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/30 rounded border border-gray-200 dark:border-gray-800 transition-colors"
+                              >
+                                <RotateCcw className="w-3 h-3" />
+                              </button>
+                            )}
+                          </div>
                         )}
                         {folioFactura ? (
                           <div className="space-y-1">

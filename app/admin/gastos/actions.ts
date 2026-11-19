@@ -37,18 +37,57 @@ function getSmtpConfig() {
 // 1. Generate Signed URL for secure downloads
 export async function obtenerSignedUrl(filePath: string, token: string): Promise<{ success: boolean; url?: string; error?: string }> {
   try {
-    const { empresaId } = await getUserEmpresaId(token);
+    await getUserEmpresaId(token);
 
-    // If it is a direct Google Drive link or external URL, return it directly
-    if (filePath.startsWith('http://') || filePath.startsWith('https://')) {
-      return { success: true, url: filePath };
+    if (!filePath || typeof filePath !== 'string') {
+      return { success: false, error: 'Ruta de archivo no válida' };
     }
 
-    // Use admin client to create the signed URL to bypass storage RLS safely for authorized users
-    const { data, error } = await supabaseAdmin.storage.from('facturas').createSignedUrl(filePath, 900); // Valid for 15 minutes
-    if (error) return { success: false, error: error.message || 'Error al generar enlace de firma' };
-    if (!data?.signedUrl) return { success: false, error: 'URL firmada no disponible' };
-    return { success: true, url: data.signedUrl };
+    // Si vienen múltiples rutas separadas por coma, tomar la primera válida
+    const firstPath = filePath
+      .split(',')
+      .map((s) => s.trim())
+      .find((s) => s && s !== 'no_lleva');
+
+    if (!firstPath) {
+      return { success: false, error: 'No hay archivo adjunto disponible' };
+    }
+
+    // Si es una URL de Supabase Storage (pública o firmada expirada), extraer bucket y ruta relativa para re-firmar
+    const supaStorageMatch = firstPath.match(/\/storage\/v1\/object\/(?:public|authenticated|sign)\/([^/]+)\/(.+?)(?:\?.*)?$/);
+    if (supaStorageMatch) {
+      const bucket = supaStorageMatch[1];
+      const relPath = decodeURIComponent(supaStorageMatch[2]).replace(/^\/+/, '');
+      const { data, error } = await supabaseAdmin.storage.from(bucket).createSignedUrl(relPath, 900);
+      if (data?.signedUrl) return { success: true, url: data.signedUrl };
+      if (error && !firstPath.includes('/sign/')) {
+        return { success: false, error: error.message || 'Error al generar enlace de firma' };
+      }
+    }
+
+    // Si es un enlace externo (Google Drive, etc.), devolverlo directamente
+    if (firstPath.startsWith('http://') || firstPath.startsWith('https://')) {
+      return { success: true, url: firstPath };
+    }
+
+    const cleanPath = firstPath.replace(/^\/+/, '');
+    const candidatePaths = Array.from(
+      new Set([
+        cleanPath,
+        ...(cleanPath.startsWith('facturas/') ? [cleanPath.replace(/^facturas\//, '')] : [`facturas/${cleanPath}`])
+      ])
+    );
+
+    let lastError: any = null;
+    for (const candidate of candidatePaths) {
+      const { data, error } = await supabaseAdmin.storage.from('facturas').createSignedUrl(candidate, 900);
+      if (data?.signedUrl) {
+        return { success: true, url: data.signedUrl };
+      }
+      if (error) lastError = error;
+    }
+
+    return { success: false, error: lastError?.message || 'Archivo no encontrado en el almacenamiento' };
   } catch (err: any) {
     console.error('Error generating signed URL:', err);
     return { success: false, error: err?.message || 'Error al generar enlace de descarga' };
@@ -435,7 +474,7 @@ export async function desvincularFacturaDePedidoId(
     // 1. Obtener datos del pedido
     let pedQuery = supabaseAdmin
       .from('pedidos')
-      .select('id, folio_factura, empresa_id')
+      .select('id, folio_factura, empresa_id, movimiento_bancario_id, estatus_pago')
       .eq('id', pedidoId);
 
     if (empresaId) {
@@ -511,9 +550,20 @@ export async function desvincularFacturaDePedidoId(
         .filter(Boolean)
     ));
 
+    const updatePayload: Record<string, any> = {
+      folio_factura: remainingFolios.length > 0 ? remainingFolios.join(', ') : null
+    };
+
+    // Si ya no le quedan facturas vinculadas y no tiene un movimiento bancario conciliado:
+    // regresar el estatus de cobro/pago a 'Pendiente' y restablecer método de pago
+    if (remainingFolios.length === 0 && !pedido.movimiento_bancario_id) {
+      updatePayload.estatus_pago = 'Pendiente';
+      updatePayload.metodo_pago = null;
+    }
+
     const { error: updErr } = await supabaseAdmin
       .from('pedidos')
-      .update({ folio_factura: remainingFolios.length > 0 ? remainingFolios.join(', ') : null })
+      .update(updatePayload)
       .eq('id', pedidoId);
 
     if (updErr) throw updErr;
@@ -2129,6 +2179,7 @@ export async function vincularFacturaAPedido(
       const pedidoUpdatePayload: Record<string, any> = {};
       if (foliosUnicos.length > 0) {
         pedidoUpdatePayload.folio_factura = foliosUnicos.join(', ');
+        pedidoUpdatePayload.estatus_pedido = 'Entregado';
       }
 
       // Heredar cliente_id si el pedido no lo tenía
@@ -2297,9 +2348,28 @@ export async function desvincularFacturaDePedido(
           .filter(Boolean)
       ));
 
+      const updatePayload: Record<string, any> = {
+        folio_factura: uniqueFolios.length > 0 ? uniqueFolios.join(', ') : null
+      };
+
+      // Si no le quedan facturas a este pedido, verificar si no tiene movimiento bancario
+      if (uniqueFolios.length === 0) {
+        const { data: curPed } = await supabaseAdmin
+          .from('pedidos')
+          .select('movimiento_bancario_id')
+          .eq('id', pedId)
+          .eq('empresa_id', empresaId)
+          .maybeSingle();
+
+        if (curPed && !curPed.movimiento_bancario_id) {
+          updatePayload.estatus_pago = 'Pendiente';
+          updatePayload.metodo_pago = null;
+        }
+      }
+
       await supabaseAdmin
         .from('pedidos')
-        .update({ folio_factura: uniqueFolios.length > 0 ? uniqueFolios.join(', ') : null })
+        .update(updatePayload)
         .eq('id', pedId)
         .eq('empresa_id', empresaId);
     }
@@ -2524,6 +2594,7 @@ export async function crearPedidoDesdeFactura(
         precio_total: Number(factura.total || 0),
         costo_envio: 0,
         estatus_pago: 'Liquidado',
+        estatus_pedido: 'Entregado',
         folio_factura: folioStr,
         fecha_pedido: factura.fecha_emision || new Date().toISOString().split('T')[0],
         metodo_pago: factura.metodo_pago || '03',
